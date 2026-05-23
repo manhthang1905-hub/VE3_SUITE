@@ -209,9 +209,9 @@ def normalize_psychology_style_profile(style_profile: Optional[Dict[str, Any]] =
     if has_custom_style:
         image_style = str(profile.get("image_style", "")).strip() or DEFAULT_PSYCHOLOGY_STYLE_PROFILE["image_style"]
         if "video_style" not in provided_keys or not str(profile.get("video_style", "")).strip():
-            profile["video_style"] = f"Same channel psychology illustration style as the image prompt: {image_style}"
+            profile["video_style"] = f"Same channel illustration style as the image prompt: {image_style}"
         if "thumbnail_style" not in provided_keys or not str(profile.get("thumbnail_style", "")).strip():
-            profile["thumbnail_style"] = f"High-CTR psychology YouTube thumbnail in this channel style: {image_style}"
+            profile["thumbnail_style"] = f"High-CTR YouTube thumbnail in this channel style: {image_style}"
         if "scene_plan_style" not in provided_keys or not str(profile.get("scene_plan_style", "")).strip():
             profile["scene_plan_style"] = image_style
         if "technical_suffix" not in provided_keys or not str(profile.get("technical_suffix", "")).strip():
@@ -342,7 +342,7 @@ def _extract_style_essentials(style_profile: Optional[Dict[str, Any]] = None) ->
     lowered = full_style.lower()
     essentials: List[str] = []
 
-    style_label = "finance illustration" if "finance" in lowered else "psychology illustration"
+    style_label = "finance illustration" if "finance" in lowered else ("self-development illustration" if "success" in lowered or "development" in lowered else "psychology illustration")
     for keyword, label in [
         ("illustration", style_label),
         ("hand-drawn", "hand-drawn"),
@@ -495,7 +495,7 @@ def _build_psychology_quality_fallback(
     style_profile: Optional[Dict[str, Any]] = None,
 ) -> str:
     profile = normalize_psychology_style_profile(style_profile)
-    subject = _normalize_psychology_anchor_fragment(primary_subject) or "the central psychology idea from the narration"
+    subject = _normalize_psychology_anchor_fragment(primary_subject) or "the central idea from the narration"
     action = _normalize_psychology_anchor_fragment(primary_action) or _normalize_psychology_anchor_fragment(visual_anchor) or "one clear, readable emotional beat"
     anchor = _normalize_psychology_anchor_fragment(visual_anchor) or action or subject
     audience_hint = _build_psychology_audience_visual_hint(profile)
@@ -1020,7 +1020,7 @@ def _derive_psychology_video_movement(
     source = " ".join(str(source or "").split())
     if _is_concrete_psychology_video_action(source):
         return _format_director_action_as_motion(source)
-    return "nv1 makes one small deliberate hand gesture toward the main symbolic object as the surrounding shapes shift outward in response, making the spoken psychology idea readable through motion"
+    return "nv1 makes one small deliberate hand gesture toward the main symbolic object as the surrounding shapes shift outward in response, making the spoken idea readable through motion"
 
 
 def _derive_psychology_emotional_arc(
@@ -1675,6 +1675,7 @@ def _ensure_psychology_prompt_quality(
         or any(term in low_cleaned for term in [
             "2d psychology", "psychology editorial", "psychology illustration",
             "2d finance", "finance editorial", "finance illustration",
+            "2d self-development", "self-development editorial", "self-development illustration",
             "hand-drawn", "channel style", "provided reference character",
         ])
     )
@@ -1699,7 +1700,7 @@ def _ensure_psychology_prompt_quality(
         if "nv1" in char_ids and "provided reference image" not in cleaned.lower() and "reference character" not in cleaned.lower():
             cleaned = cleaned.rstrip(". ") + " Use the provided reference image as the character identity source; preserve the reference character exactly."
         if not any(term in cleaned.lower() for term in ["clear focal", "focal hierarchy", "focal point", "viewer first notices", "eye is drawn"]):
-            focal = visual_anchor or primary_action or primary_subject or "the central psychology beat"
+            focal = visual_anchor or primary_action or primary_subject or "the central narration beat"
             cleaned = cleaned.rstrip(". ") + f" Clear focal hierarchy: viewer first notices {focal}."
         if not any(guard in cleaned.lower() for guard in ["no readable text", "no text", "no letters", "no watermark"]):
             cleaned = cleaned.rstrip(". ") + f" {profile['negative_prompt']}."
@@ -1755,7 +1756,7 @@ def _ensure_psychology_prompt_quality(
         if "nv1" in char_ids and "provided reference image" not in cleaned.lower() and "reference character" not in cleaned.lower():
             cleaned = cleaned.rstrip(". ") + " Use the provided reference image as the recurring character identity source; preserve the reference character exactly."
         if "clear focal hierarchy" not in cleaned.lower():
-            focal = visual_anchor or primary_action or primary_subject or "the central psychology beat"
+            focal = visual_anchor or primary_action or primary_subject or "the central narration beat"
             cleaned = cleaned.rstrip(". ") + f" Clear focal hierarchy: viewer first notices {focal}."
         if "no readable text" not in cleaned.lower():
             cleaned = cleaned.rstrip(". ") + f" {profile['negative_prompt']}."
@@ -1786,7 +1787,7 @@ def get_scene_system_prompt(topic: str = "story", style_profile: Optional[Dict[s
 
 TARGET AUDIENCE: {audience_language}-speaking viewers.
 {('CULTURAL CONTEXT: ' + audience_culture_note) if audience_culture_note else ''}{emotion_block}
-AUDIENCE FIT GUIDANCE: The narration decides the image. If the narration naturally involves a setting, object, or ritual, prefer one that feels familiar to {audience_language} audiences. Do NOT force cultural props into every scene. Most psychology concepts (thoughts, emotions, boundaries, realizations) do not need tea, coffee, bread, tables, or food props."""
+AUDIENCE FIT GUIDANCE: The narration decides the image. If the narration naturally involves a setting, object, or ritual, prefer one that feels familiar to {audience_language} audiences. Do NOT force cultural props into every scene."""
     import unicodedata
     topic_norm = unicodedata.normalize("NFKD", str(topic or "").strip().lower())
     topic_norm = "".join(ch for ch in topic_norm if not unicodedata.combining(ch))
@@ -2468,9 +2469,10 @@ def build_scene_prompt_request(
             emotion_line = f"\nEMOTION STYLE: {cultural_emotion_style}" if cultural_emotion_style else ""
             audience_block = f"""AUDIENCE LANGUAGE: {audience_language}
 CULTURAL CONTEXT: {audience_culture_note or 'Universal'}{props_line}{metaphors_line}{emotion_line}
-AUDIENCE FIT GUIDANCE: The narration decides the image. If the narration naturally involves a setting, object, or ritual, prefer one that feels familiar to {audience_language} audiences. Do NOT force cultural props into every scene. Most psychology concepts (thoughts, emotions, boundaries, realizations) do not need tea, coffee, bread, tables, or food props.
+AUDIENCE FIT GUIDANCE: The narration decides the image. If the narration naturally involves a setting, object, or ritual, prefer one that feels familiar to {audience_language} audiences. Do NOT force cultural props into every scene.
 """
-        user_prompt = f"""Generate psychology illustration prompts for {len(batch)} scene(s).
+        _topic_label_user = {"finance": "finance", "success": "self-development"}.get(str(topic or "").strip().lower(), "psychology")
+        user_prompt = f"""Generate {_topic_label_user} illustration prompts for {len(batch)} scene(s).
 
 GLOBAL CHANNEL STYLE: {_strip_attached_character_description(context_lock)}
 STYLE ESSENTIALS (short, support only): {_extract_style_essentials(profile)}
@@ -2704,7 +2706,7 @@ def postprocess_img_prompt(
     """
     if not prompt:
         if _is_psychology_topic(topic):
-            anchor = visual_anchor or primary_action or primary_subject or srt_text[:140] or "the central psychology beat"
+            anchor = visual_anchor or primary_action or primary_subject or srt_text[:140] or "the central narration beat"
             subject = primary_subject or anchor
             action = primary_action or anchor
             prompt = (
@@ -2758,7 +2760,7 @@ def postprocess_img_prompt(
 
     if prompt_needs_single_frame_fallback(prompt):
         if _is_psychology_topic(topic):
-            anchor = visual_anchor or primary_action or primary_subject or srt_text[:140] or "the central psychology beat"
+            anchor = visual_anchor or primary_action or primary_subject or srt_text[:140] or "the central narration beat"
             subject = primary_subject or anchor
             action = primary_action or anchor
             prompt = (
@@ -2797,7 +2799,7 @@ def postprocess_img_prompt(
             import sys
             print(f"[DETAIL CHECK] Prompt invented unsupported details: {unsupported}", file=sys.stderr)
             if _is_psychology_topic(topic):
-                anchor = visual_anchor or primary_action or primary_subject or srt_text[:140] or "the central psychology beat"
+                anchor = visual_anchor or primary_action or primary_subject or srt_text[:140] or "the central narration beat"
                 subject = primary_subject or anchor
                 action = primary_action or anchor
                 prompt = (
@@ -3982,7 +3984,7 @@ ABSOLUTE RULE: The img_prompt MUST depict what the narrator is describing RIGHT 
     if _is_psychology_topic(topic):
         profile = normalize_psychology_style_profile(style_profile)
         style_rules = f"""
-ABSOLUTE RULE: The img_prompt MUST make the spoken psychology idea clear as one engaging educational visual in this channel's fixed style.
+ABSOLUTE RULE: The img_prompt MUST make the spoken idea clear as one engaging educational visual in this channel's fixed style.
 - Channel style name: {profile['style_name']}
 - Start with this image style: {_psychology_runtime_image_style(profile)}
 - Character reference: use the provided reference image as the identity/style source; preserve the reference character exactly and do not re-describe it in detail.
