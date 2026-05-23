@@ -783,6 +783,7 @@ def _sample_style_image_prompt(
     subject: str = "",
     action: str = "",
     style_profile: Optional[Dict[str, Any]] = None,
+    topic: str = "",
 ) -> str:
     profile = normalize_style_profile(style_profile)
     audience_hint = _build_psychology_audience_visual_hint(profile)
@@ -802,7 +803,7 @@ def _sample_style_image_prompt(
         )
     return (
         f"{_runtime_image_style(profile).rstrip('. ')}. "
-        f"{_sample_style_image_tail(srt_text, theme_context)} "
+        f"{_sample_style_image_tail(srt_text, theme_context, topic=topic)} "
         f"{visual_sentence}"
         f"{audience_hint} "
         "No labels, captions, UI, readable marks, camera terms, or cinematic photo language."
@@ -1288,7 +1289,8 @@ def _sample_style_video_prompt(
     visual_moment: str = "",
     primary_subject: str = "",
     style_profile: Optional[Dict[str, Any]] = None,
-    img_prompt: str = "",  # NEW: Add img_prompt parameter
+    img_prompt: str = "",
+    topic: str = "",
 ) -> str:
     profile = normalize_style_profile(style_profile)
     audience_hint = _build_psychology_audience_visual_hint(profile)
@@ -1302,6 +1304,7 @@ def _sample_style_video_prompt(
             primary_subject=primary_subject,
             style_profile=style_profile,
             img_prompt=img_prompt,
+            topic=topic,
         )
     movement_text = _compact_psychology_video_motion(movement_text)
     visual_base = _clean_video_visual_text(_image_prompt_visual_base(img_prompt) or primary_subject or visual_anchor or primary_action, 360)
@@ -3570,6 +3573,7 @@ def postprocess_video_prompt(
             primary_subject=primary_subject,
             style_profile=style_profile,
             img_prompt=img_prompt,
+            topic=topic,
         )
 
         # ROOT CAUSE FIX: If we extracted motion from img_prompt, check if it's better than raw
@@ -3644,7 +3648,8 @@ def postprocess_video_prompt(
             visual_moment=visual_moment,
             primary_subject=primary_subject,
             style_profile=style_profile,
-            img_prompt=img_prompt,  # NEW: Pass img_prompt
+            img_prompt=img_prompt,
+            topic=topic,
         ), True))
     raw = " ".join(str(prompt or "").split())
     raw = re.sub(r"\|\s*DURATION\s*:\s*[^|]+", "", raw, flags=re.IGNORECASE)
@@ -3822,6 +3827,7 @@ def build_fallback_prompt(
             subject=subject,
             action=action,
             style_profile=style_profile,
+            topic=topic,
         )
         img_prompt = _ensure_psychology_prompt_quality(
             img_prompt,
@@ -3861,6 +3867,7 @@ def build_fallback_prompt(
             primary_subject=primary_subject or subject,
             style_profile=style_profile,
             img_prompt=img_prompt,
+            topic=topic,
         )
     else:
         video_prompt = _auto_video_prompt(
