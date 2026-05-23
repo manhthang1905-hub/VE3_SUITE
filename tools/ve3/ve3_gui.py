@@ -5080,26 +5080,46 @@ Get-CimInstance Win32_Process |
             return f"{m.group(1).upper()}-T{int(m.group(2))}"
         return "unknown"
 
+    def _is_project_in_progress(self, project_dir) -> bool:
+        """Project đang làm dở = có Excel + có ít nhất 1 ảnh/video done."""
+        ep = self._project_excel_path(project_dir)
+        if not ep.exists():
+            return False
+        try:
+            from modules.excel_manager import PromptWorkbook
+            wb = PromptWorkbook(str(ep)); wb.load()
+            stats = wb.get_stats()
+            images_done = int(stats.get("images_done", 0) or 0)
+            videos_done = int(stats.get("videos_done", 0) or 0)
+            return (images_done + videos_done) > 0
+        except Exception:
+            return False
+
     def _interleave_by_channel(self, projects, priority_key_func):
-        """Sắp xếp round-robin theo kênh, trong mỗi kênh dùng priority_key_func."""
+        """Ưu tiên mã đang làm dở trước, sau đó round-robin theo kênh cho mã mới."""
         from collections import OrderedDict
-        # Group by channel
-        channel_groups = OrderedDict()
+        in_progress = []
+        new_projects = []
         for pd in projects:
+            if self._is_project_in_progress(pd):
+                in_progress.append(pd)
+            else:
+                new_projects.append(pd)
+        in_progress.sort(key=priority_key_func)
+        channel_groups = OrderedDict()
+        for pd in new_projects:
             ch = self._get_project_channel(pd)
             channel_groups.setdefault(ch, []).append(pd)
-        # Sort within each channel by priority
         for ch in channel_groups:
             channel_groups[ch] = sorted(channel_groups[ch], key=priority_key_func)
-        # Round-robin pick
-        result = []
+        round_robin = []
         while any(channel_groups.values()):
             for ch in list(channel_groups.keys()):
                 if channel_groups[ch]:
-                    result.append(channel_groups[ch].pop(0))
+                    round_robin.append(channel_groups[ch].pop(0))
                 else:
                     del channel_groups[ch]
-        return result
+        return in_progress + round_robin
 
     def _queue_projects_excel(self):
         projects = self._queue_projects()
