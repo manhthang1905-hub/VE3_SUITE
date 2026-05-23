@@ -675,7 +675,7 @@ Goal: viewers should understand the spoken {self.topic} idea within one second; 
             return next(iter(parsed.values()))
         return ""
 
-    def _enforce_psychology_cultural_anchor(self, scene: dict) -> dict:
+    def _enforce_cultural_anchor(self, scene: dict) -> dict:
         # DISABLED: Do not force cultural props into every scene
         # Let the SRT content decide what props are needed
         return scene
@@ -2548,7 +2548,7 @@ Goal: viewers should understand the spoken {self.topic} idea within one second; 
             scene["primary_action"] = "The space carries the emotional trace of the off-screen child"
         return scene
 
-    def _extract_psychology_concept_from_srt(self, srt_text: str) -> tuple:
+    def _extract_concept_from_srt(self, srt_text: str) -> tuple:
         """Extract a visual concept from SRT when no concept rule matches.
         Handles both Latin (Vietnamese/English) and non-Latin (Japanese/Korean/etc.) text.
         """
@@ -2587,7 +2587,7 @@ Goal: viewers should understand the spoken {self.topic} idea within one second; 
         anchor = f"the visual metaphor for {concept_hint}"
         return (subject, action, anchor)
 
-    def _apply_psychology_scene_spec(self, scene: dict) -> dict:
+    def _apply_scene_spec(self, scene: dict) -> dict:
         import re
         import unicodedata
 
@@ -2602,13 +2602,13 @@ Goal: viewers should understand the spoken {self.topic} idea within one second; 
         source = " ".join(source.split())
         low = unicodedata.normalize("NFKD", source.lower())
         low = "".join(ch for ch in low if not unicodedata.combining(ch))
-        existing_primary_subject = self._clean_psychology_spec_text(scene.get("primary_subject", ""))
-        existing_primary_action = self._clean_psychology_spec_text(scene.get("primary_action", ""))
+        existing_primary_subject = self._clean_spec_text(scene.get("primary_subject", ""))
+        existing_primary_action = self._clean_spec_text(scene.get("primary_action", ""))
         needs_metaphor_fallback = (
             self._looks_non_visual_subject(existing_primary_subject)
-            or self._looks_weak_psychology_spec(existing_primary_subject)
+            or self._looks_weak_spec(existing_primary_subject)
             or self._looks_multi_action(existing_primary_action)
-            or self._looks_weak_psychology_spec(existing_primary_action)
+            or self._looks_weak_spec(existing_primary_action)
         )
 
         concept_rules = [
@@ -2692,42 +2692,42 @@ Goal: viewers should understand the spoken {self.topic} idea within one second; 
                     break
 
         visual_moment = self._sanitize_scene_spec_text(scene.get("visual_moment", ""), fallback="")
-        visual_moment = self._clean_psychology_spec_text(visual_moment)
-        if self._looks_weak_psychology_spec(visual_moment):
+        visual_moment = self._clean_spec_text(visual_moment)
+        if self._looks_weak_spec(visual_moment):
             visual_moment = ""
 
         # If no concept rule matched, try to extract from SRT directly
         if not subject:
             if visual_moment and not self._looks_non_visual_subject(visual_moment):
-                subject = self._clean_psychology_spec_text(self._extract_primary_clause(visual_moment))
+                subject = self._clean_spec_text(self._extract_primary_clause(visual_moment))
             else:
-                srt_subject, srt_action, srt_anchor = self._extract_psychology_concept_from_srt(scene.get("srt_text", ""))
+                srt_subject, srt_action, srt_anchor = self._extract_concept_from_srt(scene.get("srt_text", ""))
                 if srt_subject:
                     subject = srt_subject
                 else:
                     subject = "nv1 with one simple symbolic object from the narration" if scene["characters_used"] == "nv1" else "one simple symbolic object from the narration"
         if not action:
             if visual_moment:
-                action = self._clean_psychology_spec_text(self._extract_primary_clause(visual_moment))
+                action = self._clean_spec_text(self._extract_primary_clause(visual_moment))
             else:
-                srt_subject, srt_action, srt_anchor = self._extract_psychology_concept_from_srt(scene.get("srt_text", ""))
+                srt_subject, srt_action, srt_anchor = self._extract_concept_from_srt(scene.get("srt_text", ""))
                 if srt_action:
                     action = srt_action
                 else:
                     action = "the central idea is shown through one clear visual metaphor from the narration"
         if not anchor:
-            srt_subject, srt_action, srt_anchor = self._extract_psychology_concept_from_srt(scene.get("srt_text", ""))
-            anchor = srt_anchor or self._clean_psychology_spec_text(scene.get("visual_anchor", "")) or subject
+            srt_subject, srt_action, srt_anchor = self._extract_concept_from_srt(scene.get("srt_text", ""))
+            anchor = srt_anchor or self._clean_spec_text(scene.get("visual_anchor", "")) or subject
 
         primary_subject = existing_primary_subject
         primary_action = existing_primary_action
-        visual_anchor = self._clean_psychology_spec_text(scene.get("visual_anchor", ""))
+        visual_anchor = self._clean_spec_text(scene.get("visual_anchor", ""))
 
-        if self._looks_non_visual_subject(primary_subject) or self._looks_weak_psychology_spec(primary_subject):
+        if self._looks_non_visual_subject(primary_subject) or self._looks_weak_spec(primary_subject):
             primary_subject = subject
-        if self._looks_multi_action(primary_action) or self._looks_weak_psychology_spec(primary_action):
+        if self._looks_multi_action(primary_action) or self._looks_weak_spec(primary_action):
             primary_action = action
-        if not visual_anchor or self._looks_non_visual_subject(visual_anchor) or self._looks_weak_psychology_spec(visual_anchor):
+        if not visual_anchor or self._looks_non_visual_subject(visual_anchor) or self._looks_weak_spec(visual_anchor):
             visual_anchor = anchor
 
         current_kind = str(scene.get("scene_kind", "") or "").strip()
@@ -2741,10 +2741,10 @@ Goal: viewers should understand the spoken {self.topic} idea within one second; 
         scene["visual_anchor"] = visual_anchor or anchor
         scene["visual_moment"] = f"{scene['primary_subject']}: {scene['primary_action']}"
         scene["must_not_show"] = "no readable text, no captions, no labels, no UI text, no chart text, no document text, no watermark, no photo/cinematic camera style, no named/reference characters except nv1"
-        scene = self._enforce_psychology_cultural_anchor(scene)
+        scene = self._enforce_cultural_anchor(scene)
         return scene
 
-    def _looks_weak_psychology_spec(self, value: str) -> bool:
+    def _looks_weak_spec(self, value: str) -> bool:
         import re
         text = " ".join(str(value or "").split()).strip().lower()
         if not text:
@@ -2772,7 +2772,7 @@ Goal: viewers should understand the spoken {self.topic} idea within one second; 
                 return True
         return False
 
-    def _clean_psychology_spec_text(self, value: str) -> str:
+    def _clean_spec_text(self, value: str) -> str:
         import re
         text = _strip_forced_psychology_cultural_props(value)
         text = " ".join(str(text or "").split()).strip()
@@ -2789,7 +2789,7 @@ Goal: viewers should understand the spoken {self.topic} idea within one second; 
         text = re.sub(r"\s{2,}", " ", text)
         return text.strip(" ,.;:-")
 
-    def _psychology_scene_text_overlap(self, candidate: str, scene: dict) -> int:
+    def _scene_text_overlap(self, candidate: str, scene: dict) -> int:
         """Return rough content-token overlap between a proposed visual and the locked narration/spec."""
         import re
         import unicodedata
@@ -2809,7 +2809,7 @@ Goal: viewers should understand the spoken {self.topic} idea within one second; 
         ])
         return len(tokens(candidate) & tokens(source))
 
-    def _psychology_text_token_overlap(self, candidate: str, source: str) -> int:
+    def _text_token_overlap(self, candidate: str, source: str) -> int:
         import re
         import unicodedata
 
@@ -2825,7 +2825,7 @@ Goal: viewers should understand the spoken {self.topic} idea within one second; 
 
         return len(tokens(candidate) & tokens(source))
 
-    def _is_generic_psychology_anchor(self, value: str) -> bool:
+    def _is_generic_anchor(self, value: str) -> bool:
         import re
         text = " ".join(str(value or "").split()).strip().lower()
         if not text:
@@ -2879,18 +2879,18 @@ Goal: viewers should understand the spoken {self.topic} idea within one second; 
         if plan.get("lighting") and not merged.get("lighting"):
             merged["lighting"] = plan.get("lighting")
         if self._is_styled:
-            merged = self._apply_psychology_scene_spec(merged)
-            contract = self._clean_psychology_spec_text(merged.get("visual_contract", ""))
+            merged = self._apply_scene_spec(merged)
+            contract = self._clean_spec_text(merged.get("visual_contract", ""))
             if contract:
                 merged["visual_contract"] = contract
-                if self._looks_weak_psychology_spec(merged.get("primary_subject", "")) or self._is_generic_psychology_anchor(merged.get("primary_subject", "")):
+                if self._looks_weak_spec(merged.get("primary_subject", "")) or self._is_generic_anchor(merged.get("primary_subject", "")):
                     merged["primary_subject"] = self._extract_primary_clause(contract)[:220] or merged.get("primary_subject", "")
-                if self._looks_weak_psychology_spec(merged.get("visual_anchor", "")) or self._is_generic_psychology_anchor(merged.get("visual_anchor", "")):
+                if self._looks_weak_spec(merged.get("visual_anchor", "")) or self._is_generic_anchor(merged.get("visual_anchor", "")):
                     merged["visual_anchor"] = self._extract_primary_clause(contract)[:220] or merged.get("visual_anchor", "")
-            plan_focus = self._clean_psychology_spec_text(plan.get("key_focus", ""))
-            plan_attention = self._clean_psychology_spec_text(plan.get("viewer_attention", ""))
-            current_anchor = self._clean_psychology_spec_text(merged.get("visual_anchor", ""))
-            generic_anchor = self._is_generic_psychology_anchor(current_anchor)
+            plan_focus = self._clean_spec_text(plan.get("key_focus", ""))
+            plan_attention = self._clean_spec_text(plan.get("viewer_attention", ""))
+            current_anchor = self._clean_spec_text(merged.get("visual_anchor", ""))
+            generic_anchor = self._is_generic_anchor(current_anchor)
             for candidate in [plan_focus, plan_attention]:
                 if not candidate:
                     continue
@@ -2899,8 +2899,8 @@ Goal: viewers should understand the spoken {self.topic} idea within one second; 
                 refined_source = " ".join(str(merged.get(k, "") or "") for k in [
                     "srt_text", "primary_subject", "primary_action", "visual_moment",
                 ])
-                candidate_overlap = self._psychology_text_token_overlap(candidate, refined_source)
-                current_overlap = self._psychology_text_token_overlap(current_anchor, refined_source)
+                candidate_overlap = self._text_token_overlap(candidate, refined_source)
+                current_overlap = self._text_token_overlap(current_anchor, refined_source)
                 current_unsupported = bool(check_unsupported_prompt_details(
                     srt_text=merged.get("srt_text", ""),
                     img_prompt=current_anchor,
@@ -3257,7 +3257,7 @@ Return JSON only:
         """Äiá»n scene-spec tá»‘i thiá»ƒu náº¿u workbook cÅ© chÆ°a cÃ³."""
         scene = dict(scene or {})
         if self._is_styled:
-            return self._apply_psychology_scene_spec(scene)
+            return self._apply_scene_spec(scene)
         chars = scene.get("characters_used", "")
         srt_based_subject = (scene.get("visual_moment", "")[:180] or scene.get("srt_text", "")[:180] or "Primary subject in frame")
         srt_based_action = (scene.get("visual_moment", "")[:180] or scene.get("srt_text", "")[:180] or "Visible action in frame")
