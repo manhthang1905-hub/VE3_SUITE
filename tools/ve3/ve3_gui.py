@@ -5081,19 +5081,14 @@ Get-CimInstance Win32_Process |
         return "unknown"
 
     def _is_project_in_progress(self, project_dir) -> bool:
-        """Project đang làm dở = có Excel + có ít nhất 1 ảnh/video done."""
-        ep = self._project_excel_path(project_dir)
-        if not ep.exists():
+        """Project đang làm dở = có Excel + có ít nhất 1 ảnh trong img/."""
+        pd = Path(project_dir)
+        if not self._project_excel_path(pd).exists():
             return False
-        try:
-            from modules.excel_manager import PromptWorkbook
-            wb = PromptWorkbook(str(ep)); wb.load()
-            stats = wb.get_stats()
-            images_done = int(stats.get("images_done", 0) or 0)
-            videos_done = int(stats.get("videos_done", 0) or 0)
-            return (images_done + videos_done) > 0
-        except Exception:
+        img_dir = pd / "img"
+        if not img_dir.exists():
             return False
+        return any(img_dir.glob("*.png")) or any(img_dir.glob("*.jpg"))
 
     def _interleave_by_channel(self, projects, priority_key_func):
         """Ưu tiên mã đang làm dở trước, sau đó round-robin theo kênh cho mã mới."""
