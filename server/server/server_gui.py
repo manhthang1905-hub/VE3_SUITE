@@ -1068,8 +1068,8 @@ class ServerGUI(tk.Tk):
         import zipfile
         import shutil
 
-        GITHUB_ZIP_URL = "https://github.com/nguyenvantuong161978-dotcom/ve3-tool-simple/archive/refs/heads/main.zip"
-        GITHUB_GIT_URL = "https://github.com/nguyenvantuong161978-dotcom/ve3-tool-simple.git"
+        GITHUB_ZIP_URL = "https://github.com/manhthang1905-hub/VE3_SUITE/archive/refs/heads/main.zip"
+        GITHUB_GIT_URL = "https://github.com/manhthang1905-hub/VE3_SUITE.git"
 
         def do_update():
             self.update_btn.config(state="disabled", text="DANG CAP NHAT...", bg='#666')
@@ -1130,14 +1130,13 @@ class ServerGUI(tk.Tk):
                     with zipfile.ZipFile(str(zip_path), 'r') as zip_ref:
                         zip_ref.extractall(str(extract_dir))
 
-                    extracted_folder = extract_dir / "ve3-tool-simple-main"
+                    extracted_folder = extract_dir / "VE3_SUITE-main" / "server"
 
                     # Copy files
                     files_to_update = [
-                        "vm_manager.py", "vm_manager_gui.py", "run_excel_api.py",
-                        "run_worker.py", "START.py", "START.bat", "START_SERVER.bat",
-                        "requirements.txt", "_run_chrome1.py", "_run_chrome2.py",
-                        "google_login.py", "VERSION.txt",
+                        "START_SERVER.bat", "START_SERVER.vbs",
+                        "requirements.txt", "google_login.py", "VERSION.txt",
+                        "INSTALL.bat",
                     ]
                     for f in files_to_update:
                         src = extracted_folder / f
