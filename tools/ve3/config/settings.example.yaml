@@ -1,0 +1,80 @@
+# VE3 Studio - Settings
+# Copy file nay thanh settings.yaml va dien thong tin
+
+# Server
+generation_mode: server
+local_server_url: "http://192.168.88.145:5000"
+local_server_list:
+  - name: Pair-1
+    url: http://192.168.88.145:5000
+    enabled: true
+    allowed_topics: "story, psychology"
+    flow_account_bundle: dendalion41@gmail.com|Damuocmo212@|ag7b 35ne sdsx na3z xgkj kydl 3bmx 3fir
+    chrome_path: D:\\VE3_SUITE\\GoogleChromePortable\\GoogleChromePortable.exe
+# Example them pair thu 2:
+#  - name: Pair-2
+#    url: http://192.168.88.146:5000
+#    enabled: true
+#    allowed_topics: "story, psychology"
+#    flow_account_bundle: other@gmail.com|password|totp secret
+#    chrome_path: D:\\VE3_SUITE\\GoogleChromePortable\\GoogleChromePortable.exe
+
+# Google Flow API
+flow_bearer_token: ""
+flow_project_id: ""
+flow_project_url: ""
+flow_timeout: 120
+flow_aspect_ratio: landscape
+
+# Flow Auto Auth
+flow_auth_auto_enabled: true
+flow_auth_chrome_path: ""
+flow_auth_default_account: ""
+flow_accounts: []
+
+# Generation
+retry_count: 3
+max_concurrent: 1
+music_workspace_mode_enabled: true
+whisper_model: large-v3
+whisper_language: auto
+log_level: INFO
+
+# AI Provider (for SRT to Excel)
+excel_ai_provider: "vov_direct"
+deepseek_api_key: ""
+deepseek_api_keys: []
+deepseek_model: "deepseek-chat"
+deepseek_thinking_type: "disabled"
+vov_direct_base_url: "https://routerapi.vovantin.online/v1"
+vov_direct_api_key: "sk-6m5lfOmA6GdmbkZfWKXNYLtB6ouLfyfvf06obd7g3kZKdljB"
+vov_direct_model: "claude-opus-4-6"
+vov_direct_model_chain:
+  - "claude-opus-4-6"
+  - "claude-sonnet-4-6"
+claude_pool_base_url: "http://127.0.0.1:8318"
+claude_pool_api_key: "sk_cliproxy_local"
+claude_pool_model: "gpt-5.4"
+claude_pool_model_chain:
+  - "gpt-5.4"
+  - "gpt-5.2"
+  - "gpt-5.3-codex"
+  - "gemini-3-flash-agent"
+  - "gemini-3.1-pro-high"
+excel_ai_timeout_seconds: 180
+excel_ai_attempts_per_key: 3
+topic: story
+generation_backend: server
+nanopic_base_url: https://flow-api.nanoai.pics/api/v2
+nanopic_token: ''
+nanopic_access_token: ''
+nanopic_video_cookie: ''
+nanopic_image_model: NARWHAL
+nanopic_video_model: VEO_3_FAST_LOWER
+nanopic_video_type: frame
+nanopic_poll_interval_seconds: 5
+nanopic_poll_timeout_seconds: 900
+nanopic_use_flow_proxy: false
+nanopic_flow_auth_token: ''
+nanopic_flow_base_url: https://aisandbox-pa.googleapis.com
+nanopic_flow_project_id: ''

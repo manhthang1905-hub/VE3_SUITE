@@ -1,0 +1,11 @@
+profiles:
+  - name: main
+    enabled: true
+    chrome_path: D:\VE3_SUITE\tools\suno\GoogleChromePortable\GoogleChromePortable.exe
+    user_data_dir: D:\VE3_SUITE\chrome_profiles\main
+    profile_directory: Default
+    flow_url: https://labs.google/fx/vi/tools/flow
+    project_url_template: https://labs.google/fx/vi/tools/flow/project/{project_id}
+    email: ""
+    notes: "Pre-login this Chrome profile once. Module will reuse the session."
+

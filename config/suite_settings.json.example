@@ -1,0 +1,5 @@
+{
+  "server_url": "http://YOUR_SERVER_IP:5050",
+  "flow_project_id": "YOUR_FLOW_PROJECT_ID",
+  "flow_token": "YOUR_FLOW_TOKEN"
+}

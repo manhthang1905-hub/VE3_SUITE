@@ -1,0 +1,427 @@
+# IMAGE GENERATION KNOWLEDGE BASE
+## Modern Family Drama Production — Contemporary Emotional Realism Style
+
+---
+
+**Prompt Construction Formula:**
+
+```
+(Image Prompt [Number]) [Subject] + [Action] + [Environment] + [Lighting/Camera] + [Style/Quality] --ar 16:9
+```
+
+Each section below maps directly to one component of this formula.
+
+---
+
+# SECTION 1: SUBJECT (S)
+
+## 1.1 The 5-Layer Subject Formula
+
+Build every subject description from inside out:
+
+| Layer | Function | Family Drama Example |
+|-------|----------|---------------------|
+| **1. Identity** | Who — archetype, age, role | "A 31-year-old software architect with a quiet confidence" |
+| **2. Physicality & Wardrobe** | Body + fabric + texture | "clean-shaven, wearing a navy crewneck sweater over collared shirt, silver wristwatch" |
+| **3. Action & Interaction** | Dynamic verb + object contact | "gripping a phone to his ear, other hand pressing against the kitchen counter" |
+| **4. Micro-Expression** | Eyes + facial muscles | "jaw tight with disbelief, eyes glistening with the first sting of betrayal" |
+| **5. Hook Detail** | The one unforgettable element | "a perfectly set dining table for six visible behind him, untouched and candlelit" |
+
+### Identity Keywords (Modern Family Archetypes)
+
+| Category | Keywords |
+|----------|----------|
+| **Protagonists** | Tech professional, software engineer, startup founder, young architect, junior doctor |
+| **Parents** | Controlling father, peacemaker mother, retired patriarch, widowed grandmother |
+| **Siblings** | Golden child brother, favored sister, estranged twin, competitive older sibling |
+| **Partners** | Supportive girlfriend, loyal husband, new fiancé, long-term partner |
+| **Extended Family** | Wise grandfather, manipulative aunt, sympathetic cousin, disapproving in-law |
+| **Supporting Cast** | Therapist, best friend, colleague, real estate lawyer, family attorney |
+
+### Physicality & Wardrobe Keywords
+
+| Element | Keywords |
+|---------|----------|
+| **Skin** | Natural skin texture, visible pores, slight stubble shadow, tired under-eyes, flushed cheeks |
+| **Eyes** | Red-rimmed from crying, deep focus reflecting screen light, hollow exhaustion, sharp determination |
+| **Hair** | Neatly combed professional cut, messy unwashed stress hair, grey-streaked at temples, loose ponytail |
+| **Men's Clothing** | Navy crewneck sweater, fitted oxford shirt, charcoal wool coat, rolled-up sleeves, loosened tie |
+| **Women's Clothing** | Cream cashmere cardigan, muted blouse, simple pendant necklace, oversized comfort sweater |
+| **Casual/Home** | Faded college t-shirt, flannel pajama pants, bare feet on hardwood, bathrobe |
+| **Accessories** | Silver wristwatch, reading glasses pushed up on forehead, phone in hand, coffee mug, car keys |
+
+### Action Keywords (Physics-First — Natural Body Language)
+
+| Action Type | Weak (Avoid) | Strong (Use) |
+|-------------|-------------|--------------|
+| **Phone Call** | "on the phone" | "gripping phone to ear with white knuckles, other hand bracing against counter edge" |
+| **Crying** | "crying" | "collapsed forward on sofa, face buried in both hands, shoulders heaving silently" |
+| **Arguing** | "arguing" | "leaning across the dinner table, index finger pointing, veins visible on neck" |
+| **Waiting** | "sitting" | "perched on the edge of a kitchen chair, elbows on knees, staring at the floor" |
+| **Walking Away** | "leaving" | "mid-stride toward the front door, hand already on the handle, not looking back" |
+| **Reading** | "reading documents" | "hunched over legal papers at a desk lamp, pen frozen mid-note, mouth slightly open in shock" |
+
+### Micro-Expression Keywords
+
+| Emotion | Keywords |
+|---------|----------|
+| **Betrayal Shock** | Wide eyes, parted lips, frozen stillness, blood drained from face, thousand-yard stare |
+| **Suppressed Anger** | Clenched jaw, flared nostrils, controlled breathing, white-knuckle grip, rigid posture |
+| **Deep Sadness** | Downcast eyes, trembling lower lip, hollow cheeks, silent tears, exhausted surrender |
+| **Inner Conflict** | Averted gaze, biting inner cheek, tension between brows, restless hands |
+| **Quiet Hope** | Soft half-smile, relaxed brow, eyes catching warm light, gentle exhale |
+| **Determined Resolve** | Set jaw, steady forward gaze, squared shoulders, calm intensity in the eyes |
+
+---
+
+# SECTION 2: ENVIRONMENT (E)
+
+## 2.1 Modern Domestic Location Templates
+
+### Template A: Kitchen / Dining Area
+
+| Element | Description Keywords |
+|---------|---------------------|
+| **Layout** | Open-plan modern kitchen, breakfast island with pendant lights, farmhouse dining table |
+| **Surfaces** | Granite countertops, subway tile backsplash, butcher-block cutting board, stainless appliances |
+| **Dining Setup** | Set dining table with linen napkins, wine glasses, ceramic plates, unlit candle centerpiece |
+| **Atmosphere** | Warm overhead pendant glow, steam from untouched coffee, morning light through kitchen window |
+| **Details** | Fruit bowl on counter, magnetic knife strip, family calendar on fridge, spice jars on open shelf |
+| **Emotional Cue** | Empty chairs = absence/abandonment, full table = expectation/effort, dirty dishes = aftermath |
+
+### Template B: Living Room / Family Room
+
+| Element | Description Keywords |
+|---------|---------------------|
+| **Furniture** | L-shaped sectional sofa, upholstered armchair, low wooden coffee table, floor lamp |
+| **Decor** | Framed family photos on wall, built-in bookshelves, throw blanket draped over sofa arm |
+| **Technology** | Flat-screen TV off/reflecting room, laptop on coffee table, phone charging on side table |
+| **Atmosphere** | Soft lamp light pooling in corner, TV screen glow in darkness, afternoon sun through sheer curtains |
+| **Details** | Throw pillows, half-read book face-down, empty wine glass, tissue box |
+| **Emotional Cue** | Single lamp on = isolation, full room lit = normalcy, TV glow only = late-night rumination |
+
+### Template C: Home Office / Workspace
+
+| Element | Description Keywords |
+|---------|---------------------|
+| **Furniture** | Modern desk with dual monitors, ergonomic office chair, filing cabinet, floating shelves |
+| **Work Items** | Stacked legal documents, opened laptop, scattered sticky notes, business card holder |
+| **Atmosphere** | Desk lamp as sole light source, blue screen glow on face, late-night darkness beyond window |
+| **Details** | Cold coffee mug, framed degree on wall, family photo on desk, noise-canceling headphones |
+| **Emotional Cue** | Neat desk = control, messy desk = overwhelm, single desk lamp = lonely dedication |
+
+### Template D: Bedroom / Private Space
+
+| Element | Description Keywords |
+|---------|---------------------|
+| **Furniture** | King-size bed with rumpled white sheets, nightstand with reading lamp, walk-in closet partially visible |
+| **Atmosphere** | Pre-dawn blue light through curtains, bedside lamp warm glow, streetlight filtering in |
+| **Details** | Phone face-down on nightstand, half-packed suitcase, tissues on bed, alarm clock showing 3AM |
+| **Emotional Cue** | Made bed = new start, unmade bed = turmoil, empty side = loss/separation |
+
+### Template E: Outdoor / Public Spaces
+
+| Element | Description Keywords |
+|---------|---------------------|
+| **Park** | Tree-lined walking path, wooden bench, autumn leaves, morning joggers in background blur |
+| **Harbor/Waterfront** | Wooden boardwalk, sailboat masts in bokeh, gentle water reflections, seagulls |
+| **Café/Diner** | Corner booth with vinyl seats, Formica tabletop, ceramic coffee cups, rain on window |
+| **Car Interior** | Steering wheel grip, dashboard glow, parking lot outside, rearview mirror reflection |
+| **Lawyer's Office** | Glass-walled conference room, leather chairs, legal folders, city skyline through window |
+
+## 2.2 Material Specificity Rule
+
+**CRITICAL: AI generators render materials with high fidelity. Always use specific material names.**
+
+| Generic (Avoid) | Specific (Use) |
+|-----------------|----------------|
+| table | Solid oak farmhouse dining table, marble kitchen island, walnut coffee table |
+| chair | Mid-century leather armchair, upholstered linen dining chair, ergonomic mesh office chair |
+| floor | Honey-toned hardwood floors, grey slate tile, plush cream carpet |
+| wall | Warm ivory painted walls, exposed brick accent wall, wainscoting with eggshell paint |
+| light | Brushed-brass pendant lamp, frosted glass table lamp, recessed LED downlights |
+| fabric | Chunky knit throw blanket, Belgian linen curtains, velvet sofa cushion, cotton percale sheets |
+
+---
+
+# SECTION 3: LIGHTING & CAMERA (N + C)
+
+## 3.1 Domestic Interior Lighting Conditions
+
+| Condition | Time/Source | Color Palette | Mood | Use For |
+|-----------|------------|---------------|------|---------|
+| **Morning Window** | Early morning | Soft white, pale gold, cool blue shadows | Fresh start, quiet hope | New day scenes, morning-after, waking up |
+| **Golden Hour Interior** | Late afternoon | Rich amber, warm ivory, deep gold | Warmth, love, nostalgia | Family dinners, decorating, happy memories |
+| **Overhead Harsh** | Midday or artificial | Flat white, strong shadows below eyes | Tension, interrogation, exposure | Arguments, confrontations, dinner disasters |
+| **Single Lamp Night** | Evening, one source | Warm amber pool in darkness | Isolation, late-night crisis, rumination | Alone at desk, insomnia, reading documents |
+| **Candlelight** | Indoor, candles only | Deep amber, orange flicker, soft shadow | Intimacy, expectation, vulnerability | Set dinner table, holiday prep, romantic |
+| **Overcast Window** | Cloudy day | Flat cool light, desaturated, no shadow | Melancholy, emptiness, aftermath | Post-argument silence, mourning, contemplation |
+
+### Lighting Direction for Emotional Mood
+
+| Direction | Keywords | Family Drama Application |
+|-----------|----------|--------------------------|
+| **Window Side Light** | Soft directional light from window, gentle shadow on opposite face half | Intimate conversation, reflection, vulnerability |
+| **Rembrandt Split** | Strong side light creating triangle of light under eye on shadow side | Inner conflict, moral weight, difficult decisions |
+| **Overhead Flat** | Even overhead lighting, minimal shadows, slightly clinical | Arguments, tense dinners, uncomfortable truths |
+| **Backlight / Rim** | Subject silhouetted, thin bright edge, background brighter than face | Walking away, isolation, looking out window |
+| **Practical Lamp** | Warm pool of light from visible lamp in frame, darkness surrounding | Late-night alone, desk work, insomnia |
+| **Soft Diffused** | Even, shadowless, overcast-quality light through sheer curtains | Healing moments, therapy sessions, calm conversations |
+
+## 3.2 Camera Reference
+
+### Shot Size
+
+| Shot | Framing | Family Drama Use |
+|------|---------|-----------------|
+| **ECU (Extreme Close-Up)** | Eyes only, or hands on object | Tears forming, gripping phone, wedding ring, legal document text |
+| **CU (Close-Up)** | Face, shoulders up | Emotional weight: crying, shock, realization, quiet anger |
+| **MCU (Medium Close-Up)** | Chest up | Phone calls, one-on-one conversation, therapy session |
+| **MS (Medium Shot)** | Waist up | Dinner table argument, kitchen confrontation, doorway standoff |
+| **MWS (Medium Wide)** | Full body | Walking through house, sitting alone on sofa, pacing |
+| **WS (Wide Shot)** | Full body + environment | Establishing the room, empty decorated space, approaching house |
+| **EWS (Extreme Wide Shot)** | Subject small in environment | Walking alone in park, tiny figure in large empty house, city street |
+
+### Camera Angle
+
+| Angle | Keywords | Emotional Effect |
+|-------|----------|-----------------|
+| **Eye Level** | Eye-level angle, neutral perspective | Empathy, witness POV, documentary intimacy |
+| **Low Angle** | Low angle looking up, slightly heroic | Strength in defiance, standing ground, resolve |
+| **High Angle** | High angle looking down, diminished subject | Vulnerability, defeat, overwhelmed, small in crisis |
+| **Over-the-Shoulder** | OTS framing, seeing past one person to another | Confrontation, tense dialogue, power dynamics |
+| **Worm's Eye** | Ground-level upward | Collapsed on floor, child's perspective, feeling crushed |
+| **Dutch Angle** | Tilted frame, off-kilter | Shock moment, world turned upside down, disorientation |
+
+### Lens & Focal Length
+
+| Lens | Effect | Family Drama Use |
+|------|--------|-----------------|
+| **35mm f/1.8** | Natural field of view, moderate background context | Wide establishing shots, rooms, exteriors, environment storytelling |
+| **50mm f/1.4** | Human-eye perspective, flattering compression | Medium shots, dinner scenes, dialogue, two-person interaction |
+| **85mm f/1.8** | Beautiful subject isolation, creamy bokeh | PRIMARY LENS — emotional close-ups, portraits, key dramatic moments |
+| **24mm Wide** | Expanded space, slight distortion at edges | Large room establishing, crowd scenes, house exterior |
+| **100mm Macro** | Extreme detail magnification | Ring on finger, tear drop, crumpled letter, key in lock |
+
+### Depth of Field
+
+| DOF | Keywords | Family Drama Use |
+|-----|----------|-----------------|
+| **Shallow (f/1.4-2.0)** | Shallow depth of field, dreamy bokeh, blurred background | Character isolation, emotional focus, intimate portraits |
+| **Medium (f/2.8-4)** | Moderate depth, subject sharp with soft context | Balanced character + environment, dialogue scenes |
+| **Deep (f/8-11)** | Deep focus, everything sharp | Establishing shots, empty room detail, architectural context |
+
+### Camera + Lighting Mix Formula
+
+```
+[Shot Size] + [Angle] + [Lens] + [DOF] + [Lighting Condition] + [Light Direction]
+```
+
+**Examples:**
+
+| Scene Type | Camera + Lighting Mix |
+|------------|----------------------|
+| **Betrayal Phone Call** | "Close-up, eye-level, 85mm lens, shallow depth of field, Single Lamp Night lighting, Rembrandt split light on face" |
+| **Family Dinner Argument** | "Medium shot, eye-level, 50mm lens, medium DOF, Overhead Harsh lighting, flat overhead with candle accents on table" |
+| **Alone After Everyone Left** | "Wide shot, high angle, 35mm lens, deep focus, Overcast Window lighting, flat diffused cool light" |
+| **Reading Legal Documents** | "Medium close-up, eye-level, 85mm lens, shallow DOF, Practical Lamp lighting, warm desk lamp pool with darkness around" |
+| **Walking in Park / Healing** | "Medium wide shot, eye-level, 50mm lens, shallow DOF, Morning Window lighting (outdoor golden hour), soft warm backlight with lens flare" |
+
+---
+
+# SECTION 4: STYLE & QUALITY (Tech Specs)
+
+## 4.1 Mandatory Quality Keywords
+
+**Include in EVERY prompt:**
+
+```
+Photorealistic, Cinematic, 4K, Highly detailed, 8K resolution
+```
+
+## 4.2 Style Keywords (Contemporary Emotional Realism)
+
+**Include in EVERY prompt — select relevant combination:**
+
+```
+Contemporary emotional realism, indie film cinematography,
+Marriage Story visual style, Kodak Portra 400 film aesthetic,
+naturalistic indoor lighting, muted warm tones,
+intimate portrait photography, understated cinematic composition,
+modern domestic setting, authentic human emotion
+```
+
+## 4.3 Camera Body & Film Stock
+
+| Style Goal | Keywords |
+|------------|----------|
+| **Cinematic Portra** (default) | "Shot on Sony A7III, Kodak Portra 400 film look, soft film grain" |
+| **Ultra-Sharp Portrait** | "Shot on Sony A7RV, hyper-sharp skin texture, fine detail rendering" |
+| **Documentary Intimate** | "Shot on 35mm film, Kodak VISION3 200T, naturalistic, unposed" |
+| **Warm Nostalgic** | "Kodak Gold 200, warm amber cast, gentle grain, faded vintage feel" |
+| **Cool Melancholic** | "Fujifilm Pro 400H, desaturated, cool undertones, muted pastel" |
+| **Night/Low Light** | "Sony A7SIII, ISO 3200, available light only, warm tungsten, gentle noise" |
+
+## 4.4 Family Drama Color Palette
+
+| Color | Hex | Context | Keywords |
+|-------|-----|---------|----------|
+| **Warm Ivory** | #F5F0E8 | Walls, backgrounds, window light | "warm ivory tones, soft neutral background" |
+| **Soft Linen** | #E8DFD3 | Fabrics, curtains, clothing | "linen-toned neutrals, muted textile warmth" |
+| **Muted Clay** | #B8977E | Wood, floors, furniture | "earthy clay tones, warm wood grain palette" |
+| **Deep Walnut** | #5C4033 | Hair, shadows, dark accents | "deep walnut shadows, rich dark anchors" |
+| **Charcoal** | #3D3D3D | Modern clothing, offices | "charcoal grey modern elements, urban neutral" |
+| **Dusty Rose** | #C9A9A6 | Romance, family love, memories | "dusty rose accents, tender warmth" |
+| **Faded Teal** | #7BA7A7 | Loneliness, distance, loss | "faded teal undertones, cool isolation" |
+| **Amber Glow** | #D4A34E | Hope, warm light, happiness | "amber glow warmth, golden optimism" |
+| **Storm Grey** | #8B9DAF | Conflict, tension, arguments | "storm grey atmosphere, unsettled tension" |
+| **Muted Burgundy** | #7A3B3B | Pain, betrayal, suppressed anger | "muted burgundy accents, deep emotional wound" |
+
+## 4.5 Rendering & Detail Boosters
+
+| Category | Keywords |
+|----------|----------|
+| **Texture** | "Hyper-detailed skin texture, visible pores, fabric weave detail, wood grain, condensation on glass" |
+| **Realism** | "Photorealistic, optical photography, subsurface skin scattering, natural imperfections, asymmetric features" |
+| **Atmosphere** | "Dust particles in light beam, steam rising from coffee, breath visible in cold air, rain streaks on window" |
+| **Composition** | "Rule of thirds, negative space for isolation, leading lines from hallway, frame within frame from doorway" |
+
+---
+
+# SECTION 5: SINGLE FRAME INTEGRITY
+
+## Mandatory Rule
+
+**Every image = ONE continuous frame = ONE moment = ONE location**
+
+**Include in EVERY prompt:**
+
+```
+Single continuous photographic frame, one unified moment, no split screens, no collage, no text overlays, no graphic elements
+```
+
+## Subject Count Guidelines
+
+| Subjects | AI Attention | Recommendation |
+|----------|-------------|----------------|
+| 1 | 100% — Maximum consistency | Best for emotional close-ups, solitary moments, phone calls |
+| 2 | 50% each — Very good | Confrontation, couple walking, dinner conversation |
+| 3-4 | 25-33% each — Good | Family dinner table, group argument, small gathering |
+| 5+ | <20% each — Use background blur | Wide establishing shots, party scenes, crowd in café |
+
+---
+
+# SECTION 6: REFERENCE-ONLY RULE
+
+## When Using Asset References in Prompts
+
+| Asset Type | DO NOT Describe (Fixed) | DO Describe (Variable) |
+|------------|------------------------|----------------------|
+| **Characters** | Face shape, age, ethnicity, body type, hair color | Expression, clothing variant, pose, action, emotional state, grooming |
+| **Interior Spaces** | Room layout, wall color, furniture placement | Lighting condition, time of day, atmospheric detail, emotional context |
+| **Objects** | Object design, brand, model | Lighting on object, positioning in frame, wear/use evidence |
+| **Recurring Settings** | Architecture style, floor plan | Weather through windows, season, mess level, decoration state |
+
+**WHY (Reference-Only Rule above):** Prevents conflict between text description and reference image. AI generator follows the reference for fixed attributes and the text for variable attributes.
+
+## No Proper Names Rule (Image Prompts)
+
+**CRITICAL: Never use proper names in image prompts.** AI image generators (Google Nano Banana Pro, Gemini Image) prioritize metadata knowledge over reference assets when proper names are detected — overriding your visual references with the model's internal bias.
+
+**Use visual descriptors + (ref ASSET_ID) instead:**
+
+| Do NOT Use | Use Instead |
+|-----------|-------------|
+| "Ethan" | "The young man in navy sweater at the dining table (ref CHAR_001)" |
+| "Tyler" | "The tech entrepreneur in charcoal coat (ref CHAR_002)" |
+| "Jason" | "The software engineer at his desk (ref CHAR_003)" |
+| "Rachel" | "The woman with dark hair in cream cardigan (ref CHAR_004)" |
+| "Marcus" | "The older brother in the expensive suit (ref CHAR_005)" |
+| "Richard" / "The father" | "The grey-haired father in polo shirt at the head of the table (ref CHAR_006)" |
+| "Grandpa Walter" | "The elderly grandfather in the diner booth (ref CHAR_007)" |
+| "Ethan's kitchen" | "The modern open-plan kitchen with pendant lights (ref ENV_001)" |
+| "Tyler's Tahoe cabin" | "The three-bedroom lakeside cabin with wooden deck (ref ENV_002)" |
+| "Jason's apartment" | "The modern condo unit with large windows and hardwood floors (ref ENV_003)" |
+| "The legal documents" | "The property transfer notification on official letterhead (ref PROP_001)" |
+
+**WHY:** Proper names trigger the AI's internal visual bias (stock photo associations, celebrity look-alikes, inconsistent character generation), which conflicts with your reference assets and the Contemporary Emotional Realism visual system.
+
+
+---
+
+# SECTION 7: QUICK-MIX FORMULAS
+
+## Complete Prompt Assembly
+
+```
+(Image Prompt [#])
+[Layer 1-5 Subject] +
+[Action verb + object interaction] +
+[Template environment + specific materials] +
+[Lighting condition + direction + Camera: shot size, angle, lens, DOF] +
+[Style keywords + quality keywords + color palette] --ar 16:9
+```
+
+## Ready-Made Combinations
+
+### Betrayal Discovery Shot
+```
+[30-year-old man, professional appearance + shock expression + gripping phone white-knuckled] +
+[Kitchen Template A + untouched holiday dinner visible behind] +
+[Single Lamp Night + Rembrandt split + Close-up, eye-level, 85mm, shallow DOF] +
+[Contemporary emotional realism, Sony A7III, Kodak Portra 400, muted teal shadows, 8K photorealistic]
+```
+
+### Family Dinner Confrontation
+```
+[Father in his 60s + righteous anger expression + pointing across dining table] +
+[Dining Template A + wine glasses + holiday decorations + other family members averting eyes] +
+[Overhead Harsh + flat overhead with warm candle accents + MS, eye-level, 50mm, medium DOF] +
+[Contemporary emotional realism, Sony A7III, Portra 400 pushed, Storm Grey atmosphere, 8K]
+```
+
+### Solitary Grief Moment
+```
+[31-year-old man + deep sadness expression + collapsed forward on sofa, face in hands] +
+[Living Room Template B + single lamp on + tissue box + empty wine glass on table] +
+[Single Lamp Night + warm amber pool in darkness + MCU, high angle, 85mm, shallow DOF] +
+[Contemporary emotional realism, Sony A7III, Kodak Portra 400 underexposed, Faded Teal tones, 8K]
+```
+
+### Healing Walk Scene
+```
+[Young couple + quiet hope expression + walking hand-in-hand along harbor boardwalk] +
+[Outdoor Template E + sailboat masts in bokeh + golden water reflections] +
+[Golden Hour exterior + warm backlight with lens flare + MWS, eye-level, 85mm, shallow DOF] +
+[Contemporary emotional realism, Sony A7III, Kodak Portra 400 overexposed, Amber Glow palette, 8K]
+```
+
+### Late Night Legal Discovery
+```
+[32-year-old man + inner conflict expression + hunched over legal papers at desk] +
+[Home Office Template C + single desk lamp + cold coffee + laptop glow] +
+[Practical Lamp + warm pool with surrounding darkness + MCU, eye-level, 50mm, shallow DOF] +
+[Contemporary emotional realism, Sony A7III, Kodak Portra 400, Deep Walnut shadows, 8K]
+```
+
+---
+
+# SECTION 8: CONTEMPORARY AUTHENTICITY CHECKLIST
+
+Before finalizing any prompt, verify:
+
+- [ ] Setting is modern and domestic (no historical, biblical, or fantasy elements)
+- [ ] All characters wear contemporary clothing appropriate to their social context
+- [ ] Materials and furniture are specifically named (not generic)
+- [ ] Clothing matches the character's age, profession, and scene context
+- [ ] Lighting is physically plausible for the indoor/outdoor setting
+- [ ] Color palette follows the muted Portra 400 aesthetic (never oversaturated)
+- [ ] Skin tones are natural and unaffected by overall color grading
+- [ ] Emotional expression is specific and matches the narrative moment
+- [ ] Single Frame Integrity maintained (one moment, one location, no composites)
+- [ ] No AI-typical artifacts specified in negative prompt (extra fingers, text, plastic skin)
+
+---
+
+*— END OF IMAGE GENERATION KNOWLEDGE BASE —*
+*Version 1.0 | Modern Family Drama Production | Contemporary Emotional Realism Style*

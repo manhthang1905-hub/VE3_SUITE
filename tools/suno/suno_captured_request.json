@@ -1,0 +1,20 @@
+[
+  {
+    "url": "https://studio-api-prod.suno.com/api/cms/nudges/share-nudge",
+    "method": "GET",
+    "auth": "Bearer eyJhbGciOiJSUzI1NiIsImtpZCI6InN1bm8tYXBpLXJzMjU2LWtle",
+    "body_preview": ""
+  },
+  {
+    "url": "https://studio-api-prod.suno.com/api/share/stats?content_type=song",
+    "method": "GET",
+    "auth": "Bearer eyJhbGciOiJSUzI1NiIsImtpZCI6InN1bm8tYXBpLXJzMjU2LWtle",
+    "body_preview": ""
+  },
+  {
+    "url": "https://studio-api-prod.suno.com/api/cms/nudges/publish-nudge",
+    "method": "GET",
+    "auth": "Bearer eyJhbGciOiJSUzI1NiIsImtpZCI6InN1bm8tYXBpLXJzMjU2LWtle",
+    "body_preview": ""
+  }
+]

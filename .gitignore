@@ -1,0 +1,50 @@
+# ============================================================
+#  VE3_SUITE .gitignore
+#  Loại trừ credentials, data, browser, cache
+# ============================================================
+
+# === PROJECT DATA (mỗi máy riêng) ===
+PROJECTS/
+
+# === CREDENTIALS & CONFIG NHẠy CẢM ===
+config/suite_settings.json
+config/creds.json
+config/config.json
+config/flow_project_auth_cache.json
+tools/srt-to-excel/config/settings.yaml
+tools/ve3/config/settings.yaml
+tools/ve3/config/flow_accounts.yaml
+
+# === CHROME BROWSER INSTANCES (mỗi máy riêng) ===
+GoogleChromePortable*/
+chrome_profiles/
+
+# === PYTHON CACHE ===
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+
+# === LOGS & TEMP ===
+*.log
+*.tmp
+*.lock
+*.stale_*
+
+# === RUNTIME METADATA (mỗi project riêng) ===
+.excel_runtime_config.yaml
+.nguon_runtime_metadata.yaml
+.ve3_run_config.json
+.progress_totals.json
+
+# === OS FILES ===
+Thumbs.db
+desktop.ini
+.DS_Store
+
+# === IDE ===
+.vscode/
+.idea/
+
+# === CLAUDE CONFIG (mỗi máy riêng) ===
+.claude/

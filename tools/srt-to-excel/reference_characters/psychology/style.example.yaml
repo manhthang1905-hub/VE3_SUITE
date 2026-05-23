@@ -1,0 +1,12 @@
+style_name: soft_anime
+image_style: "Soft anime psychology explainer illustration matching the provided nv1 reference image, expressive eyes, gentle emotions, clean pastel background, polished 2D anime line art, simple symbolic props, no photoreal humans, no messy text, no watermark"
+video_style: "Same soft anime psychology explainer style, gentle character motion, expressive eyes, clean pastel background, all props and secondary figures in the same 2D anime style"
+thumbnail_style: "High-CTR soft anime psychology YouTube thumbnail, expressive main character, clean pastel contrast, bold readable composition, simple emotional props"
+scene_plan_style: "Soft anime educational illustration language, clean pastel spaces, expressive character acting, simple symbolic objects"
+palette: "pastel pink, sky blue, soft lavender, clean white highlights"
+negative_prompt: "no photoreal humans, no realistic photography, no 3D, no messy text, no watermark"
+reference_lock: "Use the uploaded reference image nv1.png as the exact identity and style anchor for the main character. Keep consistent anime style, no redesign."
+technical_suffix: "same exact soft anime channel style for all figures, objects, environments, and symbolic elements, consistent nv1 reference when used, no readable text, no watermark"
+engagement_rules: "centered main character as the emotional focal point, expressive posture, simple symbolic props, same-style secondary silhouettes, direct visual cause-and-effect, instantly obvious psychological meaning"
+default_character_prompt: "Soft anime psychology channel character based on nv1, expressive eyes, gentle thoughtful expression, clean pastel outfit, polished 2D anime line art, simple white background, no text, no watermark"
+default_character_lock: "soft anime psychology channel character based on nv1, expressive eyes, gentle thoughtful expression, clean pastel outfit, polished 2D anime line art"

@@ -1,0 +1,6 @@
+projects_dir: ./PROJECTS
+srt_to_excel_dir: ./tools/srt-to-excel
+ve3_dir: ./tools/ve3
+suno_dir: ./tools/suno
+flow: manual_orchestrated
+

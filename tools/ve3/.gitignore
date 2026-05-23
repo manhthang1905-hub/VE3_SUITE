@@ -1,0 +1,9 @@
+__pycache__/
+*.pyc
+*.pyo
+PROJECTS/
+*.xlsx
+!templates/template.xlsx
+config/settings.yaml
+.env
+*.log

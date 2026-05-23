@@ -1,0 +1,120 @@
+<!doctype html>
+<html lang="vi">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>VE3 Studio</title>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+
+<div class="sidebar">
+  <div class="sb-logo">🎬 VE3</div>
+  <div class="sb-nav">
+    <button class="sb-btn act" onclick="showTab('home')">Overview</button>
+    <button class="sb-btn" onclick="showTab('gen')">Generate</button>
+    <button class="sb-btn" onclick="showTab('cfg')">Settings</button>
+  </div>
+  <button class="sb-run" id="btn-run" onclick="toggleRun()">▶ RUN</button>
+  <div class="sb-info"><span id="clk"></span></div>
+</div>
+
+<div class="main">
+
+<!-- ========== HOME / OVERVIEW ========== -->
+<div class="page act" id="page-home">
+  <div class="row">
+    <div class="stat"><div class="num" id="ov-proj">0</div><div class="lbl">Projects</div></div>
+    <div class="stat"><div class="num" style="color:var(--cy)" id="ov-xls">0</div><div class="lbl">Excel</div></div>
+    <div class="stat"><div class="num" style="color:var(--gn)" id="ov-vid">0</div><div class="lbl">w/ Video</div></div>
+    <div class="stat"><div class="num" style="color:var(--ac)" id="ov-srv">0</div><div class="lbl">Servers</div></div>
+  </div>
+
+  <div class="card">
+    <div class="card-title" style="display:flex;align-items:center">📁 Projects <button class="btn btn-sm" style="margin-left:auto" onclick="loadProjects()">↺</button></div>
+    <div class="plist-scroll" id="plist"><div class="empty">Loading...</div></div>
+  </div>
+
+  <div class="card">
+    <div class="card-title" style="display:flex;align-items:center">📋 Logs <button class="btn btn-sm" style="margin-left:auto" onclick="clearLogs()">🗑</button></div>
+    <div class="log-tabs" id="log-tabs"></div>
+    <div class="log-box" id="logs"></div>
+  </div>
+
+  <div class="card">
+    <div class="card-title" style="display:flex;align-items:center">⚡ Servers <button class="btn btn-sm" style="margin-left:auto" onclick="pollServers()">↺</button></div>
+    <div id="srvlist"></div>
+  </div>
+</div>
+
+<!-- ========== GENERATE ========== -->
+<div class="page" id="page-gen">
+  <div class="card" style="margin-bottom:12px">
+    <div style="display:flex;align-items:center;gap:8px">
+      <label style="font-size:11px;font-weight:600;color:var(--mt)">Project</label>
+      <select id="gen-proj" style="flex:1;padding:6px 10px;background:var(--sf);border:1px solid var(--bd);border-radius:6px;color:var(--tx);font-size:12px" onchange="loadGenProject()"></select>
+      <button class="btn" onclick="loadGenProject()">Load</button>
+    </div>
+    <div id="gen-hint" style="font-size:10px;color:var(--mt);margin-top:4px"></div>
+  </div>
+
+  <div class="card">
+    <div class="card-title" style="display:flex;align-items:center">👤 Characters <span id="chr-cnt" style="color:var(--mt);font-weight:400;margin-left:4px">(0)</span><button class="btn btn-sm" style="margin-left:auto" id="chr-toggle" onclick="toggleChars()">▼</button></div>
+    <div id="charlist" style="max-height:250px;overflow-y:auto"></div>
+  </div>
+
+  <div class="card">
+    <div class="card-title">🎬 Scenes <span id="scn-cnt" style="color:var(--mt);font-weight:400;margin-left:4px">(0)</span></div>
+    <div id="scenelist"></div>
+    <div class="pager" id="pager" style="display:none">
+      <button class="btn btn-sm" id="pg-prev" onclick="prevPage()">◀ Prev</button>
+      <span style="font-size:10px;color:var(--mt)" id="pg-info">1/1</span>
+      <button class="btn btn-sm" id="pg-next" onclick="nextPage()">Next ▶</button>
+    </div>
+  </div>
+</div>
+
+<!-- ========== SETTINGS ========== -->
+<div class="page" id="page-cfg">
+  <div class="card">
+    <div class="card-title">🖥 Servers</div>
+    <div id="cfg-servers"></div>
+  </div>
+  <div class="card">
+    <div class="card-title">⚙ Runtime</div>
+    <div class="field"><label>Parallel jobs</label><input id="cfg-conc" type="number" value="1" min="1" max="8"></div>
+    <div class="field"><label>Retry count</label><input id="cfg-retry" type="number" value="3" min="1" max="10"></div>
+    <div class="field"><label>Aspect ratio</label>
+      <select id="cfg-ar"><option value="landscape">Landscape</option><option value="portrait">Portrait</option><option value="square">Square</option></select>
+    </div>
+    <button class="btn btn-primary" onclick="saveSettings()">Save Settings</button>
+    <span id="cfg-saved" style="font-size:10px;color:var(--gn);margin-left:8px"></span>
+  </div>
+</div>
+
+</div><!-- /main -->
+
+<!-- Run Modal -->
+<div class="modal-bg" id="run-modal">
+  <div class="modal">
+    <h3>▶ Run Pipeline</h3>
+    <div class="field"><label>Project</label><input id="rm-proj" readonly></div>
+    <div class="field"><label>Mode</label>
+      <select id="rm-mode">
+        <option value="all">All (Full Pipeline)</option>
+        <option value="srt-excel-only">SRT → Excel Only</option>
+        <option value="excel-only">Excel Only</option>
+        <option value="ve3-only">VE3 Only</option>
+      </select>
+    </div>
+    <div style="display:flex;gap:8px;margin-top:14px;justify-content:flex-end">
+      <button class="btn" onclick="closeModal()">Cancel</button>
+      <button class="btn btn-green" onclick="submitJob()">▶ Start</button>
+    </div>
+  </div>
+</div>
+
+<script src="/static/app.js"></script>
+</body>
+</html>

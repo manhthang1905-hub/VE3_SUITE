@@ -1,0 +1,8 @@
+accounts:
+  - name: main
+    enabled: true
+    chrome_path: D:\VE3_SUITE\tools\suno\GoogleChromePortable\GoogleChromePortable.exe
+    profile_path: D:\VE3_SUITE\chrome_profiles\main
+    email: ""
+    notes: "Chrome profile should already be logged in to Google Flow."
+

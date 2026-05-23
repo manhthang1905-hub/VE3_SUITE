@@ -1,0 +1,74 @@
+[
+  {
+    "url": "https://studio-api-prod.suno.com/api/cms/nudges/share-nudge",
+    "method": "GET",
+    "auth_preview": "Bearer eyJhbGciOiJSUzI1NiIsImtpZCI6InN1bm8tYXBpLXJzMjU2LWtleS0xIiwidHlwIjoiSldUI",
+    "body": null,
+    "resp_status": 200,
+    "resp_preview": ""
+  },
+  {
+    "url": "https://studio-api-prod.suno.com/api/share/stats?content_type=song",
+    "method": "GET",
+    "auth_preview": "Bearer eyJhbGciOiJSUzI1NiIsImtpZCI6InN1bm8tYXBpLXJzMjU2LWtleS0xIiwidHlwIjoiSldUI",
+    "body": null,
+    "resp_status": 200,
+    "resp_preview": ""
+  },
+  {
+    "url": "https://studio-api-prod.suno.com/api/cms/nudges/publish-nudge",
+    "method": "GET",
+    "auth_preview": "Bearer eyJhbGciOiJSUzI1NiIsImtpZCI6InN1bm8tYXBpLXJzMjU2LWtleS0xIiwidHlwIjoiSldUI",
+    "body": null,
+    "resp_status": 200,
+    "resp_preview": ""
+  },
+  {
+    "url": "https://studio-api-prod.suno.com/api/c/check",
+    "method": "POST",
+    "auth_preview": "Bearer eyJhbGciOiJSUzI1NiIsImtpZCI6InN1bm8tYXBpLXJzMjU2LWtleS0xIiwidHlwIjoiSldUI",
+    "body": null,
+    "resp_status": 200,
+    "resp_preview": ""
+  },
+  {
+    "url": "https://studio-api-prod.suno.com/api/generate/v2-web/",
+    "method": "POST",
+    "auth_preview": "Bearer eyJhbGciOiJSUzI1NiIsImtpZCI6InN1bm8tYXBpLXJzMjU2LWtleS0xIiwidHlwIjoiSldUI",
+    "body": null,
+    "resp_status": 200,
+    "resp_preview": ""
+  },
+  {
+    "url": "https://studio-api-prod.suno.com/api/billing/usage-plan-faq/",
+    "method": "GET",
+    "auth_preview": "Bearer eyJhbGciOiJSUzI1NiIsImtpZCI6InN1bm8tYXBpLXJzMjU2LWtleS0xIiwidHlwIjoiSldUI",
+    "body": null,
+    "resp_status": 200,
+    "resp_preview": ""
+  },
+  {
+    "url": "https://studio-api-prod.suno.com/api/billing/usage-plan-web-table-comparison/",
+    "method": "GET",
+    "auth_preview": "Bearer eyJhbGciOiJSUzI1NiIsImtpZCI6InN1bm8tYXBpLXJzMjU2LWtleS0xIiwidHlwIjoiSldUI",
+    "body": null,
+    "resp_status": 200,
+    "resp_preview": ""
+  },
+  {
+    "url": "https://studio-api-prod.suno.com/api/billing/info/",
+    "method": "GET",
+    "auth_preview": "Bearer eyJhbGciOiJSUzI1NiIsImtpZCI6InN1bm8tYXBpLXJzMjU2LWtleS0xIiwidHlwIjoiSldUI",
+    "body": null,
+    "resp_status": 200,
+    "resp_preview": ""
+  },
+  {
+    "url": "https://studio-api-prod.suno.com/api/feed/v3",
+    "method": "POST",
+    "auth_preview": "Bearer eyJhbGciOiJSUzI1NiIsImtpZCI6InN1bm8tYXBpLXJzMjU2LWtleS0xIiwidHlwIjoiSldUI",
+    "body": null,
+    "resp_status": 200,
+    "resp_preview": ""
+  }
+]

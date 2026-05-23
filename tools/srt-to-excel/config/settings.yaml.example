@@ -1,0 +1,44 @@
+# === SRT-to-Excel Settings ===
+# Copy file này thành settings.yaml và điền API keys của bạn
+
+project_root: ../../PROJECTS
+excel_ai_provider: deepseek
+
+# DeepSeek API
+deepseek_api_key: YOUR_DEEPSEEK_API_KEY
+deepseek_api_keys:
+  - YOUR_DEEPSEEK_API_KEY
+deepseek_model: deepseek-v4-pro
+deepseek_thinking_type: disabled
+
+# VOV Direct (OpenAI-compatible)
+vov_direct_base_url: https://your-router-api.example.com/v1
+vov_direct_api_key: YOUR_VOV_API_KEY
+vov_direct_model: claude-sonnet-4-6
+vov_direct_model_chain:
+- claude-sonnet-4-6
+- claude-opus-4-6
+
+# Claude Pool (local proxy)
+claude_pool_base_url: http://127.0.0.1:8318
+claude_pool_api_key: YOUR_CLAUDE_POOL_KEY
+claude_pool_model: gpt-5.4
+claude_pool_model_chain:
+- gpt-5.4
+- gpt-5.2
+
+# General settings
+excel_ai_timeout_seconds: 180
+excel_ai_attempts_per_key: 3
+gemini_api_keys: []
+gemini_models:
+- gemini-2.0-flash
+- gemini-2.5-flash
+groq_api_keys: []
+min_scene_duration: 5
+max_scene_duration: 8
+max_parallel_api: 8
+excel_mode: basic
+whisper_model: large-v3
+whisper_language: auto
+log_level: INFO
