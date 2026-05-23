@@ -43,14 +43,56 @@ PROTECTED_PREFIXES = (
 )
 
 
+def _get_local_commit_count() -> int:
+    """Get commit count from local git, return -1 if git unavailable."""
+    import subprocess
+    try:
+        result = subprocess.run(
+            ["git", "rev-list", "--count", "HEAD"],
+            cwd=str(SUITE_ROOT), capture_output=True, text=True, timeout=5,
+        )
+        if result.returncode == 0:
+            return int(result.stdout.strip())
+    except Exception:
+        pass
+    return -1
+
+
 def get_local_version() -> str:
+    count = _get_local_commit_count()
+    if count > 0:
+        return f"1.0.{count}"
     try:
         return VERSION_FILE.read_text(encoding="utf-8").strip()
     except Exception:
         return "0.0.0"
 
 
+def _get_remote_commit_count() -> int:
+    """Get total commit count on main branch via GitHub API (no git needed)."""
+    url = f"{GITHUB_API}/commits?sha=main&per_page=1"
+    try:
+        req = Request(url, headers={"User-Agent": "VE3-Suite-Updater"})
+        with urlopen(req, timeout=10) as resp:
+            link = resp.headers.get("Link", "")
+            if 'rel="last"' in link:
+                import re
+                m = re.search(r'[&?]page=(\d+)>;\s*rel="last"', link)
+                if m:
+                    return int(m.group(1))
+            body = resp.read().decode("utf-8")
+            data = json.loads(body)
+            if isinstance(data, list) and len(data) > 0:
+                return 1
+    except Exception:
+        pass
+    return -1
+
+
 def get_remote_version() -> str:
+    count = _get_remote_commit_count()
+    if count > 0:
+        return f"1.0.{count}"
     url = f"https://raw.githubusercontent.com/{GITHUB_REPO}/main/VERSION"
     try:
         req = Request(url, headers={"User-Agent": "VE3-Suite-Updater"})
@@ -65,7 +107,12 @@ def check_update() -> dict:
     remote = get_remote_version()
     if not remote:
         return {"available": False, "local": local, "remote": "", "error": "Không thể kết nối GitHub"}
-    has_update = remote != local
+    try:
+        local_n = int(local.rsplit(".", 1)[-1])
+        remote_n = int(remote.rsplit(".", 1)[-1])
+        has_update = remote_n > local_n
+    except (ValueError, IndexError):
+        has_update = remote != local
     return {"available": has_update, "local": local, "remote": remote, "error": ""}
 
 
@@ -131,6 +178,12 @@ def download_and_apply(progress_callback=None) -> dict:
     zf.close()
 
     remote_ver = get_remote_version() or "unknown"
+
+    try:
+        VERSION_FILE.write_text(remote_ver + "\n", encoding="utf-8")
+    except Exception:
+        pass
+
     _progress(f"Hoàn tất! v{remote_ver} — {updated} files cập nhật, {skipped} files giữ nguyên")
 
     return {
