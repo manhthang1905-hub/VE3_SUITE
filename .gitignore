@@ -64,3 +64,5 @@ server/logs/
 server/PROJECTS/
 server/GoogleChromePortable*/
 server/chrome_profile*/
+
+old/

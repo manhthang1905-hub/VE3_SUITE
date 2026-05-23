@@ -1787,10 +1787,27 @@ def get_scene_system_prompt(topic: str = "story", style_profile: Optional[Dict[s
 TARGET AUDIENCE: {audience_language}-speaking viewers.
 {('CULTURAL CONTEXT: ' + audience_culture_note) if audience_culture_note else ''}{emotion_block}
 AUDIENCE FIT GUIDANCE: The narration decides the image. If the narration naturally involves a setting, object, or ritual, prefer one that feels familiar to {audience_language} audiences. Do NOT force cultural props into every scene. Most psychology concepts (thoughts, emotions, boundaries, realizations) do not need tea, coffee, bread, tables, or food props."""
-    topic_label = "FINANCE" if "finance" in str(style_profile.get("style_name", "") if style_profile else "").lower() else "PSYCHOLOGY"
+    import unicodedata
+    topic_norm = unicodedata.normalize("NFKD", str(topic or "").strip().lower())
+    topic_norm = "".join(ch for ch in topic_norm if not unicodedata.combining(ch))
+    if topic_norm in ("finance", "tai chinh"):
+        topic_label = "FINANCE"
+        topic_desc = "personal finance and financial literacy"
+        topic_metaphor_hint = "Use financial visual metaphors: growth charts, coin stacks, savings jars, investment trees, debt chains, safety nets, open doors of opportunity. Show money concepts through relatable everyday financial situations."
+        topic_question = "what single image/video beat would make the spoken financial concept clear, actionable, and worth watching?"
+    elif topic_norm in ("success", "phat trien ban than"):
+        topic_label = "SELF-DEVELOPMENT"
+        topic_desc = "self-development, personal growth and success habits"
+        topic_metaphor_hint = "Use growth and motivation visual metaphors: climbing steps, planting seeds, building blocks, opening doors, morning routines, habit trackers, before/after contrasts. Show personal growth through relatable daily discipline situations."
+        topic_question = "what single image/video beat would make the spoken self-development idea clear, motivating, and worth watching?"
+    else:
+        topic_label = "PSYCHOLOGY"
+        topic_desc = "psychology and self-improvement"
+        topic_metaphor_hint = "Use psychological visual metaphors: mirrors, knots, bridges, mazes, clouds lifting, scales, emotional body language, contrast panels. Show mental and emotional concepts through relatable introspective situations."
+        topic_question = "what single image/video beat would make the spoken psychology idea clear, emotionally relatable, and worth watching?"
     return f"""You are an EDUCATIONAL {topic_label} ILLUSTRATOR and VISUAL METAPHOR DIRECTOR for AI image generation.
 
-YOUR MISSION: For each scene, write one clear, engaging {topic_label.lower()} image prompt and one matching image-to-video prompt in this channel's fixed visual style.
+YOUR MISSION: For each scene, write one clear, engaging {topic_desc} image prompt and one matching image-to-video prompt in this channel's fixed visual style.
 
 CHANNEL STYLE PROFILE:
 - Style name: {profile['style_name']}
@@ -1811,25 +1828,25 @@ HYBRID PROMPT METHOD:
 Use the existing workbook planning as the foundation. The locked scene spec and ARTISTIC VISION fields are not suggestions to ignore; they are the visual design brief. Write clean final prompts, not instructions for another model.
 
 IMAGE PROMPT METHOD:
-Start with the runtime image style sentence, then describe one frameable psychology illustration. Use primary_subject and primary_action as the frame foundation. Use key_focus and viewer_attention as the main visual hook. Use subtext_delivery and artistic_intent to make the emotional meaning readable. If visual_anchor conflicts with key_focus, prefer key_focus and the NARRATION. Do not copy non-English narration text into the prompt.
+Start with the runtime image style sentence, then describe one frameable {topic_desc} illustration. Use primary_subject and primary_action as the frame foundation. Use key_focus and viewer_attention as the main visual hook. Use subtext_delivery and artistic_intent to make the emotional meaning readable. If visual_anchor conflicts with key_focus, prefer key_focus and the NARRATION. Do not copy non-English narration text into the prompt.
 
 VIDEO PROMPT METHOD:
 Start with the runtime video style sentence, then animate the exact illustrated setup from the image prompt; do not invent a new scene or redesign the reference character. The movement must come from primary_action, character_action, key_focus, viewer_attention, or a narration-relevant prop/light/space response. Every video_prompt should make the narration beat instantly legible, reuse the image prompt's subject/pose/props/layout/lighting, add one subtle visible movement plus a restrained emotional arc, and include composition/pose/supporting props that stay distinct from adjacent scenes. Do not use camera gear, duration, sound, smell, or invisible atmosphere.
 LOCKED SCENE SPEC: If primary_subject, primary_action, visual_anchor, scene_kind, or subject_mode are provided for a scene, they are mandatory anchors for both img_prompt and video_prompt. Do not replace them with a generic prop, mood, or repeated channel motif.
 
-CRITICAL PSYCHOLOGY IMAGE RULES:
+CRITICAL {topic_label} IMAGE RULES:
 1. Every scene prompt must be unique and derived from the narration.
 2. ALL output prompts (img_prompt, video_prompt) MUST be written entirely in English regardless of the narration language.
-3. Use visual metaphors, relatable self-improvement situations, contrast panels as physical spaces, symbolic objects, and emotional body language.
+3. {topic_metaphor_hint}
 4. Use only the provided reference image as the stable recurring character identity source. Refer to it briefly as the reference character; do not write long character descriptions or create a new character.
 5. Other people must be anonymous silhouettes or simple background figures, never new named/reference characters.
 6. No readable words, labels, captions, UI text, chart text, document text, signs, numbers, logos, or watermarks in the image/video.
-7. Follow the channel style profile exactly. Do not drift back to a different TL sample style.
-8. The narration and locked scene spec decide the image. Use a cultural prop/setting only if it directly clarifies this exact SRT line. Do NOT add tea, coffee, bread, cafe tables, benches, doors, cups, food, or ritual props merely because they appear in the audience profile.
+7. Follow the channel style profile exactly. Do not drift to a different channel's sample style.
+8. The narration and locked scene spec decide the image. Use a cultural prop/setting only if it directly clarifies this exact SRT line. Do NOT add props merely because they appear in the audience profile.
 9. Every video_prompt must contain a concrete visible movement and emotional arc so the character or visual object feels emotionally alive.
 10. img_prompt: 80-150 words; every prompt must include clear focal hierarchy and one memorable symbolic visual anchor.
 11. Do not reuse the same prop or action across a batch unless the narration itself repeats it. A culturally familiar prop is only useful when it clarifies the current SRT line.
-12. Ask: what single image/video beat would make the spoken psychology idea clear, emotionally relatable, and worth watching?
+12. Ask: {topic_question}
 13. Never output old internal scaffolding labels, translation instructions, or prompt-writing instructions. Write only the final image/video prompt text."""
 
 MINOR_WORD_REPLACEMENTS: List[Tuple[str, str]] = [
