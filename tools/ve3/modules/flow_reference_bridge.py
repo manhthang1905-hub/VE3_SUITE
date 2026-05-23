@@ -61,7 +61,7 @@ class FlowReferenceBridge:
         self.suite_root = Path(suite_root)
         self.config = config
         self.log_func = log_func or (lambda msg, level="INFO": None)
-        self.reference_root = self.suite_root / "references" / "ve3-tool-simple_ref"
+        self.reference_root = self.suite_root / "tools" / "ve3"
         self._ensure_reference_on_path()
 
     def log(self, msg: str, level: str = "INFO") -> None:
