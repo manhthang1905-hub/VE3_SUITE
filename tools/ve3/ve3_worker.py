@@ -1246,7 +1246,7 @@ Generator/context error:
         m = re.match(r"^([A-Za-z]+)", self.project_dir.name)
         if not m:
             return ""
-        return {"TL": "psychology", "TH": "finance", "KA": "story", "TA": "story"}.get(m.group(1).upper(), "")
+        return {"TL": "psychology", "TH": "finance", "MT": "success", "KA": "story", "TA": "story"}.get(m.group(1).upper(), "")
 
     def _resolve_psychology_reference_channel(self, value: str = "", project_code: str = "") -> str:
         """Resolve project codes like TL1-0002 → TL1-T2 or TH1-0003 → TH1-T3."""
@@ -1269,7 +1269,7 @@ Generator/context error:
 
     def _topic_ref_dir(self, wb: Optional[PromptWorkbook] = None) -> str:
         topic = self._get_resolved_topic(wb)
-        return {"psychology": "psychology", "finance": "finance"}.get(topic, "psychology")
+        return {"psychology": "psychology", "finance": "finance", "success": "success"}.get(topic, "psychology")
 
     def _get_resolved_topic(self, wb: Optional[PromptWorkbook] = None) -> str:
         value = str(self.config.get("topic", "") or "").strip().lower()
@@ -1285,7 +1285,7 @@ Generator/context error:
 
     def _is_psychology_topic(self, wb: Optional[PromptWorkbook] = None) -> bool:
         value = self._get_resolved_topic(wb)
-        return value in {"psychology", "tam ly", "tam-ly", "tam_ly", "finance", "tai chinh", "tai-chinh", "tai_chinh"}
+        return value in {"psychology", "tam ly", "tam-ly", "tam_ly", "finance", "tai chinh", "tai-chinh", "tai_chinh", "success", "phat trien ban than"}
 
     def _find_psychology_reference_image(self, wb: Optional[PromptWorkbook] = None) -> Optional[Path]:
         configured = str(

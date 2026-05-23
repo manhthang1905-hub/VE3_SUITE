@@ -368,6 +368,31 @@ class FinancePrompts(_StyledTopicPrompts):
     TOPIC_METAPHOR_LABEL = "finance metaphors"
 
 
+class SuccessPrompts(_StyledTopicPrompts):
+    TOPIC_NAME = "success"
+    TOPIC_LABEL = "self-development"
+    TOPIC_DOMAIN = "self-development / personal success educational content"
+    TOPIC_THEMES_DEFAULT = ["success habit", "personal growth", "self-improvement lesson"]
+    TOPIC_VISUAL_RULES_LABEL = "SUCCESS"
+    TOPIC_SEGMENT_EXAMPLE_MESSAGE = "DETAILED explanation of the success habit, growth concept, or personal breakthrough"
+    TOPIC_SEGMENT_EXAMPLE_ELEMENTS = ["visual metaphor", "nv1 motivated pose", "symbolic growth object", "anonymous silhouettes"]
+    TOPIC_SEGMENT_EXAMPLE_SUMMARY = "2-3 sentences describing self-development visuals in the channel style for this segment."
+    TOPIC_SEGMENT_EXAMPLE_QUESTION = "What habit, goal, or personal breakthrough is being explored?"
+    TOPIC_DEFAULT_LOCK = (
+        "cute minimalist self-development channel character with round white head, simple dot eyes, "
+        "motivated confident expression, short spiky dark hair, soft terracotta sweater, khaki pants, "
+        "white sneakers, clean black outline illustration style"
+    )
+    TOPIC_DEFAULT_PORTRAIT = (
+        "Cute minimalist self-development channel character, round white head, simple dot eyes, "
+        "motivated confident expression, short spiky dark hair, soft terracotta sweater, khaki pants, "
+        "white sneakers, standing on pure white background, clean black outline illustration style, "
+        "paper texture, no text, no watermark"
+    )
+    TOPIC_DEFAULT_IMAGE_STYLE = "Clean minimalist self-development illustration style, paper texture background, warm motivational YouTube aesthetic"
+    TOPIC_METAPHOR_LABEL = "success metaphors"
+
+
 def is_styled_topic(topic: str) -> bool:
     key = normalize_topic_key(topic)
     cls = TOPIC_MAPPING.get(key)
@@ -381,6 +406,8 @@ TOPIC_MAPPING = {
     "tam ly": PsychologyPrompts,
     "finance": FinancePrompts,
     "tai chinh": FinancePrompts,
+    "success": SuccessPrompts,
+    "phat trien ban than": SuccessPrompts,
 }
 
 

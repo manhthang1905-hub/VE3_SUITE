@@ -73,6 +73,7 @@ from modules.excel_manager import (
 PROJECT_PREFIX_TO_TOPIC = {
     "TL": "psychology",
     "TH": "finance",
+    "MT": "success",
     "KA": "story",
     "TA": "story",
 }
@@ -80,6 +81,7 @@ PROJECT_PREFIX_TO_TOPIC = {
 TOPIC_TO_REF_DIR = {
     "psychology": "psychology",
     "finance": "finance",
+    "success": "success",
 }
 
 
@@ -142,6 +144,16 @@ CHANNEL_LANGUAGE_MAP = {
     "TH1-T8": "Korean",
     "TH1-T9": "Italian",
     "TH1-T10": "Turkish",
+    "MT1-T1": "Spanish",
+    "MT1-T2": "Vietnamese",
+    "MT1-T3": "English",
+    "MT1-T4": "French",
+    "MT1-T5": "German",
+    "MT1-T6": "Portuguese",
+    "MT1-T7": "Japanese",
+    "MT1-T8": "Korean",
+    "MT1-T9": "Italian",
+    "MT1-T10": "Turkish",
 }
 
 

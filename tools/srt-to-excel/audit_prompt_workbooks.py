@@ -43,7 +43,7 @@ def resolve_channel_from_project(project_code: str) -> str:
 
 
 def _ref_dir_for_topic(topic: str) -> str:
-    return {"psychology": "psychology", "finance": "finance"}.get(topic, "psychology")
+    return {"psychology": "psychology", "finance": "finance", "success": "success"}.get(topic, "psychology")
 
 
 def load_psychology_style_profile(workbook_path: Path) -> Dict[str, str]:
@@ -73,7 +73,7 @@ def load_psychology_style_profile(workbook_path: Path) -> Dict[str, str]:
     profile["style_source"] = str(style_path) if style_path.exists() else ""
     is_styled = bool(
         style_path.exists()
-        or channel.upper().startswith("TL1-T") or channel.upper().startswith("TH1-T")
+        or channel.upper().startswith("TL1-T") or channel.upper().startswith("TH1-T") or channel.upper().startswith("MT1-T")
         or "psychology" in topic or "tâm lý" in topic or "tam ly" in topic
         or "finance" in topic or "tài chính" in topic or "tai chinh" in topic
     )

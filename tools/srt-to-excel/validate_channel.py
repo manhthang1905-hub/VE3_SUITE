@@ -21,6 +21,7 @@ TOOL_DIR = Path(__file__).resolve().parent
 REF_ROOTS = [
     TOOL_DIR / "reference_characters" / "psychology",
     TOOL_DIR / "reference_characters" / "finance",
+    TOOL_DIR / "reference_characters" / "success",
 ]
 
 REQUIRED_FIELDS = [

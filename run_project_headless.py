@@ -38,12 +38,16 @@ TOPIC_MAPPING = {
     "finance": ("finance", "full"),
     "tai chinh": ("finance", "full"),
     "tài chính": ("finance", "full"),
+    "success": ("success", "full"),
+    "phat trien ban than": ("success", "full"),
+    "phát triển bản thân": ("success", "full"),
 }
 
 # Infer topic from project code prefix as last-resort fallback
 CODE_PREFIX_TOPIC = {
     "TL": "psychology",
     "TH": "finance",
+    "MT": "success",
     "KA": "story",
     "TA": "story",
 }
@@ -231,7 +235,8 @@ def read_project_nguon_metadata_cache(project_dir: Path, code: str) -> dict:
         return {}
     reference_channel = str(data.get("reference_channel", "") or "").strip()
     if reference_channel:
-        ref_dir_name = "finance" if reference_channel.upper().startswith("TH") else "psychology"
+        ch_upper = reference_channel.upper()
+        ref_dir_name = "finance" if ch_upper.startswith("TH") else ("success" if ch_upper.startswith("MT") else "psychology")
         root = SRT_TOOL_DIR / "reference_characters" / ref_dir_name / reference_channel
         if not ((root / "nv1.png").exists() or (root / "style.yaml").exists()):
             return {}
@@ -341,8 +346,8 @@ def apply_project_runtime_metadata(cfg: dict, project_dir: Path, code: str) -> d
         cfg["character_template"] = meta["character_template"]
     cfg.setdefault("project_code", code)
     cfg["reference_channel"] = resolve_psychology_reference_channel(nguon_meta.get("reference_channel") or cfg.get("reference_channel") or "", code)
-    if cfg.get("topic") in ("psychology", "finance"):
-        ref_dir = "finance" if cfg.get("topic") == "finance" else "psychology"
+    if cfg.get("topic") in ("psychology", "finance", "success"):
+        ref_dir = {"finance": "finance", "success": "success"}.get(cfg.get("topic"), "psychology")
         ref = Path(str(nguon_meta.get("psychology_reference_image") or ""))
         if not ref.exists():
             ref = SRT_TOOL_DIR / "reference_characters" / ref_dir / str(cfg.get("reference_channel") or code) / "nv1.png"

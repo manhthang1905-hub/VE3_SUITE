@@ -2184,6 +2184,7 @@ foreach ($pid in $children) {{
     _CODE_PREFIX_TOPIC = {
         "TL": "psychology",
         "TH": "finance",
+        "MT": "success",
         "KA": "story",
         "TA": "story",
     }
@@ -2405,6 +2406,9 @@ foreach ($pid in $children) {{
             "finance": ("finance", "full"),
             "tai chinh": ("finance", "full"),
             "tài chính": ("finance", "full"),
+            "success": ("success", "full"),
+            "phat trien ban than": ("success", "full"),
+            "phát triển bản thân": ("success", "full"),
         }
         code = Path(project_dir).name
         nguon_meta = self._load_project_nguon_metadata(project_dir, code)
@@ -2428,9 +2432,9 @@ foreach ($pid in $children) {{
             out["topic"] = str(raw_topic).strip()
         if meta.get("character_template"):
             out["character_template"] = meta["character_template"]
-        if out.get("topic") in ("psychology", "finance"):
+        if out.get("topic") in ("psychology", "finance", "success"):
             ref = Path(str(nguon_meta.get("psychology_reference_image") or ""))
-            ref_dir = "finance" if out.get("topic") == "finance" else "psychology"
+            ref_dir = {"finance": "finance", "success": "success"}.get(out.get("topic"), "psychology")
             if not ref.exists():
                 ref = SUITE_ROOT / "tools" / "srt-to-excel" / "reference_characters" / ref_dir / out["reference_channel"] / "nv1.png"
             if ref.exists():
@@ -2452,7 +2456,7 @@ foreach ($pid in $children) {{
                 if mapped not in candidates:
                     candidates.append(mapped)
         ref_base = SUITE_ROOT / "tools" / "srt-to-excel" / "reference_characters"
-        for ref_dir in ["psychology", "finance"]:
+        for ref_dir in ["psychology", "finance", "success"]:
             root = ref_base / ref_dir
             for candidate in candidates:
                 if (root / candidate / "nv1.png").exists() or (root / candidate / "style.yaml").exists():
@@ -3694,7 +3698,8 @@ Get-CimInstance Win32_Process |
         topic_map = {"truyen": "story", "truyen ngan": "story",
                      "tam ly": "psychology",
                      "tai chinh": "finance",
-                     "psychology": "psychology", "finance": "finance", "story": "story"}
+                     "phat trien ban than": "success",
+                     "psychology": "psychology", "finance": "finance", "success": "success", "story": "story"}
         return topic_map.get(normalized, normalized)
 
     def _filter_pairs_by_topic(self, pairs, project_topic):
@@ -3706,7 +3711,8 @@ Get-CimInstance Win32_Process |
         topic_map = {"truyen": "story", "truyen ngan": "story",
                      "tam ly": "psychology",
                      "tai chinh": "finance",
-                     "psychology": "psychology", "finance": "finance", "story": "story"}
+                     "phat trien ban than": "success",
+                     "psychology": "psychology", "finance": "finance", "success": "success", "story": "story"}
         filtered = []
         for p in pairs:
             allowed = str(p.get("server_config", {}).get("allowed_topics", "") or "").strip()

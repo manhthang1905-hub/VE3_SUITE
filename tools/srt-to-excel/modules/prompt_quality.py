@@ -428,7 +428,7 @@ def _is_psychology_topic(topic: str = "") -> bool:
     value = "".join(ch for ch in value if not unicodedata.combining(ch))
     value = value.replace("_", " ").replace("-", " ")
     value = " ".join(value.split())
-    return value in {"psychology", "tam ly", "finance", "tai chinh"}
+    return value in {"psychology", "tam ly", "finance", "tai chinh", "success", "phat trien ban than"}
 
 
 def _strip_psychology_forbidden_style(prompt: str) -> str:
