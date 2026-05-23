@@ -1799,6 +1799,89 @@ class ChromeSession:
         return False
 
     # ============================================================
+    # Refresh Token - Server tự lấy token mới khi 401
+    # ============================================================
+
+    def refresh_own_token(self) -> dict:
+        """Server tự capture token mới từ Chrome session hiện tại.
+        Returns: {"ok": True, "token": "...", "project_id": "..."} hoặc {"ok": False, "error": "..."}
+        """
+        if not self.page:
+            return {"ok": False, "error": "Chrome not initialized"}
+        try:
+            self.log("[TOKEN-REFRESH] Bat dau tu lay token moi...")
+
+            if self.project_url:
+                self.page.get(self.project_url)
+            else:
+                self.page.get(FLOW_URL)
+            time.sleep(5)
+
+            if not self._wait_for_textarea(timeout=15):
+                self.log("[TOKEN-REFRESH] Textarea not found, tao project moi...", "WARN")
+                if not self._create_new_project():
+                    return {"ok": False, "error": "Cannot create project for token refresh"}
+                if not self._wait_for_textarea(timeout=15):
+                    return {"ok": False, "error": "Textarea not found after project creation"}
+                self.project_url = self.page.url
+
+            self.page.run_js("""
+                window._tk = null; window._pj = null;
+                (function(){
+                    if(window.__ve3tokenCap) return;
+                    window.__ve3tokenCap = 1;
+                    var f = window.fetch;
+                    window.fetch = function(u, o){
+                        var s = u ? u.toString() : '';
+                        if(s.includes('flowMedia') || s.includes('aisandbox')){
+                            var h = o && o.headers ? o.headers : {};
+                            var a = h.Authorization || h.authorization || '';
+                            if(a.startsWith('Bearer ')){
+                                window._tk = a.substring(7);
+                                var m = s.match(/\\/projects\\/([^\\/]+)\\//);
+                                if(m) window._pj = m[1];
+                            }
+                        }
+                        return f.apply(this, arguments);
+                    };
+                })();
+            """)
+            time.sleep(1)
+
+            capture_prompt = "simple white ceramic mug on wooden table, natural daylight"
+            textarea = self.page.ele('css:[contenteditable="true"]', timeout=5) or self.page.ele('css:textarea', timeout=3)
+            if not textarea:
+                return {"ok": False, "error": "Cannot find textarea for token capture"}
+
+            textarea.click()
+            time.sleep(0.3)
+
+            try:
+                import pyperclip
+                pyperclip.copy(capture_prompt)
+                self.page.actions.key_down('CTRL').key_down('V').key_up('V').key_up('CTRL')
+            except Exception:
+                textarea.input(capture_prompt)
+            time.sleep(0.5)
+            textarea.input('\n')
+            self.log("[TOKEN-REFRESH] Da gui prompt, cho capture token...")
+
+            for i in range(20):
+                time.sleep(1)
+                tokens = self.page.run_js("return {tk: window._tk || '', pj: window._pj || ''};") or {}
+                tk = str(tokens.get('tk', '') or '').strip()
+                pj = str(tokens.get('pj', '') or '').strip()
+                if tk and pj:
+                    self.log(f"[TOKEN-REFRESH] OK! token={tk[:20]}... project={pj[:12]}...", "OK")
+                    self.project_url = f"https://labs.google/fx/vi/tools/flow/project/{pj}"
+                    return {"ok": True, "token": tk, "project_id": pj}
+
+            return {"ok": False, "error": "Token capture timeout (20s)"}
+        except Exception as e:
+            self.log(f"[TOKEN-REFRESH] Error: {e}", "ERROR")
+            return {"ok": False, "error": str(e)}
+
+    # ============================================================
     # Generate Image - Táº¡o áº£nh cho khÃ¡ch
     # ============================================================
 

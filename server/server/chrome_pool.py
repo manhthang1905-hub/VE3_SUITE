@@ -1065,13 +1065,34 @@ class ChromePool:
                                 worker.total_failed += 1
                                 self._log(f"[{worker_name}] FAIL (interceptor): {task_id[:8]}...", "ERROR")
 
-                        # === 401: Token expired - KHONG retry, VM can refresh token ===
+                        # === 401: Token expired - Server tự refresh rồi retry ===
                         elif err_code == 401 or '401' in err_str or 'authentication' in err_str.lower():
-                            tasks[task_id]['status'] = 'failed'
-                            tasks[task_id]['error'] = err_str
-                            stats['total_failed'] += 1
-                            worker.total_failed += 1
-                            self._log(f"[{worker_name}] FAIL (401): {task_id[:8]}... | TOKEN HET HAN - VM can refresh", "ERROR")
+                            _401_retries = tasks[task_id].get('_401_retries', 0)
+                            if _401_retries < 1 and worker.session:
+                                self._log(f"[{worker_name}] 401 -> Tu refresh token...", "WARN")
+                                refresh_result = worker.session.refresh_own_token()
+                                if refresh_result.get("ok"):
+                                    new_token = refresh_result["token"]
+                                    new_pid = refresh_result["project_id"]
+                                    tasks[task_id]['bearer_token'] = new_token
+                                    tasks[task_id]['project_id'] = new_pid
+                                    tasks[task_id]['_401_retries'] = _401_retries + 1
+                                    tasks[task_id]['status'] = 'queued'
+                                    tasks[task_id]['error'] = ''
+                                    _requeue_task(task_id)
+                                    self._log(f"[{worker_name}] Token refreshed OK! Retry task {task_id[:8]}...", "OK")
+                                else:
+                                    tasks[task_id]['status'] = 'failed'
+                                    tasks[task_id]['error'] = f"401 + refresh failed: {refresh_result.get('error', '')}"
+                                    stats['total_failed'] += 1
+                                    worker.total_failed += 1
+                                    self._log(f"[{worker_name}] FAIL (401+refresh): {task_id[:8]}... | {refresh_result.get('error', '')}", "ERROR")
+                            else:
+                                tasks[task_id]['status'] = 'failed'
+                                tasks[task_id]['error'] = err_str
+                                stats['total_failed'] += 1
+                                worker.total_failed += 1
+                                self._log(f"[{worker_name}] FAIL (401): {task_id[:8]}... | TOKEN HET HAN - da retry refresh", "ERROR")
 
                         # === 400: Retry 1 lan, roi POLICY_VIOLATION cho VM skip ===
                         elif err_code == 400 and not _proxy_dead:
