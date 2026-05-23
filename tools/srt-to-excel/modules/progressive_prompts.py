@@ -270,10 +270,11 @@ class ProgressivePromptsGenerator:
             self.topic_prompts = None
         self.config["topic"] = self.topic
         self.logger = get_logger("progressive_prompts")
-        self.psychology_style_profile = self._load_psychology_style_profile()
-        self.config["psychology_style_profile"] = self.psychology_style_profile
+        self.style_profile = self._load_style_profile()
+        self.psychology_style_profile = self.style_profile
+        self.config["psychology_style_profile"] = self.style_profile
         if self.topic_prompts and hasattr(self.topic_prompts, "set_style_profile"):
-            self.topic_prompts.set_style_profile(self.psychology_style_profile)
+            self.topic_prompts.set_style_profile(self.style_profile)
         self.ai_provider = self._resolve_ai_provider()
 
         # DeepSeek config
@@ -341,13 +342,13 @@ class ProgressivePromptsGenerator:
             from modules.topic_prompts import is_styled_topic
             return is_styled_topic(self.topic)
         except Exception:
-            return self.topic in ("psychology", "finance")
+            return self.topic in ("psychology", "finance", "success")
 
-    def _load_psychology_style_profile(self) -> Dict[str, str]:
-        """Load per-channel style.yaml for styled topics (psychology, finance, etc.)."""
+    def _load_style_profile(self) -> Dict[str, str]:
+        """Load per-channel style.yaml for styled topics (psychology, finance, success)."""
         profile = {}
         if not self._is_styled:
-            return normalize_psychology_style_profile(profile) if PROMPT_QUALITY_ENABLED else profile
+            return normalize_style_profile(profile) if PROMPT_QUALITY_ENABLED else profile
 
         explicit = str(self.config.get("psychology_style_file", "") or "").strip()
         channel = resolve_styled_reference_channel(
@@ -383,6 +384,7 @@ class ProgressivePromptsGenerator:
         if isinstance(inline_profile, dict):
             profile.update(inline_profile)
         flat_aliases = {
+            # Legacy keys (kept for workbook backward-compat)
             "psychology_style_name": "style_name",
             "psychology_style_prompt": "image_style",
             "psychology_image_style": "image_style",
@@ -391,12 +393,18 @@ class ProgressivePromptsGenerator:
             "psychology_thumbnail_style_prompt": "thumbnail_style",
             "psychology_thumbnail_style": "thumbnail_style",
             "psychology_negative_prompt": "negative_prompt",
+            # Generic keys (new workbooks)
+            "style_name": "style_name",
+            "image_style": "image_style",
+            "video_style": "video_style",
+            "thumbnail_style": "thumbnail_style",
+            "negative_prompt": "negative_prompt",
         }
         for config_key, profile_key in flat_aliases.items():
             value = str(self.config.get(config_key, "") or "").strip()
             if value:
                 profile[profile_key] = value
-        profile = normalize_psychology_style_profile(profile) if PROMPT_QUALITY_ENABLED else profile
+        profile = normalize_style_profile(profile) if PROMPT_QUALITY_ENABLED else profile
         if loaded_from:
             self.logger.info(f"Loaded {self.topic} style profile: {profile.get('style_name')} from {loaded_from}")
         return profile
@@ -550,7 +558,7 @@ class ProgressivePromptsGenerator:
         if changed:
             workbook.save()
 
-    def _psychology_audience_contract(self, strict: bool = False) -> str:
+    def _audience_contract(self, strict: bool = False) -> str:
         profile = self.psychology_style_profile or {}
         language = str(profile.get("audience_language", "") or "").strip()
         if not language:
@@ -581,7 +589,7 @@ Goal: viewers should understand the spoken {self.topic} idea within one second; 
         normalized = re.sub(r"[^a-z0-9]+", " ", normalized)
         return " ".join(normalized.split())
 
-    def _psychology_cultural_terms(self) -> list:
+    def _cultural_terms(self) -> list:
         import re
 
         profile = self.psychology_style_profile or {}
@@ -618,7 +626,7 @@ Goal: viewers should understand the spoken {self.topic} idea within one second; 
                     terms.append(candidate)
         return terms[:80]
 
-    def _scene_has_psychology_cultural_anchor(self, scene: dict) -> bool:
+    def _scene_has_cultural_anchor(self, scene: dict) -> bool:
         profile = self.psychology_style_profile or {}
         if not str(profile.get("audience_language", "") or "").strip():
             return True
@@ -627,9 +635,9 @@ Goal: viewers should understand the spoken {self.topic} idea within one second; 
             "viewer_attention", "subtext_delivery", "key_focus",
         ])
         combined_norm = self._normalize_cultural_text(combined)
-        return any(term in combined_norm for term in self._psychology_cultural_terms())
+        return any(term in combined_norm for term in self._cultural_terms())
 
-    def _select_psychology_cultural_anchor(self, scene: dict) -> str:
+    def _select_cultural_anchor(self, scene: dict) -> str:
         profile = self.psychology_style_profile or {}
         cultural_metaphors = str(profile.get("cultural_metaphors", "") or "")
         cultural_props = str(profile.get("cultural_props", "") or "")
@@ -3519,7 +3527,11 @@ Return JSON only:
             if not semantic_context or semantic_context == profile.get("image_style", ""):
                 semantic_parts = [theme_text, location, atmosphere]
                 semantic_context = "; ".join(part for part in semantic_parts if part)
-            default_context = "educational tension, cause-and-effect, and concrete everyday behavior" if self.topic == "finance" else "psychological tension, emotional cause-and-effect, and concrete everyday behavior"
+            _topic_context_map = {
+                "finance": "financial tension, cause-and-effect, and concrete everyday money behavior",
+                "success": "self-development tension, habit-building, and concrete everyday growth behavior",
+            }
+            default_context = _topic_context_map.get(self.topic, "psychological tension, emotional cause-and-effect, and concrete everyday behavior")
             data["context_lock"] = semantic_context or default_context
             data["psychology_style_name"] = profile.get("style_name", "")
 
@@ -5012,7 +5024,7 @@ CONTEXT: {context_lock}
 CHANNEL STYLE: {self.psychology_style_profile.get('scene_plan_style') or self.psychology_style_profile.get('image_style')}
 PALETTE: {self.psychology_style_profile.get('palette')}
 NEGATIVE RULES: {self.psychology_style_profile.get('negative_prompt')}
-{self._psychology_audience_contract(strict=True)}
+{self._audience_contract(strict=True)}
 
 RECURRING CHARACTER:
 - Reference character: fixed psychology character supplied as an image reference by the generation API. Use only when a stable presenter/learner/observer helps the image.
@@ -5199,7 +5211,7 @@ Return EXACTLY {len(batch_units)} scenes.
             self._log(f"  {self.topic.title()} scene-spec audit: {len(all_scenes) - len(psy_bad_specs)}/{len(all_scenes)} specs ready")
             if psy_bad_specs:
                 self._log(f"  [WARN] {self.topic.title()} specs still weak: {[s.get('scene_id') for s in psy_bad_specs[:10]]}", "WARN")
-            audience_fit_count = sum(1 for s in all_scenes if self._scene_has_psychology_cultural_anchor(s))
+            audience_fit_count = sum(1 for s in all_scenes if self._scene_has_cultural_anchor(s))
             self._log(f"  {self.topic.title()} audience-fit audit: {audience_fit_count}/{len(all_scenes)} specs use optional audience anchors")
 
         # â”€â”€ Recalculate sequential DISPLAY timestamps from duration â”€â”€
@@ -5522,7 +5534,7 @@ PALETTE:
 {self.psychology_style_profile.get('palette')}
 NEGATIVE RULES:
 {self.psychology_style_profile.get('negative_prompt')}
-{self._psychology_audience_contract(strict=True)}
+{self._audience_contract(strict=True)}
 
 SEGMENTS:
 {segments_info if segments_info else 'Not specified'}
@@ -7808,7 +7820,7 @@ OUTPUT RULES:
         )
         channel_language = get_channel_language(channel, code)
         self._log(f"  [PSY-THUMB] Channel={channel}, language={channel_language}")
-        audience_contract = self._psychology_audience_contract(strict=True)
+        audience_contract = self._audience_contract(strict=True)
 
         # STEP 1: Extract CTR concept
         concept_prompt = f"""
