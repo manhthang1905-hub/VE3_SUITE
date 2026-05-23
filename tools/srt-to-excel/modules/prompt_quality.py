@@ -190,8 +190,8 @@ def _strengthen_psychology_reference_lock(reference_lock: str) -> str:
     return lock
 
 
-def normalize_psychology_style_profile(style_profile: Optional[Dict[str, Any]] = None) -> Dict[str, str]:
-    """Return a complete psychology style profile with safe defaults."""
+def normalize_style_profile(style_profile: Optional[Dict[str, Any]] = None) -> Dict[str, str]:
+    """Return a complete style profile with safe defaults."""
     profile = dict(DEFAULT_PSYCHOLOGY_STYLE_PROFILE)
     provided_keys: Set[str] = set()
     if isinstance(style_profile, dict):
@@ -322,8 +322,8 @@ def _normalize_psychology_reference_language(prompt: str, has_reference_characte
     return cleaned.strip()
 
 
-def _psychology_runtime_image_style(style_profile: Optional[Dict[str, Any]] = None) -> str:
-    profile = normalize_psychology_style_profile(style_profile)
+def _runtime_image_style(style_profile: Optional[Dict[str, Any]] = None) -> str:
+    profile = normalize_style_profile(style_profile)
     art_style = _strip_attached_character_description(profile.get("image_style", ""))
     palette = str(profile.get("palette", "") or "").strip()
     negative = str(profile.get("negative_prompt", "") or "").strip()
@@ -335,14 +335,15 @@ def _psychology_runtime_image_style(style_profile: Optional[Dict[str, Any]] = No
     ).strip()
 
 
-def _extract_style_essentials(style_profile: Optional[Dict[str, Any]] = None) -> str:
-    profile = normalize_psychology_style_profile(style_profile)
+def _extract_style_essentials(style_profile: Optional[Dict[str, Any]] = None, topic: str = "") -> str:
+    profile = normalize_style_profile(style_profile)
     full_style = _strip_attached_character_description(profile.get("image_style", ""))
     palette = str(profile.get("palette", "") or "").strip()
     lowered = full_style.lower()
     essentials: List[str] = []
 
-    style_label = "finance illustration" if "finance" in lowered else ("self-development illustration" if "success" in lowered or "development" in lowered else "psychology illustration")
+    tc = _get_topic_config(topic)
+    style_label = tc.get("prompt_label", "psychology illustration")
     for keyword, label in [
         ("illustration", style_label),
         ("hand-drawn", "hand-drawn"),
@@ -362,8 +363,8 @@ def _extract_style_essentials(style_profile: Optional[Dict[str, Any]] = None) ->
     return ", ".join(item for item in essentials if item)
 
 
-def _psychology_runtime_video_style(style_profile: Optional[Dict[str, Any]] = None) -> str:
-    profile = normalize_psychology_style_profile(style_profile)
+def _runtime_video_style(style_profile: Optional[Dict[str, Any]] = None) -> str:
+    profile = normalize_style_profile(style_profile)
     video_style = _strip_attached_character_description(profile.get("video_style", ""))
     negative = str(profile.get("negative_prompt", "") or "").strip()
     reference_lock = str(profile.get("reference_lock", "") or PSYCHOLOGY_NV1_REFERENCE_LOCK).strip()
@@ -384,7 +385,7 @@ def _psychology_runtime_video_style(style_profile: Optional[Dict[str, Any]] = No
 
 
 def _profile_style_terms(style_profile: Optional[Dict[str, Any]] = None) -> List[str]:
-    profile = normalize_psychology_style_profile(style_profile)
+    profile = normalize_style_profile(style_profile)
     text = " ".join([
         profile.get("style_name", ""),
         profile.get("image_style", ""),
@@ -420,15 +421,150 @@ PSYCHOLOGY_FORBIDDEN_STYLE_TERMS = [
 ]
 
 
-def _is_psychology_topic(topic: str = "") -> bool:
-    import unicodedata
+# ─────────────────────────────────────────────────────────────────────────────
+# TOPIC PROMPT CONFIG — per-topic visual direction for all prompt functions
+# ─────────────────────────────────────────────────────────────────────────────
 
+TOPIC_PROMPT_CONFIG: Dict[str, Dict[str, str]] = {
+    "psychology": {
+        "director_role": "PSYCHOLOGY ILLUSTRATOR",
+        "topic_label": "PSYCHOLOGY",
+        "topic_desc": "psychology and self-improvement",
+        "visual_approach": "emotional introspection, mental health metaphors, therapeutic visuals",
+        "metaphor_examples": "mirrors, knots, bridges, mazes, clouds lifting, scales, emotional body language",
+        "metaphor_hint": (
+            "Use psychological visual metaphors: mirrors, knots, bridges, mazes, clouds lifting, "
+            "scales, emotional body language, contrast panels. Show mental and emotional concepts "
+            "through relatable introspective situations."
+        ),
+        "prop_examples": "journal, mirror, tangled rope, bridge, empty chair, growing plant",
+        "setting_examples": "quiet rooms, park benches, rainy windows, therapy-like spaces",
+        "mood_spectrum": "reflective, anxious, vulnerable, hopeful, healing",
+        "forbidden_style": "cinematic, photorealistic, 3D, film grain",
+        "video_motion_fallback": (
+            "nv1 makes one small deliberate hand gesture toward the main symbolic object "
+            "as the surrounding shapes shift outward in response, making the spoken idea readable through motion"
+        ),
+        "quality_question": (
+            "what single image would make the spoken psychology idea clear, "
+            "emotionally relatable, and worth watching?"
+        ),
+        "prompt_label": "psychology illustration",
+        "theme_context_default": (
+            "nervous-system regulation, emotional self-awareness, "
+            "boundaries versus isolation, and protecting inner peace"
+        ),
+        "sample_tail_theme_default": (
+            "nervous-system regulation, emotional self-awareness, "
+            "boundaries versus isolation, and protecting inner peace"
+        ),
+        "fallback_subject": "a concrete symbolic psychology moment from the narration",
+    },
+    "finance": {
+        "director_role": "FINANCE ILLUSTRATOR",
+        "topic_label": "FINANCE",
+        "topic_desc": "personal finance and financial literacy",
+        "visual_approach": "concrete money situations, financial decision points, wealth building journeys",
+        "metaphor_examples": (
+            "growing coin plants, stacking savings blocks, leaking buckets, "
+            "investment ladders, breaking debt chains"
+        ),
+        "metaphor_hint": (
+            "Use financial visual metaphors: growth charts, coin stacks, savings jars, "
+            "investment trees, debt chains, safety nets, open doors of opportunity. "
+            "Show money concepts through relatable everyday financial situations."
+        ),
+        "prop_examples": "coins, piggy banks, wallets, simple charts, houses, phones with banking apps",
+        "setting_examples": "home offices, kitchen tables with bills, bank interiors, shopping areas",
+        "mood_spectrum": "practical, concerned, planning, relieved, empowered",
+        "forbidden_style": "cinematic, photorealistic, 3D, film grain",
+        "video_motion_fallback": (
+            "nv1 places one coin on a growing stack as surrounding financial elements shift "
+            "to show the spoken idea readable through motion"
+        ),
+        "quality_question": (
+            "what single image would make the spoken financial concept clear, "
+            "actionable, and worth watching?"
+        ),
+        "prompt_label": "finance illustration",
+        "theme_context_default": (
+            "personal finance, saving habits, investment basics, "
+            "debt management, and building financial security"
+        ),
+        "sample_tail_theme_default": (
+            "personal finance, saving habits, investment basics, "
+            "debt management, and building financial security"
+        ),
+        "fallback_subject": "a concrete symbolic finance moment from the narration",
+    },
+    "success": {
+        "director_role": "SELF-DEVELOPMENT ILLUSTRATOR",
+        "topic_label": "SELF-DEVELOPMENT",
+        "topic_desc": "self-development, personal growth and success habits",
+        "visual_approach": "daily habits, goal setting, discipline building, personal transformation",
+        "metaphor_examples": (
+            "climbing stairs, planting seeds, building blocks, opening doors, "
+            "sunrise, path splitting"
+        ),
+        "metaphor_hint": (
+            "Use growth and motivation visual metaphors: climbing steps, planting seeds, "
+            "building blocks, opening doors, morning routines, habit trackers, before/after "
+            "contrasts. Show personal growth through relatable daily discipline situations."
+        ),
+        "prop_examples": "alarm clocks, notebooks, running shoes, growing plants, water bottles, dumbbells",
+        "setting_examples": "bedrooms at dawn, study desks, parks, gyms, kitchen tables",
+        "mood_spectrum": "determined, struggling, motivated, disciplined, triumphant",
+        "forbidden_style": "cinematic, photorealistic, 3D, film grain",
+        "video_motion_fallback": (
+            "nv1 takes one deliberate step forward as the surrounding growth elements rise "
+            "to show the spoken idea readable through motion"
+        ),
+        "quality_question": (
+            "what single image would make the spoken self-development idea clear, "
+            "motivating, and worth watching?"
+        ),
+        "prompt_label": "self-development illustration",
+        "theme_context_default": (
+            "personal growth, daily discipline, goal setting, "
+            "habit building, and self-improvement journey"
+        ),
+        "sample_tail_theme_default": (
+            "personal growth, daily discipline, goal setting, "
+            "habit building, and self-improvement journey"
+        ),
+        "fallback_subject": "a concrete symbolic self-development moment from the narration",
+    },
+}
+
+_TOPIC_KEY_MAP: Dict[str, str] = {
+    "psychology": "psychology",
+    "tam ly": "psychology",
+    "finance": "finance",
+    "tai chinh": "finance",
+    "success": "success",
+    "phat trien ban than": "success",
+}
+
+
+def _resolve_topic_key(topic: str = "") -> str:
+    """Normalize topic string to a canonical key in TOPIC_PROMPT_CONFIG. Returns '' for non-styled topics."""
+    import unicodedata
     value = str(topic or "").strip().lower()
     value = unicodedata.normalize("NFKD", value)
     value = "".join(ch for ch in value if not unicodedata.combining(ch))
     value = value.replace("_", " ").replace("-", " ")
     value = " ".join(value.split())
-    return value in {"psychology", "tam ly", "finance", "tai chinh", "success", "phat trien ban than"}
+    return _TOPIC_KEY_MAP.get(value, "")
+
+
+def _get_topic_config(topic: str = "") -> Dict[str, str]:
+    """Return the topic config dict, defaulting to psychology for unknown styled topics."""
+    key = _resolve_topic_key(topic)
+    return TOPIC_PROMPT_CONFIG.get(key, TOPIC_PROMPT_CONFIG["psychology"])
+
+
+def _is_psychology_topic(topic: str = "") -> bool:
+    return bool(_resolve_topic_key(topic))
 
 
 def _strip_psychology_forbidden_style(prompt: str) -> str:
@@ -494,7 +630,7 @@ def _build_psychology_quality_fallback(
     char_ids: Optional[List[str]] = None,
     style_profile: Optional[Dict[str, Any]] = None,
 ) -> str:
-    profile = normalize_psychology_style_profile(style_profile)
+    profile = normalize_style_profile(style_profile)
     subject = _normalize_psychology_anchor_fragment(primary_subject) or "the central idea from the narration"
     action = _normalize_psychology_anchor_fragment(primary_action) or _normalize_psychology_anchor_fragment(visual_anchor) or "one clear, readable emotional beat"
     anchor = _normalize_psychology_anchor_fragment(visual_anchor) or action or subject
@@ -503,7 +639,7 @@ def _build_psychology_quality_fallback(
     if srt_text:
         narration_clause = "Translate the narration into one concrete English visual, not literal on-image text. "
     return (
-        f"{_psychology_runtime_image_style(profile).rstrip('. ')}. "
+        f"{_runtime_image_style(profile).rstrip('. ')}. "
         f"Show {subject}. "
         f"Action/body language: {action}. "
         f"Visual anchor: {anchor}. "
@@ -608,7 +744,7 @@ def _collapse_duplicate_psychology_style_blocks(prompt: str, style_profile: Opti
     if "[STYLE]" not in cleaned.upper():
         return cleaned.strip()
 
-    runtime_style = _psychology_runtime_image_style(style_profile).rstrip(". ").lower()
+    runtime_style = _runtime_image_style(style_profile).rstrip(". ").lower()
     runtime_prefix = runtime_style[:80]
     parts = [part.strip() for part in re.split(r"\s*\|\s*", cleaned) if part.strip()]
     collapsed: List[str] = []
@@ -629,10 +765,12 @@ def _collapse_duplicate_psychology_style_blocks(prompt: str, style_profile: Opti
     return " | ".join(collapsed).strip(" ,.;|")
 
 
-def _sample_style_image_tail(srt_text: str, theme_context: str = "") -> str:
-    theme = (theme_context or "nervous-system regulation, emotional self-awareness, boundaries versus isolation, and protecting inner peace").strip()
+def _sample_style_image_tail(srt_text: str, theme_context: str = "", topic: str = "") -> str:
+    tc = _get_topic_config(topic)
+    theme = (theme_context or tc.get("sample_tail_theme_default", "")).strip()
+    topic_label = tc.get("prompt_label", "illustration")
     return (
-        f"Psychology theme: {theme}. "
+        f"{topic_label.capitalize()} theme: {theme}. "
         "Build one clear, narration-grounded visual with a strong focal point, concrete body language, and readable emotional cause-and-effect. "
         "Use cultural props only when they directly fit the narration. Prefer a concrete real-life situation over vague symbolism. "
     )
@@ -646,7 +784,7 @@ def _sample_style_image_prompt(
     action: str = "",
     style_profile: Optional[Dict[str, Any]] = None,
 ) -> str:
-    profile = normalize_psychology_style_profile(style_profile)
+    profile = normalize_style_profile(style_profile)
     audience_hint = _build_psychology_audience_visual_hint(profile)
     parts = []
     visual_sentence = str(concrete_visual or "").strip()
@@ -663,7 +801,7 @@ def _sample_style_image_prompt(
             "Make the prop positions, body posture, facial expression, and visible cause-and-effect readable in one glance. "
         )
     return (
-        f"{_psychology_runtime_image_style(profile).rstrip('. ')}. "
+        f"{_runtime_image_style(profile).rstrip('. ')}. "
         f"{_sample_style_image_tail(srt_text, theme_context)} "
         f"{visual_sentence}"
         f"{audience_hint} "
@@ -838,7 +976,7 @@ Motion rules:
 - Required structure: body movement by the reference character + one prop/light/symbol reaction copied from the image prompt + final held pose or visual state.
 - Mention concrete objects from the image prompt.
 - Describe subtle, restrained motion, not dramatic acting.
-- Convert abstract psychology into visible action.
+- Convert abstract concepts into visible action.
 - Do NOT describe thoughts, concepts, labels, or invisible feelings.
 - Do NOT use: represents, symbolizes, emotional data, early training, feels, processes, understands, inner world, trauma, sensitivity.
 - Do NOT say the character scans/reads/feels something unless you also describe the visible hand, gaze, shoulder, prop, light, or symbol movement."""
@@ -895,7 +1033,7 @@ Use the image prompt objects directly. Return body movement + prop/light/symbol 
         return ""
 
 
-def _derive_psychology_video_movement(
+def _derive_video_movement(
     srt_text: str,
     primary_action: str = "",
     visual_anchor: str = "",
@@ -903,6 +1041,7 @@ def _derive_psychology_video_movement(
     primary_subject: str = "",
     style_profile: Optional[Dict[str, Any]] = None,
     img_prompt: str = "",
+    topic: str = "",
 ) -> str:
     """
     Derive video movement description.
@@ -1020,10 +1159,14 @@ def _derive_psychology_video_movement(
     source = " ".join(str(source or "").split())
     if _is_concrete_psychology_video_action(source):
         return _format_director_action_as_motion(source)
-    return "nv1 makes one small deliberate hand gesture toward the main symbolic object as the surrounding shapes shift outward in response, making the spoken idea readable through motion"
+    tc = _get_topic_config(topic)
+    return tc.get("video_motion_fallback", "nv1 makes one small deliberate hand gesture toward the main symbolic object as the surrounding shapes shift outward in response, making the spoken idea readable through motion")
 
 
-def _derive_psychology_emotional_arc(
+_derive_psychology_video_movement = _derive_video_movement
+
+
+def _derive_emotional_arc(
     srt_text: str = "",
     primary_action: str = "",
     visual_anchor: str = "",
@@ -1038,7 +1181,7 @@ def _derive_psychology_emotional_arc(
         visual_moment,
         primary_subject,
     ]))
-    profile = normalize_psychology_style_profile(style_profile)
+    profile = normalize_style_profile(style_profile)
     emotion_style = str(profile.get("cultural_emotion_style", "") or "").strip()
 
     arc_rules = [
@@ -1147,23 +1290,23 @@ def _sample_style_video_prompt(
     style_profile: Optional[Dict[str, Any]] = None,
     img_prompt: str = "",  # NEW: Add img_prompt parameter
 ) -> str:
-    profile = normalize_psychology_style_profile(style_profile)
+    profile = normalize_style_profile(style_profile)
     audience_hint = _build_psychology_audience_visual_hint(profile)
     movement_text = str(movement or "").strip()
     if not movement_text or _is_generic_psychology_video_motion(movement_text):
-        movement_text = _derive_psychology_video_movement(
+        movement_text = _derive_video_movement(
             srt_text=srt_text,
             primary_action=primary_action,
             visual_anchor=visual_anchor,
             visual_moment=visual_moment,
             primary_subject=primary_subject,
             style_profile=style_profile,
-            img_prompt=img_prompt,  # NEW: Pass img_prompt here too
+            img_prompt=img_prompt,
         )
     movement_text = _compact_psychology_video_motion(movement_text)
     visual_base = _clean_video_visual_text(_image_prompt_visual_base(img_prompt) or primary_subject or visual_anchor or primary_action, 360)
     narration_beat = _clean_video_visual_text(srt_text or visual_moment or primary_action or visual_anchor, 220)
-    emotional_arc = _derive_psychology_emotional_arc(
+    emotional_arc = _derive_emotional_arc(
         srt_text=srt_text,
         primary_action=primary_action,
         visual_anchor=visual_anchor,
@@ -1173,7 +1316,7 @@ def _sample_style_video_prompt(
     )
     emotional_arc = _clean_video_visual_text(emotional_arc, 220)
     prompt = (
-        f"{_psychology_runtime_video_style(profile).rstrip('. ')}. "
+        f"{_runtime_video_style(profile).rstrip('. ')}. "
         "Animate the exact illustrated setup from the image prompt; do not invent a new scene or redesign the character. "
         f"Faithfully visualize this narration beat in a direct and instantly legible way: {narration_beat}. "
         f"Image-derived visual base: {visual_base}. "
@@ -1278,15 +1421,19 @@ def _concept_supported_by_prompt(concept: str, prompt: str) -> bool:
     }
     return any(term in low for term in support_terms.get(concept_low, []))
 
-def _has_psychology_quality_anchor(prompt: str) -> bool:
+def _has_quality_anchor(prompt: str) -> bool:
     low = str(prompt or "").lower()
     anchors = [
         "metaphor", "symbolic", "body language", "emotion", "overwhelm", "habit", "thought",
         "mind", "mirror", "knot", "bridge", "maze", "cloud", "plant", "scale", "silhouette",
-        "paper texture", "pastel", "psychology", "finance", "illustration", "anime", "cartoon",
-        "toon", "manga", "watercolor", "vector", "flat color", "storybook",
+        "paper texture", "pastel", "psychology", "finance", "success", "self-development",
+        "illustration", "anime", "cartoon", "toon", "manga", "watercolor", "vector",
+        "flat color", "storybook", "coin", "savings", "investment", "goal", "discipline",
     ]
     return any(anchor in low for anchor in anchors)
+
+
+_has_psychology_quality_anchor = _has_quality_anchor
 
 
 def _normalize_for_culture_match(text: str) -> str:
@@ -1299,7 +1446,7 @@ def _normalize_for_culture_match(text: str) -> str:
 
 
 def _culture_terms_from_profile(style_profile: Optional[Dict[str, Any]] = None) -> List[str]:
-    profile = normalize_psychology_style_profile(style_profile)
+    profile = normalize_style_profile(style_profile)
     raw_parts: List[str] = []
     value = str(profile.get("cultural_props", "") or "")
     for part in re.split(r"[,|:;]", value):
@@ -1347,7 +1494,7 @@ def _culture_terms_from_profile(style_profile: Optional[Dict[str, Any]] = None) 
 
 
 def _prompt_has_audience_cultural_fit(prompt: str, style_profile: Optional[Dict[str, Any]] = None) -> bool:
-    profile = normalize_psychology_style_profile(style_profile)
+    profile = normalize_style_profile(style_profile)
     if not str(profile.get("audience_language", "") or "").strip():
         return True
     prompt_norm = _normalize_for_culture_match(prompt)
@@ -1362,7 +1509,7 @@ def _prompt_has_audience_cultural_fit(prompt: str, style_profile: Optional[Dict[
 
 
 def _build_psychology_audience_visual_hint(style_profile: Optional[Dict[str, Any]] = None) -> str:
-    profile = normalize_psychology_style_profile(style_profile)
+    profile = normalize_style_profile(style_profile)
     language = str(profile.get("audience_language", "") or "").strip()
     if not language:
         return ""
@@ -1407,7 +1554,7 @@ def score_psychology_sample_style_img(
     strengths: List[str] = []
     critical_failures: List[str] = []
 
-    profile = normalize_psychology_style_profile(style_profile)
+    profile = normalize_style_profile(style_profile)
     if style_profile:
         style_terms = _profile_style_terms(profile)
         if style_terms and any(term in low for term in style_terms[:8]):
@@ -1465,8 +1612,8 @@ def score_psychology_sample_style_img(
         critical_failures.append("image prompt contains old video schema")
     if PSYCHOLOGY_META_INSTRUCTION_TERMS.search(prompt):
         critical_failures.append("contains internal meta instruction language")
-    if not _has_psychology_quality_anchor(prompt):
-        critical_failures.append("missing psychology visual anchor")
+    if not _has_quality_anchor(prompt):
+        critical_failures.append("missing visual quality anchor")
     if PSYCHOLOGY_LOW_QUALITY_GENERIC_TERMS.search(prompt):
         critical_failures.append("generic low-quality phrasing")
 
@@ -1508,7 +1655,7 @@ def score_psychology_sample_style_video(
     strengths: List[str] = []
     critical_failures: List[str] = []
 
-    profile = normalize_psychology_style_profile(style_profile)
+    profile = normalize_style_profile(style_profile)
     if style_profile:
         style_terms = _profile_style_terms({
             **profile,
@@ -1528,7 +1675,8 @@ def score_psychology_sample_style_video(
             "same sketch style": "same sketch style",
         }
     for label, phrase in required_phrases.items():
-        accepted = phrase in low or (label == "sample video style" and style_profile and ("psychology style" in low or "finance style" in low)) or (label == "same sketch style" and "same exact sketch style" in low)
+        _any_topic_style = any(f"{tv['prompt_label'].split()[0].lower()} style" in low for tv in TOPIC_PROMPT_CONFIG.values())
+        accepted = phrase in low or (label == "sample video style" and style_profile and _any_topic_style) or (label == "same sketch style" and "same exact sketch style" in low)
         if accepted:
             strengths.append(label)
         else:
@@ -1654,7 +1802,7 @@ def _ensure_psychology_prompt_quality(
     visual_anchor: str = "",
     style_profile: Optional[Dict[str, Any]] = None,
 ) -> str:
-    profile = normalize_psychology_style_profile(style_profile)
+    profile = normalize_style_profile(style_profile)
     primary_subject = _strip_forced_psychology_cultural_props(primary_subject)
     primary_action = _strip_forced_psychology_cultural_props(primary_action)
     visual_anchor = _strip_forced_psychology_cultural_props(visual_anchor)
@@ -1670,14 +1818,16 @@ def _ensure_psychology_prompt_quality(
     audience_hint = _build_psychology_audience_visual_hint(profile)
     low_cleaned = cleaned.lower()
     style_terms = _profile_style_terms(profile)
+    _style_language_markers = [
+        "hand-drawn", "channel style", "provided reference character",
+    ]
+    for _tc_val in TOPIC_PROMPT_CONFIG.values():
+        _pl = _tc_val.get("prompt_label", "")
+        if _pl:
+            _style_language_markers.extend([f"2d {_pl.split()[0].lower()}", f"{_pl.split()[0].lower()} editorial", _pl])
     has_style_language = (
         (style_terms and any(term in low_cleaned for term in style_terms[:8]))
-        or any(term in low_cleaned for term in [
-            "2d psychology", "psychology editorial", "psychology illustration",
-            "2d finance", "finance editorial", "finance illustration",
-            "2d self-development", "self-development editorial", "self-development illustration",
-            "hand-drawn", "channel style", "provided reference character",
-        ])
+        or any(term in low_cleaned for term in _style_language_markers)
     )
     core_source = " ".join([primary_subject, primary_action, visual_anchor])
     core_tokens = [
@@ -1688,7 +1838,7 @@ def _ensure_psychology_prompt_quality(
     hybrid_ready = (
         len(cleaned) >= 260
         and not PSYCHOLOGY_META_INSTRUCTION_TERMS.search(cleaned)
-        and _has_psychology_quality_anchor(cleaned)
+        and _has_quality_anchor(cleaned)
         and (
             _prompt_visualizes_srt_core(cleaned, srt_text, primary_subject, primary_action, visual_anchor)
             or core_token_hits >= 3
@@ -1696,7 +1846,7 @@ def _ensure_psychology_prompt_quality(
     )
     if hybrid_ready:
         if not has_style_language:
-            cleaned = f"{_psychology_runtime_image_style(profile).rstrip('. ')}. " + cleaned
+            cleaned = f"{_runtime_image_style(profile).rstrip('. ')}. " + cleaned
         if "nv1" in char_ids and "provided reference image" not in cleaned.lower() and "reference character" not in cleaned.lower():
             cleaned = cleaned.rstrip(". ") + " Use the provided reference image as the character identity source; preserve the reference character exactly."
         if not any(term in cleaned.lower() for term in ["clear focal", "focal hierarchy", "focal point", "viewer first notices", "eye is drawn"]):
@@ -1710,7 +1860,7 @@ def _ensure_psychology_prompt_quality(
         return _collapse_duplicate_psychology_style_blocks(cleaned, profile)
     if "depict this exact script idea literally and clearly:" in cleaned.lower():
         if style_terms and not any(term in cleaned.lower() for term in style_terms[:5]):
-            cleaned = f"{_psychology_runtime_image_style(profile).rstrip('. ')}. " + cleaned
+            cleaned = f"{_runtime_image_style(profile).rstrip('. ')}. " + cleaned
         if (
             "same exact channel style" not in cleaned.lower()
             and "consistent style" not in cleaned.lower()
@@ -1735,7 +1885,7 @@ def _ensure_psychology_prompt_quality(
     needs_root_fallback = (
         existing_block_count >= 2
         or len(cleaned) < 220
-        or not _has_psychology_quality_anchor(cleaned)
+        or not _has_quality_anchor(cleaned)
         or not (
             _prompt_visualizes_srt_core(cleaned, srt_text, primary_subject, primary_action, visual_anchor)
             or core_token_hits >= 2
@@ -1752,7 +1902,7 @@ def _ensure_psychology_prompt_quality(
         )
     else:
         if not has_style_language:
-            cleaned = f"{_psychology_runtime_image_style(profile).rstrip('. ')}. " + cleaned
+            cleaned = f"{_runtime_image_style(profile).rstrip('. ')}. " + cleaned
         if "nv1" in char_ids and "provided reference image" not in cleaned.lower() and "reference character" not in cleaned.lower():
             cleaned = cleaned.rstrip(". ") + " Use the provided reference image as the recurring character identity source; preserve the reference character exactly."
         if "clear focal hierarchy" not in cleaned.lower():
@@ -1772,9 +1922,9 @@ def _ensure_psychology_prompt_quality(
 def get_scene_system_prompt(topic: str = "story", style_profile: Optional[Dict[str, Any]] = None) -> str:
     if not _is_psychology_topic(topic):
         return SYSTEM_PROMPT_SCENE_PROMPTS
-    profile = normalize_psychology_style_profile(style_profile)
-    runtime_image_style = _psychology_runtime_image_style(profile)
-    runtime_video_style = _psychology_runtime_video_style(profile)
+    profile = normalize_style_profile(style_profile)
+    runtime_image_style = _runtime_image_style(profile)
+    runtime_video_style = _runtime_video_style(profile)
     audience_language = str(profile.get('audience_language', '') or '').strip()
     audience_culture_note = str(profile.get('audience_culture_note', '') or '').strip()
     cultural_props = str(profile.get('cultural_props', '') or '').strip()
@@ -1788,24 +1938,11 @@ def get_scene_system_prompt(topic: str = "story", style_profile: Optional[Dict[s
 TARGET AUDIENCE: {audience_language}-speaking viewers.
 {('CULTURAL CONTEXT: ' + audience_culture_note) if audience_culture_note else ''}{emotion_block}
 AUDIENCE FIT GUIDANCE: The narration decides the image. If the narration naturally involves a setting, object, or ritual, prefer one that feels familiar to {audience_language} audiences. Do NOT force cultural props into every scene."""
-    import unicodedata
-    topic_norm = unicodedata.normalize("NFKD", str(topic or "").strip().lower())
-    topic_norm = "".join(ch for ch in topic_norm if not unicodedata.combining(ch))
-    if topic_norm in ("finance", "tai chinh"):
-        topic_label = "FINANCE"
-        topic_desc = "personal finance and financial literacy"
-        topic_metaphor_hint = "Use financial visual metaphors: growth charts, coin stacks, savings jars, investment trees, debt chains, safety nets, open doors of opportunity. Show money concepts through relatable everyday financial situations."
-        topic_question = "what single image/video beat would make the spoken financial concept clear, actionable, and worth watching?"
-    elif topic_norm in ("success", "phat trien ban than"):
-        topic_label = "SELF-DEVELOPMENT"
-        topic_desc = "self-development, personal growth and success habits"
-        topic_metaphor_hint = "Use growth and motivation visual metaphors: climbing steps, planting seeds, building blocks, opening doors, morning routines, habit trackers, before/after contrasts. Show personal growth through relatable daily discipline situations."
-        topic_question = "what single image/video beat would make the spoken self-development idea clear, motivating, and worth watching?"
-    else:
-        topic_label = "PSYCHOLOGY"
-        topic_desc = "psychology and self-improvement"
-        topic_metaphor_hint = "Use psychological visual metaphors: mirrors, knots, bridges, mazes, clouds lifting, scales, emotional body language, contrast panels. Show mental and emotional concepts through relatable introspective situations."
-        topic_question = "what single image/video beat would make the spoken psychology idea clear, emotionally relatable, and worth watching?"
+    tc = _get_topic_config(topic)
+    topic_label = tc["topic_label"]
+    topic_desc = tc["topic_desc"]
+    topic_metaphor_hint = tc["metaphor_hint"]
+    topic_question = tc["quality_question"]
     return f"""You are an EDUCATIONAL {topic_label} ILLUSTRATOR and VISUAL METAPHOR DIRECTOR for AI image generation.
 
 YOUR MISSION: For each scene, write one clear, engaging {topic_desc} image prompt and one matching image-to-video prompt in this channel's fixed visual style.
@@ -2333,8 +2470,8 @@ def build_scene_prompt_request(
     
     Returns: user prompt string
     """
-    profile = normalize_psychology_style_profile(style_profile)
-    style_hint = _psychology_runtime_image_style(profile) if _is_psychology_topic(topic) else STYLE_PRESETS.get(visual_style, STYLE_PRESETS["default"])
+    profile = normalize_style_profile(style_profile)
+    style_hint = _runtime_image_style(profile) if _is_psychology_topic(topic) else STYLE_PRESETS.get(visual_style, STYLE_PRESETS["default"])
     
     scenes_text = ""
     for scene in batch:
@@ -2471,12 +2608,13 @@ def build_scene_prompt_request(
 CULTURAL CONTEXT: {audience_culture_note or 'Universal'}{props_line}{metaphors_line}{emotion_line}
 AUDIENCE FIT GUIDANCE: The narration decides the image. If the narration naturally involves a setting, object, or ritual, prefer one that feels familiar to {audience_language} audiences. Do NOT force cultural props into every scene.
 """
-        _topic_label_user = {"finance": "finance", "success": "self-development"}.get(str(topic or "").strip().lower(), "psychology")
+        tc = _get_topic_config(topic)
+        _topic_label_user = tc.get("prompt_label", "psychology illustration").split(" ")[0]
         user_prompt = f"""Generate {_topic_label_user} illustration prompts for {len(batch)} scene(s).
 
 GLOBAL CHANNEL STYLE: {_strip_attached_character_description(context_lock)}
-STYLE ESSENTIALS (short, support only): {_extract_style_essentials(profile)}
-VIDEO STYLE: {_psychology_runtime_video_style(profile)}
+STYLE ESSENTIALS (short, support only): {_extract_style_essentials(profile, topic=topic)}
+VIDEO STYLE: {_runtime_video_style(profile)}
 PALETTE: {profile['palette']}
 NEGATIVE RULES: {profile['negative_prompt']}
 CHARACTER REFERENCE: the provided reference image defines the recurring character identity/style. Preserve the reference character exactly; do not re-describe it in detail or create a new character. Spend detail on the narration-specific setting, action, body language, and metaphor.
@@ -2492,12 +2630,12 @@ OUTPUT FORMAT (JSON only, no explanation):
         {{
             "scene_id": <int>,
             "img_prompt": "[clean final image prompt: 90-150 words, English only, start with this scene's unique visual focus, style appears only after the unique visual concept]",
-            "video_prompt": "{_psychology_runtime_video_style(profile)} [clean final image-to-video prompt: 45-90 words, English only, one visible movement and emotional arc]"
+            "video_prompt": "{_runtime_video_style(profile)} [clean final image-to-video prompt: 45-90 words, English only, one visible movement and emotional arc]"
         }}
     ]
 }}
 
-PSYCHOLOGY RULES:
+{tc['topic_label']} RULES:
 - PRIMARY SOURCE is the NARRATION (which may be in any language). Translate the narration idea into English for your img_prompt and video_prompt output. ALL OUTPUT MUST BE IN ENGLISH.
 - Build each img_prompt in this priority order: VISUAL CONCEPT visual_focus, concrete_props, body_language_key, emotional_visual, visual_metaphor, then visual_contract, primary_subj, primary_act, and style essentials.
 - Do not begin img_prompt with GLOBAL CHANNEL STYLE or a long repeated style sentence. Style should be one short clause after the scene-specific visual concept.
@@ -2514,7 +2652,7 @@ PSYCHOLOGY RULES:
 - Use same-style secondary figures only as anonymous silhouettes/simple background figures. Never invent new character IDs.
 - ABSOLUTELY NO text, letters, words, writing, captions, labels, UI text, chart text, document text, signs, numbers, or watermarks in the image. If narration mentions reading/writing, show the object (book, phone) but with blank/abstract content, never readable text.
 - Obey NEGATIVE RULES exactly. Avoid camera-gear vocabulary and cinematic language unless the channel style explicitly asks for it.
-- video_prompt must be natural language in this channel style, not CAMERA/MOTION/ACTION blocks for psychology.
+- video_prompt must be natural language in this channel style, not CAMERA/MOTION/ACTION blocks.
 - video_prompt must include one concrete visible action using the narration's object, action, metaphor, or emotional body language.
 - video_prompt must include a clear emotional arc through posture, tiny pause, hand tension, shoulder movement, gaze direction, and prop/light response where relevant.
 - Never use the generic sentence "Use specific movement by the character" as the final video prompt.
@@ -2618,13 +2756,14 @@ def check_psychology_prompt_quality(
     low = prompt.lower()
     if not prompt.strip():
         return ["empty prompt"]
-    profile = normalize_psychology_style_profile(style_profile)
+    profile = normalize_style_profile(style_profile)
     style_terms = _profile_style_terms(style_profile)
-    has_style_language = any(term in low for term in [
-        "2d psychology", "psychology editorial", "psychology illustration",
-        "2d finance", "finance editorial", "finance illustration",
-        "hand-drawn", "channel style", "provided reference character",
-    ])
+    _cq_style_markers = ["hand-drawn", "channel style", "provided reference character"]
+    for _tc_val in TOPIC_PROMPT_CONFIG.values():
+        _pl = _tc_val.get("prompt_label", "")
+        if _pl:
+            _cq_style_markers.extend([f"2d {_pl.split()[0].lower()}", f"{_pl.split()[0].lower()} editorial", _pl])
+    has_style_language = any(term in low for term in _cq_style_markers)
     if style_terms and not any(term in low for term in style_terms[:6]) and not has_style_language:
         issues.append("missing channel style profile terms")
     forbidden = [term for term in PSYCHOLOGY_FORBIDDEN_STYLE_TERMS if term.lower() in low]
@@ -2640,8 +2779,8 @@ def check_psychology_prompt_quality(
     accepted_text_guards = text_guard_phrases + profile_text_guards
     if not any(phrase in low for phrase in accepted_text_guards):
         issues.append("missing no-readable-text guard")
-    if not _has_psychology_quality_anchor(prompt):
-        issues.append("missing psychology visual anchor")
+    if not _has_quality_anchor(prompt):
+        issues.append("missing visual quality anchor")
     if not any(term in low for term in ["clear focal", "focal hierarchy", "focal point", "foreground", "center", "viewer", "eye is drawn", "first notices"]):
         issues.append("missing focal hierarchy")
     if not _prompt_has_audience_cultural_fit(prompt, profile):
@@ -2710,7 +2849,7 @@ def postprocess_img_prompt(
             subject = primary_subject or anchor
             action = primary_action or anchor
             prompt = (
-                f"{_psychology_runtime_image_style(style_profile).rstrip('. ')}. "
+                f"{_runtime_image_style(style_profile).rstrip('. ')}. "
                 f"Show {subject}. {action}. "
                 f"Clear focal hierarchy: viewer first notices {anchor}. "
                 "Make the emotional meaning readable through simple body language, one concrete symbolic object, and clean negative space. "
@@ -2722,7 +2861,7 @@ def postprocess_img_prompt(
     prompt = _sanitize_story_summary_style(prompt)
     prompt = _sanitize_prohibited_image_terms(prompt)
     if _is_psychology_topic(topic):
-        profile = normalize_psychology_style_profile(style_profile)
+        profile = normalize_style_profile(style_profile)
         prompt = _strip_psychology_meta_instruction_language(prompt)
         prompt = _strip_psychology_forbidden_style(prompt)
         prompt = _strip_forced_psychology_cultural_props(prompt)
@@ -2764,7 +2903,7 @@ def postprocess_img_prompt(
             subject = primary_subject or anchor
             action = primary_action or anchor
             prompt = (
-                f"{_psychology_runtime_image_style(style_profile).rstrip('. ')}. "
+                f"{_runtime_image_style(style_profile).rstrip('. ')}. "
                 f"Show {subject}. {action}. "
                 f"Clear focal hierarchy: viewer first notices {anchor}. "
                 "Make the emotional meaning readable through simple body language, one concrete symbolic object, and clean negative space. "
@@ -2803,7 +2942,7 @@ def postprocess_img_prompt(
                 subject = primary_subject or anchor
                 action = primary_action or anchor
                 prompt = (
-                    f"{_psychology_runtime_image_style(style_profile).rstrip('. ')}. "
+                    f"{_runtime_image_style(style_profile).rstrip('. ')}. "
                     f"Show {subject}. {action}. "
                     f"Clear focal hierarchy: viewer first notices {anchor}. "
                     "Use only the narration and locked scene spec; avoid unsupported paperwork, screens, labels, and readable details. "
@@ -3423,7 +3562,7 @@ def postprocess_video_prompt(
             and first_cultural_prop not in source_for_prop
             and _is_concrete_psychology_video_action(" ".join([primary_action, visual_moment, primary_subject, visual_anchor]))
         )
-        movement = _derive_psychology_video_movement(
+        movement = _derive_video_movement(
             srt_text=srt_text or visual_moment,
             primary_action=primary_action,
             visual_anchor=visual_anchor,
@@ -3481,7 +3620,7 @@ def postprocess_video_prompt(
                         prefix,
                         flags=re.IGNORECASE,
                     ).rstrip(". ")
-                emotional_arc = _derive_psychology_emotional_arc(
+                emotional_arc = _derive_emotional_arc(
                     srt_text=srt_text or visual_moment,
                     primary_action=primary_action,
                     visual_anchor=visual_anchor,
@@ -3670,8 +3809,10 @@ def build_fallback_prompt(
             subject = subject or "the reference character from the provided reference image within the narration-specific scene"
             subject = re.sub(r"\s*\(\s*nv1\.png\s*\)", "", subject, flags=re.IGNORECASE)
         elif not subject or "emotionally resonant environment detail" in subject.lower():
-            subject = primary_subject or visual_anchor or "a concrete symbolic psychology moment from the narration"
-        theme_context = (context_lock or "nervous-system regulation, emotional self-awareness, boundaries versus isolation, and protecting inner peace").strip()
+            tc = _get_topic_config(topic)
+            subject = primary_subject or visual_anchor or tc.get("fallback_subject", "a concrete symbolic moment from the narration")
+        tc = _get_topic_config(topic)
+        theme_context = (context_lock or tc.get("theme_context_default", "")).strip()
         if adult_char_ids and "nv1" in adult_char_ids:
             theme_context = _strip_attached_character_description(theme_context)
         img_prompt = _sample_style_image_prompt(
@@ -3838,12 +3979,13 @@ Scene {scene.get('scene_id')}:
 
     topic_rules = ""
     if _is_psychology_topic(topic):
-        profile = normalize_psychology_style_profile(style_profile)
+        profile = normalize_style_profile(style_profile)
+        tc = _get_topic_config(topic)
         topic_rules = f"""
-PSYCHOLOGY STYLE QA:
+{tc['topic_label']} STYLE QA:
 - Channel style name: {profile['style_name']}
-- Required image style: {_psychology_runtime_image_style(profile)}
-- Required video style: {_psychology_runtime_video_style(profile)}
+- Required image style: {_runtime_image_style(profile)}
+- Required video style: {_runtime_video_style(profile)}
 - Negative rules: {profile['negative_prompt']}
 - If img_prompt does not follow the required channel style, score <= 6.
 - If img_prompt uses camera-gear or realistic-photo production language against the channel style, score <= 6.
@@ -3982,11 +4124,11 @@ ABSOLUTE RULE: The img_prompt MUST depict what the narrator is describing RIGHT 
 """
     img_schema = "[STYLE] ... | [SUBJECT] ... (ref.png) | [ACTION] ... | [SETTING] ... (loc.png) | [LIGHTING] ... | [MOOD] ... | [TECHNICAL] photorealistic, 8K, cinematic color grade"
     if _is_psychology_topic(topic):
-        profile = normalize_psychology_style_profile(style_profile)
+        profile = normalize_style_profile(style_profile)
         style_rules = f"""
 ABSOLUTE RULE: The img_prompt MUST make the spoken idea clear as one engaging educational visual in this channel's fixed style.
 - Channel style name: {profile['style_name']}
-- Start with this image style: {_psychology_runtime_image_style(profile)}
+- Start with this image style: {_runtime_image_style(profile)}
 - Character reference: use the provided reference image as the identity/style source; preserve the reference character exactly and do not re-describe it in detail.
 - Use these negative rules: {profile['negative_prompt']}
 - Use the locked scene spec and planning fields as the foundation: primary_subject, primary_action, visual_anchor, viewer_attention, key_focus, subtext_delivery, and artistic_intent.
@@ -3996,14 +4138,14 @@ ABSOLUTE RULE: The img_prompt MUST make the spoken idea clear as one engaging ed
 - Avoid generic symbolism if a concrete real-life situation can express the line more precisely.
 - If the recurring character is used, rely on the provided reference image for identity. Other people must be anonymous silhouettes/background figures.
 - ABSOLUTELY NO text, letters, words, writing, captions, labels, signs, or readable characters in the image.
-- video_prompt must start with this video style: {_psychology_runtime_video_style(profile)}
+- video_prompt must start with this video style: {_runtime_video_style(profile)}
 - video_prompt must describe one concrete visible motion tied to the narration and one clear emotional arc.
 - Never use generic movement-only text; the repaired video prompt must name the moving body part, narration-relevant object, boundary, silhouette, or symbolic shape.
-- Do not use CAMERA/MOTION/ACTION blocks for psychology repairs.
+- Do not use CAMERA/MOTION/ACTION blocks for repairs.
 - Do not output old internal scaffolding labels, translation instructions, or prompt-writing instructions.
 """
-        img_schema = f"{_psychology_runtime_image_style(profile)} [clean final image prompt using primary_subject, primary_action, key_focus/viewer_attention, and subtext_delivery; 90-150 words; no readable text or letters.]"
-        video_schema = f"{_psychology_runtime_video_style(profile)} [clean final video prompt with one concrete visible movement and emotional arc; 45-90 words; no camera gear, no text or letters.]"
+        img_schema = f"{_runtime_image_style(profile)} [clean final image prompt using primary_subject, primary_action, key_focus/viewer_attention, and subtext_delivery; 90-150 words; no readable text or letters.]"
+        video_schema = f"{_runtime_video_style(profile)} [clean final video prompt with one concrete visible movement and emotional arc; 45-90 words; no camera gear, no text or letters.]"
     else:
         video_schema = "CAMERA: <framing> | MOTION: <simple movement> | ACTION: <single visible action from narration>"
 
@@ -4039,3 +4181,9 @@ OUTPUT FORMAT (JSON only):
         }}
     ]
 }}"""
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# BACKWARD-COMPATIBLE ALIASES — old names still importable
+# ─────────────────────────────────────────────────────────────────────────────
+normalize_psychology_style_profile = normalize_style_profile

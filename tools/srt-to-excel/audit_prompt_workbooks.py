@@ -13,6 +13,7 @@ import openpyxl
 from modules.prompt_quality import (
     check_psychology_prompt_quality,
     check_unsupported_prompt_details,
+    normalize_style_profile,
     normalize_psychology_style_profile,
     postprocess_img_prompt,
     postprocess_video_prompt,

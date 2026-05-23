@@ -204,6 +204,7 @@ try:
     from modules.prompt_quality import (
         SYSTEM_PROMPT_SCENE_PROMPTS,
         SYSTEM_PROMPT_QA_REVIEW,
+        TOPIC_PROMPT_CONFIG,
         get_scene_system_prompt,
         build_scene_prompt_request,
         build_qa_review_request,
@@ -216,6 +217,7 @@ try:
         check_unsupported_prompt_details,
         check_psychology_prompt_quality,
         score_psychology_scene_prompt_pair,
+        normalize_style_profile,
         normalize_psychology_style_profile,
         configure_prompt_quality_ai,
         _strip_forced_psychology_cultural_props,
