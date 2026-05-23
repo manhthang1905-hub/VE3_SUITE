@@ -2863,7 +2863,7 @@ Generator/context error:
                     last_error = err
                     if "401" in err or "Authentication" in err:
                         self.log(f"    [{output_path.stem}] TOKEN Háº¾T Háº N â€” cáº§n Ä‘á»•i token má»›i (láº§n {attempt+1})", "ERROR")
-                        if self._refresh_flow_auth(reason=f"video {output_path.stem}"):
+                        self.log(f"    [{output_path.stem}] Server se tu refresh token, retry...", "WARN")
                             self.log(f"    [{output_path.stem}] ÄÃ£ láº¥y token má»›i, retry ngay", "SUCCESS")
                             continue
                     elif "400" in err or "invalid" in err.lower():
@@ -3033,9 +3033,9 @@ Generator/context error:
                     last_error = err
                     if "401" in err or "Authentication" in err:
                         self.log(f"    [{output_path.stem}] TOKEN HET HAN (lan {attempt+1})", "ERROR")
-                        if self._refresh_flow_auth(reason=f"image {output_path.stem}"):
-                            self.log(f"    [{output_path.stem}] Da lay token moi, retry ngay", "SUCCESS")
-                            continue
+                        self.log(f"    [{output_path.stem}] Server se tu refresh token, retry...", "WARN")
+                        import time as _time; _time.sleep(3)
+                        continue
                     elif "400" in err or "invalid" in err.lower():
                         self.log(f"    [{output_path.stem}] GOOGLE TU CHOI {err[:200]} (lan {attempt+1})", "ERROR")
                         self.log(f"    Co the media_id cu khong hop le, thu tao lai anh nhan vat truoc", "WARN")
