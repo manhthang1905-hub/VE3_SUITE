@@ -352,9 +352,14 @@ def apply_project_runtime_metadata(cfg: dict, project_dir: Path, code: str) -> d
 
 
 def load_excel_runtime_config(override_path: Path | None = None):
-    cfg = load_yaml(SRT_TOOL_DIR / "config" / "settings.yaml")
+    master_cfg = load_yaml(SRT_TOOL_DIR / "config" / "settings.yaml")
+    cfg = dict(master_cfg)
     if override_path:
         cfg.update(load_yaml(override_path))
+    # API keys luôn lấy từ settings.yaml (source of truth) - không dùng key cũ cached trong project
+    for key in ("deepseek_api_key", "deepseek_api_keys", "vov_direct_api_key", "claude_pool_api_key"):
+        if key in master_cfg and master_cfg[key]:
+            cfg[key] = master_cfg[key]
     return cfg
 
 
