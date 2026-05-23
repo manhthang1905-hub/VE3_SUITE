@@ -38,6 +38,28 @@ YELLOW = '#eab308'
 BORDER = '#334155'
 
 
+def _get_auto_version() -> str:
+    """Return version as 1.0.<commit_count> from git, fallback to VERSION.txt."""
+    repo = TOOL_DIR.parent
+    try:
+        result = subprocess.run(
+            ["git", "rev-list", "--count", "HEAD"],
+            cwd=str(repo), capture_output=True, text=True, timeout=5,
+        )
+        if result.returncode == 0:
+            count = result.stdout.strip()
+            return f"1.0.{count}"
+    except Exception:
+        pass
+    try:
+        vf = TOOL_DIR / "VERSION.txt"
+        if vf.exists():
+            return vf.read_text(encoding="utf-8").split("\n")[0].strip()
+    except Exception:
+        pass
+    return "?"
+
+
 class ServerGUI(tk.Tk):
     def __init__(self):
         super().__init__()
@@ -594,14 +616,8 @@ class ServerGUI(tk.Tk):
                                    command=self._on_start)
         self.start_btn.pack(side='left', fill='x', expand=True)
 
-        # Version
-        version = "?"
-        try:
-            vf = TOOL_DIR / "VERSION.txt"
-            if vf.exists():
-                version = vf.read_text(encoding='utf-8').split('\n')[0].strip()
-        except:
-            pass
+        # Version (auto from git commit count)
+        version = _get_auto_version()
         tk.Label(self.setup_frame, text=f"v{version}", font=("Segoe UI", 9),
                  bg=BG, fg=FG2).pack(side='bottom', pady=10)
 
