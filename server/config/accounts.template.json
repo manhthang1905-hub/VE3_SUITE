@@ -1,0 +1,41 @@
+{
+    "_README": [
+        "=== VE3 TOOL CONFIG ===",
+        "",
+        "Sua file nay de them tai khoan va API keys.",
+        "Tool se tu dong:",
+        "  1. Lay token cho tat ca profiles",
+        "  2. Tao SRT tu voice (can AI key)",
+        "  3. Tao prompts tu SRT (can AI key)",
+        "  4. Tao anh SONG SONG voi nhieu accounts",
+        "",
+        "DeepSeek API: https://platform.deepseek.com/",
+        "Groq API FREE: https://console.groq.com/keys",
+        "Gemini API: https://makersuite.google.com/app/apikey"
+    ],
+
+    "chrome_path": "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe",
+
+    "chrome_profiles": [
+        "THAY_BANG_DUONG_DAN_PROFILE_1",
+        "THAY_BANG_DUONG_DAN_PROFILE_2",
+        "THAY_BANG_DUONG_DAN_PROFILE_3"
+    ],
+
+    "api_keys": {
+        "deepseek": [
+            "THAY_BANG_DEEPSEEK_KEY_1"
+        ],
+        "groq": [
+            "THAY_BANG_GROQ_KEY_1",
+            "THAY_BANG_GROQ_KEY_2"
+        ],
+        "gemini": []
+    },
+
+    "settings": {
+        "parallel": 2,
+        "delay_between_images": 2,
+        "use_headless": true
+    }
+}

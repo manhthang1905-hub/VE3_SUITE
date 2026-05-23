@@ -1,0 +1,83 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Virtual environments
+venv/
+ENV/
+env/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Project specific - DO NOT TRACK USER DATA
+PROJECTS/
+config/accounts.json
+
+# Chrome profiles (generated at runtime)
+chrome_profile/
+chrome_profiles/
+
+# Test outputs
+batch_output/
+test_output/
+
+# Test files
+test*.py
+test*.mp3
+*.mp3
+
+# Keep config template
+!config/accounts.template.json
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+config/blocked_proxies.json
+
+# IPv6 list (different per machine)
+ipv6_list.txt
+config/ipv6_list.txt
+
+# Sensitive files - DO NOT TRACK
+config/config.json
+config/creds.json
+
+# Chrome portable (too large)
+GoogleChromePortable/
+GoogleChromePortable - Copy/
+
+# Trash and temp
+_trash/
+nul
+
+# Agent/Claude files
+.agent/
+.claude/
+
+# Notes
+NOTES.md

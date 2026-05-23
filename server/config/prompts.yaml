@@ -1,0 +1,1977 @@
+# =============================================================================
+# UNI-X VOICE TO VIDEO - PROMPTS CONFIGURATION v5.0 (AI PRODUCTION DIRECTOR)
+# =============================================================================
+# Theo chuan AI Production Director voi 3-Step Workflow:
+# - Step 1: PACING & SLICING (segment text 8-20 words)
+# - Step 2: DIRECTOR'S VISUAL BLUEPRINT (scene direction)
+# - Step 3: PRODUCTION EXECUTION (assets + scene JSON)
+#
+# OUTPUT: JSON thuan, de parse va su dung
+# =============================================================================
+
+# =============================================================================
+# GLOBAL STYLE DEFINITION (MASTER STRING - PASTE NGUYEN VAN)
+# =============================================================================
+
+global_style_string: "Cinematic, 4K photorealistic, shot on Arri Alexa, soft film grain, High Key Lighting, Balanced Exposure, well-lit, soft fill light, no crushing shadows, highly detailed texture, professional color grading"
+
+visual_clarity_string: "Face illuminated by soft volumetric light, clear facial features, high visibility"
+
+negative_prompt_string: "cartoon, 3d render, text, watermark, bad anatomy, distorted face, very dark image, underexposed, wrong face, different character, inconsistent appearance"
+
+# =============================================================================
+# STEP 1 + 2: ANALYZE STORY (Director's Vision + Character + Location Bible)
+# =============================================================================
+# Input: {story_text}
+# Output: JSON voi world_setting, characters, locations
+# =============================================================================
+
+analyze_story: |
+  Ban la AI Production Director (Dao dien). Phan tich kich ban va tao Production Kit.
+
+  ## INPUT SCRIPT:
+  ---
+  {story_text}
+  ---
+
+  ## NHIEM VU - LAM THEO THU TU:
+
+  ### BUOC 1: DIRECTOR'S VISION (PHAN TICH THE GIOI CAU CHUYEN TRUOC!)
+  Doc ky cau chuyen va xac dinh:
+  - **Era (Thoi dai)**: Hien dai? 1990s? 1970s? Thoi phong kien?
+  - **Setting (Moi truong)**: Thanh thi? Nong thon? Mien nui? Ven bien?
+  - **Social class (Tang lop)**: Giau co? Trung luu? Ngheo kho? Nong dan?
+  - **Tone (Tone mau)**: Am ap? Lanh leo? U am? Tuoi sang?
+  - **Region (Vung mien)**: Mien Bac? Mien Trung? Mien Nam? Tay Nguyen?
+
+  TU WORLD SETTING NAY → Quyet dinh PHONG CACH cho nhan vat va boi canh!
+
+  ### BUOC 2: CHARACTER BIBLE ("Cast" nhan vat PHU HOP voi the gioi)
+  - Moi nhan vat PHAI phu hop voi world setting da xac dinh
+  - Neu truyen nong thon ngheo → nhan vat mac ao ba ba, da ngam, toc gian di
+  - Neu truyen thanh thi hien dai → nhan vat mac ao so mi, da sang, toc thoi trang
+  - Neu truyen thoi xua → nhan vat mac ao dai/ao tu than, toc bui/tet
+
+  ### BUOC 3: LOCATION BIBLE ("Scout" boi canh PHU HOP voi the gioi)
+  - Moi boi canh PHAI phu hop voi world setting da xac dinh
+  - Neu truyen nong thon → nha la, duong dat, dong lua, ao ca
+  - Neu truyen thanh thi → chung cu, van phong, quan cafe, duong nhua
+  - Neu truyen thoi xua → nha go, san dinh, chua chien
+
+  ### BUOC 4: KEY OBJECTS (Chi liet ke neu co vat the dac biet)
+
+  ## OUTPUT FORMAT - PURE JSON (khong markdown):
+  ## IMPORTANT: ALL names MUST be in ENGLISH (not Vietnamese)!
+  ## IMPORTANT: Create MULTIPLE character ages and ALL locations for visual variety!
+  ## IMPORTANT: DO NOT add nationality/ethnicity (Vietnamese, American, etc.) in portrait_prompt unless story EXPLICITLY mentions it!
+
+  {{
+    "production_info": {{
+      "title": "Story Title",
+      "genre": "Drama/Comedy/etc",
+      "total_characters": 6,
+      "total_locations": 7
+    }},
+
+    "world_setting": {{
+      "era": "Present day 2020s (with 1990s flashbacks)",
+      "setting": "Small town Ohio, USA",
+      "social_class": "Working class",
+      "tone": "Dramatic, emotional, nostalgic",
+      "region": "American Midwest",
+      "visual_style": "Natural lighting, realistic tones, warm nostalgia for flashbacks"
+    }},
+
+    "global_style": "Cinematic, 4K photorealistic, shot on Arri Alexa, soft film grain, natural American suburban lighting",
+
+    "context_lock": "Small town Ohio, working class, courthouse present day, 1990s apartment flashbacks",
+
+    "characters": [
+      {{
+        "id": "nvc",
+        "name": "Narrator - Present (Dane)",
+        "role": "main",
+        "age": 30,
+        "gender": "male",
+        "is_child": false,
+        "timeline": "PRESENT",
+        "filename": "nvc.png",
+        "portrait_prompt": "A cinematic portrait, straight-on medium close-up shot on 85mm lens. Subject is a 30-year-old Caucasian man with short brown hair, tired blue eyes, light stubble, fair skin showing stress and worry. Looking directly at camera with neutral expression. Bright studio lighting, fully illuminated face. Pure white studio background. Wearing simple gray t-shirt. 8K, sharp focus, photorealistic.",
+        "character_lock": "30-year-old Caucasian man, short brown hair, tired blue eyes, light stubble, stressed expression, wearing simple gray t-shirt"
+      }},
+      {{
+        "id": "nvc_young",
+        "name": "Narrator - Young Adult (Dane at 25)",
+        "role": "main",
+        "age": 25,
+        "gender": "male",
+        "is_child": false,
+        "timeline": "ADULT_FLASHBACK",
+        "filename": "nvc_young.png",
+        "portrait_prompt": "A cinematic portrait, straight-on medium close-up shot on 85mm lens. Subject is a 25-year-old Caucasian man with short brown hair, bright blue eyes, clean shaven, healthy tan skin from outdoor work. Looking directly at camera with neutral expression. Bright studio lighting, fully illuminated face. Pure white studio background. Wearing dusty work shirt, construction worker appearance. 8K, sharp focus, photorealistic.",
+        "character_lock": "25-year-old Caucasian man, short brown hair, bright blue eyes, clean shaven, healthy tan, wearing dusty work shirt"
+      }},
+      {{
+        "id": "nvc1",
+        "name": "Narrator - Child (Dane at 8)",
+        "role": "supporting",
+        "age": 8,
+        "gender": "male",
+        "is_child": true,
+        "timeline": "CHILDHOOD_FLASHBACK",
+        "filename": "NONE",
+        "portrait_prompt": "DO_NOT_GENERATE",
+        "character_lock": "8-year-old Caucasian boy, messy brown hair, innocent blue eyes, freckles, wearing old faded t-shirt and worn jeans"
+      }},
+      {{
+        "id": "nv1",
+        "name": "Mother - Present (Gloria at 55)",
+        "role": "supporting",
+        "age": 55,
+        "gender": "female",
+        "is_child": false,
+        "timeline": "PRESENT",
+        "filename": "nv1.png",
+        "portrait_prompt": "A cinematic portrait, straight-on medium close-up shot on 85mm lens. Subject is a 55-year-old Caucasian woman with graying blonde hair in messy ponytail, tired hazel eyes, deep wrinkles, worn weathered face. Looking directly at camera with neutral expression. Bright studio lighting. Pure white studio background. Wearing old cardigan. 8K, sharp focus, photorealistic.",
+        "character_lock": "55-year-old Caucasian woman, graying blonde hair in messy ponytail, tired hazel eyes, deep wrinkles, weathered face, wearing old cardigan"
+      }},
+      {{
+        "id": "nv1_young",
+        "name": "Mother - Young (Gloria at 32)",
+        "role": "supporting",
+        "age": 32,
+        "gender": "female",
+        "is_child": false,
+        "timeline": "CHILDHOOD_FLASHBACK",
+        "filename": "nv1_young.png",
+        "portrait_prompt": "A cinematic portrait, straight-on medium close-up shot on 85mm lens. Subject is a 32-year-old Caucasian woman with blonde hair in tired ponytail, warm hazel eyes with dark circles, young but exhausted face, slight smile. Looking directly at camera with neutral expression. Bright studio lighting. Pure white studio background. Wearing faded blue work uniform. 8K, sharp focus, photorealistic.",
+        "character_lock": "32-year-old Caucasian woman, blonde hair in ponytail, warm hazel eyes with dark circles, tired but caring face, wearing faded blue work uniform"
+      }},
+      {{
+        "id": "nv2",
+        "name": "Father (mentioned, left)",
+        "role": "minor",
+        "age": 30,
+        "gender": "male",
+        "is_child": false,
+        "timeline": "CHILDHOOD_FLASHBACK",
+        "filename": "nv2.png",
+        "portrait_prompt": "A cinematic portrait, straight-on medium close-up shot on 85mm lens. Subject is a 30-year-old Caucasian man with dark brown hair, distant blue eyes, slight beard, cold detached expression. Looking directly at camera with neutral expression. Bright studio lighting. Pure white studio background. Wearing plain jacket. 8K, sharp focus, photorealistic.",
+        "character_lock": "30-year-old Caucasian man, dark brown hair, distant blue eyes, slight beard, cold expression, wearing plain jacket"
+      }}
+    ],
+
+    "locations": [
+      {{
+        "id": "loc_courthouse",
+        "name": "Courthouse Steps (FRAME)",
+        "filename": "loc_courthouse.png",
+        "timeline": "PRESENT",
+        "location_prompt": "Exterior wide shot of small town American courthouse. Empty, no people. Gray stone steps leading up, white classical columns, American flag on pole, official building facade, overcast cloudy sky. Cinematic, 4K photorealistic. 8K.",
+        "location_lock": "Small town American courthouse exterior, gray stone steps, white columns, American flag, overcast sky",
+        "lighting_default": "Overcast natural daylight, soft diffused shadows"
+      }},
+      {{
+        "id": "loc_apartment",
+        "name": "Small Apartment Living Room",
+        "filename": "loc_apartment.png",
+        "timeline": "CHILDHOOD_FLASHBACK",
+        "location_prompt": "Interior wide shot of cramped 1990s American apartment living room. Empty, no people. Thin walls, worn brown carpet, old CRT TV on wooden stand, faded floral sofa, single window with thin curtains, old radiator heater. Warm tungsten lighting. Cinematic, 4K photorealistic. 8K.",
+        "location_lock": "1990s cramped apartment living room, worn carpet, old CRT TV, faded sofa, thin curtains, warm tungsten lighting",
+        "lighting_default": "Warm tungsten indoor lighting, cozy but poor"
+      }},
+      {{
+        "id": "loc_bedroom",
+        "name": "Shared Bedroom",
+        "filename": "loc_bedroom.png",
+        "timeline": "CHILDHOOD_FLASHBACK",
+        "location_prompt": "Interior shot of small 1990s shared bedroom. Empty, no people. Two single beds close together, thin blankets, small nightstand, dim bedside lamp, bare walls, one small window. Dim warm lighting. Cinematic, 4K photorealistic. 8K.",
+        "location_lock": "Small 1990s shared bedroom, two beds close together, thin blankets, dim bedside lamp, bare walls",
+        "lighting_default": "Dim warm bedside lamp lighting, intimate"
+      }},
+      {{
+        "id": "loc_dryclean",
+        "name": "Dry Cleaning Shop",
+        "filename": "loc_dryclean.png",
+        "timeline": "CHILDHOOD_FLASHBACK",
+        "location_prompt": "Interior wide shot of 1990s small town dry cleaning shop. Empty, no people. Industrial pressing machines, racks of hanging clothes in plastic, front counter, fluorescent ceiling lights, steam visible. Cinematic, 4K photorealistic. 8K.",
+        "location_lock": "1990s dry cleaning shop interior, pressing machines, clothes racks, fluorescent lights, steam",
+        "lighting_default": "Harsh fluorescent lighting, industrial feel"
+      }},
+      {{
+        "id": "loc_convenience",
+        "name": "Convenience Store (Night)",
+        "filename": "loc_convenience.png",
+        "timeline": "CHILDHOOD_FLASHBACK",
+        "location_prompt": "Interior shot of late-night convenience store. Empty, no people. Cash register counter, shelves with snacks and drinks, fluorescent lights, parking lot visible through window, night time. Cinematic, 4K photorealistic. 8K.",
+        "location_lock": "Late night convenience store, cash register, product shelves, fluorescent lights, parking lot through window, nighttime",
+        "lighting_default": "Harsh fluorescent interior, dark outside"
+      }},
+      {{
+        "id": "loc_construction",
+        "name": "House Under Construction",
+        "filename": "loc_construction.png",
+        "timeline": "ADULT_FLASHBACK",
+        "location_prompt": "Exterior wide shot of house under construction. Empty, no people. Wooden frame structure, exposed beams, scattered tools, sawdust, suburban lot, sunny day. Cinematic, 4K photorealistic. 8K.",
+        "location_lock": "House under construction, wooden frame, exposed beams, tools, sawdust, sunny suburban lot",
+        "lighting_default": "Bright sunny daylight, hopeful tone"
+      }},
+      {{
+        "id": "loc_finished_house",
+        "name": "Finished House Exterior",
+        "filename": "loc_finished_house.png",
+        "timeline": "ADULT_FLASHBACK",
+        "location_prompt": "Exterior wide shot of modest but new single-story house. Empty, no people. White siding, small front porch, green lawn, suburban neighborhood, sunny day. Cinematic, 4K photorealistic. 8K.",
+        "location_lock": "New modest single-story house, white siding, small porch, green lawn, sunny suburban setting",
+        "lighting_default": "Bright sunny daylight, proud accomplishment"
+      }}
+    ],
+
+    "key_objects": [
+      {{
+        "id": "obj_documents",
+        "name": "Legal Documents Folder",
+        "filename": "obj_documents.png",
+        "object_prompt": "Close-up of thick manila folder stuffed with legal documents and papers, official court stamps visible, worn edges. On gray stone surface. Soft studio lighting. 8K, product photography."
+      }}
+    ]
+  }}
+
+  ## EXAMPLE 2 - Modern Urban Story:
+  If story is about city office life:
+  - world_setting.setting = "Modern New York City"
+  - characters: wearing suits, business casual
+  - locations: glass office buildings, upscale apartments, coffee shops
+
+  ## EXAMPLE 3 - Historical Story:
+  If story is set in the past:
+  - world_setting.era = "1950s America"
+  - characters: period-appropriate clothing
+  - locations: period-accurate buildings, cars, decor
+
+  ## MANDATORY RULES:
+  1. ALL "name" fields MUST be in ENGLISH (e.g., "Mother", "Courthouse", NOT "Me", "Toa an")
+  2. ALL prompts MUST be in ENGLISH
+  3. Analyze world_setting FIRST before creating characters/locations
+
+  ## CRITICAL - CHARACTER AGE VERSIONS:
+  4. For story narration with flashbacks, create MULTIPLE VERSIONS of main characters:
+     - nvc = Narrator PRESENT age
+     - nvc_young = Narrator YOUNG ADULT (18-28yo) for adult flashbacks
+     - nvc1 = Narrator CHILD (is_child=true, filename=NONE)
+     - nv1 = Mother PRESENT age
+     - nv1_young = Mother YOUNG (when narrator was child, ~30-35yo)
+  5. Each character version needs its own portrait_prompt and character_lock
+  6. Add "timeline" field: "PRESENT", "CHILDHOOD_FLASHBACK", "ADULT_FLASHBACK"
+
+  ## CRITICAL - EXTRACT ALL LOCATIONS:
+  7. Extract EVERY location mentioned in story:
+     - Courthouse, apartment, bedroom, dry cleaning shop, convenience store, construction site, finished house, etc.
+  8. Each location needs "timeline" field to match when it appears in story
+  9. Create at least 5-7 locations for visual variety in a typical story
+
+  ## CHARACTER RULES:
+  10. character_lock MUST have: Age + Gender + Face features + Hair + Skin + CLOTHING
+  11. portrait_prompt: MUST have "Pure white studio background", "neutral expression", "looking directly at camera"
+  12. Children (is_child=true): portrait_prompt = "DO_NOT_GENERATE", filename = "NONE"
+  13. ID format: nvc, nvc_young (narrator), nv1, nv1_young, nv2 (others), nvc1 (child narrator)
+
+  ## LOCATION RULES:
+  14. location_prompt: MUST have "Empty, no people"
+  15. Add lighting_default appropriate for the scene mood
+  16. filename uses .png (NOT .jpg)
+
+  ## OUTPUT:
+  17. Return pure JSON only, NO markdown code blocks
+
+  ## VISUAL VARIETY CHECK:
+  Before returning, verify you have:
+  - [ ] At least 2 versions of narrator (present + young/child)
+  - [ ] At least 2 versions of mother if she appears in flashbacks (present + young)
+  - [ ] At least 5-7 different locations covering all mentioned places
+  - [ ] Timeline tags on all characters and locations
+  - [ ] Enough variety to make a visually interesting video (not repetitive!)
+
+# =============================================================================
+# STEP 2: DIRECTOR'S TREATMENT (Visual Story Plan)
+# =============================================================================
+# Input: {story_text} - Full story content
+# Output: Story structure, emotional arc, visual plan for each part
+# THIS STEP IS CRITICAL - Creates the "film blueprint" before individual scenes
+# =============================================================================
+
+directors_treatment: |
+  You are a Film Director. Read the FULL STORY and create a DIRECTOR'S TREATMENT.
+  This is the master plan for how the video will look and feel.
+
+  ## INPUT - FULL STORY:
+  ---
+  {story_text}
+  ---
+
+  ## YOUR TASK:
+  Analyze the story like a film director would:
+  1. Understand the NARRATIVE STRUCTURE (beginning, middle, end)
+  2. Identify EMOTIONAL BEATS (what feelings to evoke at each point)
+  3. Plan VISUAL STRATEGY for each part (not every word needs a visual!)
+  4. Create a coherent VISUAL NARRATIVE that tells the story effectively
+
+  ## STORY STRUCTURE ANALYSIS:
+
+  ### IDENTIFY THE PARTS:
+  Most personal stories have this structure:
+  - **HOOK/OPENING**: Grab attention, set up conflict (usually present day)
+  - **BACKSTORY**: How we got here (usually flashbacks)
+  - **RISING ACTION**: Building toward the conflict
+  - **CLIMAX**: The main conflict/confrontation
+  - **RESOLUTION**: How it ended, lessons learned
+
+  ### EMOTIONAL ARC:
+  Map the emotional journey:
+  - Opening: Tension, curiosity, hook
+  - Backstory: Warmth, nostalgia, sympathy
+  - Rising: Hope, determination, pride
+  - Climax: Betrayal, shock, pain
+  - Resolution: Justice, closure, reflection
+
+  ## OUTPUT FORMAT - JSON:
+
+  {{
+    "story_analysis": {{
+      "title": "Mother's Betrayal",
+      "genre": "Personal Drama",
+      "total_duration_estimate": "30 minutes",
+      "main_theme": "Family betrayal and self-reliance",
+      "emotional_core": "A son's love betrayed by the mother he sacrificed for"
+    }},
+
+    "story_parts": [
+      {{
+        "part_number": 1,
+        "part_name": "THE HOOK",
+        "time_range": "00:00 - 00:45",
+        "content_summary": "Narrator sits on courthouse steps, reveals mother took him to court for his house",
+        "emotional_tone": "Tension, disbelief, hook the audience",
+        "visual_strategy": "PRESENT DAY - Focus on narrator's distress, courthouse setting, legal documents",
+        "key_visuals": [
+          "Narrator on courthouse steps, shaking hands holding documents",
+          "Close-ups of worried face",
+          "Wide shot of imposing courthouse"
+        ],
+        "pacing": "Slow, contemplative, building tension"
+      }},
+      {{
+        "part_number": 2,
+        "part_name": "CHILDHOOD MEMORIES",
+        "time_range": "00:46 - 02:00",
+        "content_summary": "Growing up poor in Ohio, father left, mother worked two jobs, shared bedroom",
+        "emotional_tone": "Warmth, nostalgia, sympathy for mother's sacrifice",
+        "visual_strategy": "WARM FLASHBACKS - Young mother working hard, intimate mother-son moments",
+        "key_visuals": [
+          "Young mother at dry cleaning shop, pressing shirts",
+          "Young mother at convenience store at night",
+          "Mother coming home exhausted, feet swollen",
+          "Mother and child in small apartment",
+          "Shared bedroom, mother crying quietly"
+        ],
+        "pacing": "Gentle, nostalgic, building emotional connection"
+      }},
+      {{
+        "part_number": 3,
+        "part_name": "BUILDING THE DREAM",
+        "time_range": "02:01 - 03:30",
+        "content_summary": "Narrator becomes carpenter, saves money, buys land, builds house with own hands",
+        "emotional_tone": "Hope, determination, pride, accomplishment",
+        "visual_strategy": "HOPEFUL FLASHBACKS - Young adult working hard, construction scenes",
+        "key_visuals": [
+          "Young narrator working as carpenter",
+          "Empty land plot",
+          "Construction in progress, hammering, building",
+          "Finished house, moment of pride"
+        ],
+        "pacing": "Uplifting, determined, building toward success"
+      }},
+      {{
+        "part_number": 4,
+        "part_name": "THE BETRAYAL",
+        "time_range": "03:31 - 05:00",
+        "content_summary": "Mother demands house, takes narrator to court, claims ownership",
+        "emotional_tone": "Shock, betrayal, disbelief, pain",
+        "visual_strategy": "CONTRAST - Happy moments with mother vs courtroom confrontation",
+        "key_visuals": [
+          "Mother's cold expression",
+          "Courtroom setting",
+          "Narrator's shocked face",
+          "Legal documents, evidence"
+        ],
+        "pacing": "Tense, dramatic, building to climax"
+      }},
+      {{
+        "part_number": 5,
+        "part_name": "RESOLUTION",
+        "time_range": "05:01 - end",
+        "content_summary": "Court decision, narrator wins/loses, lessons learned",
+        "emotional_tone": "Justice, closure, reflection, moving forward",
+        "visual_strategy": "PRESENT DAY - Return to courthouse, final reflection",
+        "key_visuals": [
+          "Courtroom verdict moment",
+          "Narrator's reaction",
+          "Walking away from courthouse",
+          "Final reflective shot"
+        ],
+        "pacing": "Resolution, emotional payoff, closure"
+      }}
+    ],
+
+    "visual_guidelines": {{
+      "frame_narrative_location": "Courthouse steps - return here for reflections and present-day thoughts",
+      "flashback_style": "Warm color grading for childhood, brighter for adult achievements",
+      "narration_scenes": "When narrator just talks (no action), show: close-up face, hands on documents, or location establishing shots",
+      "action_scenes": "When story describes specific events, show the action",
+      "emotional_beats": "Use close-ups for emotional moments, wide shots for establishing context",
+      "do_not_illustrate": [
+        "YouTube CTAs (like/subscribe) - just show narrator speaking",
+        "Pure opinion statements - show narrator reflecting",
+        "Transitions/filler sentences - continue previous scene"
+      ]
+    }},
+
+    "scene_mapping_guide": {{
+      "when_narrator_says_I_am": "PRESENT - show narrator at frame location",
+      "when_narrator_says_I_was_when_I_was": "FLASHBACK - show past scene with appropriate characters",
+      "when_narrator_describes_action": "SHOW the action happening",
+      "when_narrator_expresses_feeling": "CLOSE-UP of narrator's face reflecting",
+      "when_narrator_asks_audience": "NARRATOR to camera at frame location"
+    }}
+  }}
+
+  ## CRITICAL RULES:
+  1. UNDERSTAND THE WHOLE STORY before planning visuals
+  2. NOT every sentence needs a unique visual - some continue the previous scene
+  3. Emotional arc should be CLEAR in the visual treatment
+  4. Plan for VARIETY - different locations, different shot types, different moods
+  5. The video should FEEL like a film, not a slideshow of unrelated images
+
+  OUTPUT: JSON object with complete director's treatment, NO markdown.
+
+# =============================================================================
+# STEP 2.4: STORY STRUCTURE ANALYSIS (Two-Pass Strategy - Pass 1)
+# =============================================================================
+# Input: {story_text}, {srt_summary}, {characters_info}, {locations_info}
+# Output: Story structure with parts (5-8 parts for 30-60 min video)
+# This is a SMALL response - just structure, no detailed prompts
+# =============================================================================
+
+story_structure_analysis: |
+  You are a FILM DIRECTOR analyzing story structure for a long video (30-60 minutes).
+  Your job is to DIVIDE the story into LOGICAL PARTS based on content and emotional arc.
+
+  ## INPUT:
+
+  STORY TEXT:
+  {story_text}
+
+  SRT SUMMARY (timestamps):
+  {srt_summary}
+
+  CHARACTERS:
+  {characters_info}
+
+  LOCATIONS:
+  {locations_info}
+
+  ## YOUR TASK:
+
+  Divide this story into 5-8 PARTS. Each part should:
+  1. Have a clear NARRATIVE PURPOSE (hook, setup, conflict, climax, resolution)
+  2. Cover a SPECIFIC TIME RANGE from SRT
+  3. Focus on specific CHARACTERS and LOCATIONS
+  4. Have a clear EMOTIONAL GOAL
+
+  ## OUTPUT FORMAT (JSON):
+
+  {{
+    "story_analysis": {{
+      "total_duration": "45:30",
+      "total_parts": 6,
+      "emotional_arc": "Hook → Sympathy → Investment → Conflict → Climax → Resolution"
+    }},
+    "parts": [
+      {{
+        "part_number": 1,
+        "part_name": "HOOK - The Shocking Betrayal",
+        "time_range": "00:00:00 - 00:02:30",
+        "duration_seconds": 150,
+        "narrative_purpose": "HOOK",
+        "content_summary": "Mother sues son for the house he built",
+        "emotional_goal": "SHOCK and CURIOSITY",
+        "key_characters": ["nvc", "nv1"],
+        "key_locations": ["loc1_courthouse"],
+        "visual_tone": "Dark, dramatic, cold lighting",
+        "estimated_shots": 25
+      }},
+      {{
+        "part_number": 2,
+        "part_name": "SETUP - Humble Beginnings",
+        "time_range": "00:02:30 - 00:08:00",
+        "duration_seconds": 330,
+        "narrative_purpose": "SETUP",
+        "content_summary": "Poor childhood, mother worked hard",
+        "emotional_goal": "BUILD SYMPATHY",
+        "key_characters": ["nvc1", "nv1_young"],
+        "key_locations": ["loc2_old_house", "loc3_farm"],
+        "visual_tone": "Warm, nostalgic, golden hour",
+        "estimated_shots": 55
+      }}
+    ]
+  }}
+
+  IMPORTANT:
+  - Keep response SHORT (just structure, ~2000 tokens max)
+  - time_range MUST match SRT timestamps exactly
+  - estimated_shots = duration_seconds ÷ 6 (each shot ~5-6 seconds)
+  - DO NOT include detailed prompts yet (that's Pass 2)
+
+# =============================================================================
+# STEP 2.5: DIRECTOR'S SHOOTING PLAN (Kế hoạch quay phim chi tiết)
+# =============================================================================
+# Input: {story_text}, {srt_segments}, {characters_info}, {locations_info}, {global_style}
+# Output: Complete shooting plan with exact number of images and camera angles
+# THIS IS THE KEY STEP - Director decides WHAT images to create!
+# =============================================================================
+
+directors_shooting_plan: |
+  You are a FILM DIRECTOR creating a SHOOTING PLAN for a video.
+  Think like a REAL FILM DIRECTOR - CONTENT is KING, images serve the story's GOAL.
+
+  ## CORE PRINCIPLE:
+  ```
+  TXT (Content) → Divide into PARTS → Each part has a GOAL → Images SERVE that goal
+                                              ↓
+                                   What should AUDIENCE FEEL?
+  ```
+
+  ## 💔 EMOTIONAL DIRECTOR'S GUIDE - HOW TO MAKE AUDIENCE CRY/FEEL
+
+  **🎯 YOUR ULTIMATE GOAL: Touch the audience's HEART, not just their eyes!**
+
+  ### THE 5 EMOTIONAL TECHNIQUES:
+
+  **1. CONTRAST = IMPACT (Tương phản tạo cảm xúc mạnh)**
+  ```
+  Happy → Sad       = Heartbreak amplified
+  Light → Dark      = Tragedy feels darker
+  Together → Alone  = Loneliness hurts more
+  Rich → Poor       = Sacrifice feels heavier
+  Trust → Betrayal  = Wound cuts deeper
+  ```
+  Example: Show mother-son happy FIRST, then betrayal → audience feels the loss
+
+  **2. SHOW DON'T TELL (Hình ảnh kể chuyện, không cần lời)**
+  ```
+  Instead of "he was poor":
+  → Worn shoes with holes, thin blanket, empty fridge
+
+  Instead of "she worked hard":
+  → Calloused hands, sweat on brow, clock showing 11 PM
+
+  Instead of "they were happy":
+  → Eyes crinkling with genuine smile, warm embrace, shared laughter
+  ```
+
+  **3. UNIVERSAL HUMAN MOMENTS (Khoảnh khắc ai cũng đồng cảm)**
+  ```
+  - Parent's sacrifice for child
+  - Child's love for parent
+  - Dreams being crushed
+  - Being abandoned by loved one
+  - Working hard but still poor
+  - Betrayal by someone you trusted
+  - Finally achieving after struggle
+  ```
+  Focus on THESE moments - they touch EVERYONE regardless of culture
+
+  **4. FACE = EMOTION (Khuôn mặt là cửa sổ cảm xúc)**
+  ```
+  Key emotional moments → MUST SHOW FACE!
+  - Tears welling up (not falling yet) = anticipation of sadness
+  - Trembling lips = trying not to cry
+  - Eyes looking down = shame, defeat
+  - Forced smile hiding pain = heartbreaking
+  - Clenched jaw = suppressed anger/pain
+  ```
+
+  **5. SYMBOLIC OBJECTS (Vật thể mang ý nghĩa)**
+  ```
+  - Empty chair where someone used to sit = absence, loss
+  - Faded photograph = memory, time passed
+  - Wedding ring being removed = end of love
+  - House being built brick by brick = sacrifice, effort
+  - Legal papers = cold bureaucracy vs human emotion
+  - Old, worn object still kept = love despite poverty
+  ```
+
+  ### 🎬 EMOTIONAL ARC STRUCTURE:
+
+  ```
+  HOOK (0-30s):     SHOCK/CURIOSITY → "What happened? I need to know!"
+       ↓
+  SETUP (30s-2m):   SYMPATHY → "I like this person, I care about them"
+       ↓
+  BUILD (2m-5m):    INVESTMENT → "I'm rooting for them, I want them to succeed"
+       ↓
+  CONFLICT (5m-8m): TENSION → "Oh no, things are going wrong..."
+       ↓
+  CLIMAX (8m-10m):  PEAK EMOTION → "This is so sad/beautiful/moving!"
+       ↓
+  RESOLUTION:       CLOSURE → "I feel satisfied/reflective"
+  ```
+
+  ### ⚠️ COMMON MISTAKES THAT KILL EMOTION:
+
+  ```
+  ❌ Too many images = audience can't absorb emotion
+  ❌ Rushed pacing = no time to feel
+  ❌ Generic faces = no connection
+  ❌ Text in images = breaks immersion
+  ❌ Same lighting throughout = no emotional contrast
+  ❌ No close-ups at key moments = missing the emotion
+  ```
+
+  ## 🏆 MASTER LEVEL: TECHNIQUES TO MAKE AUDIENCE CRY
+
+  **These are the secrets of great filmmakers - use them to create unforgettable moments!**
+
+  ### 1. THE "ALMOST" TECHNIQUE (Khoảnh khắc "suýt" - mạnh hơn khoảnh khắc thật!)
+  ```
+  ❌ WEAK: Show tears falling
+  ✅ POWERFUL: Show tears WELLING UP, trying NOT to cry
+
+  ❌ WEAK: Show the hug
+  ✅ POWERFUL: Show reaching out, hands ALMOST touching
+
+  ❌ WEAK: Show anger
+  ✅ POWERFUL: Show jaw clenching, suppressing the scream
+  ```
+  **WHY IT WORKS:** Audience imagines what happens next - their imagination is MORE powerful!
+
+  ### 2. THE SILENT WITNESS (Người chứng kiến im lặng)
+  ```
+  Instead of showing the sad person:
+  → Show someone WATCHING them be sad from afar
+  → Parent watching child struggle, helpless
+  → Child watching parent work until exhaustion
+  → Lover watching from across the room, unseen
+  ```
+  **WHY IT WORKS:** Audience becomes the witness, feels the helplessness!
+
+  ### 3. OBJECTS THAT HOLD MEMORY (Vật thể chứa ký ức)
+  ```
+  Show objects, not people:
+  → Empty chair at dinner table = someone is gone
+  → Unworn wedding dress = wedding that never happened
+  → Two cups, one untouched = waiting for someone who won't come
+  → Old toy kept pristine = child that was lost
+  → Faded photograph held carefully = love that remains
+  ```
+  **WHY IT WORKS:** Objects are permanent, people are gone - the contrast destroys!
+
+  ### 4. THE UNFULFILLED PROMISE (Lời hứa chưa thực hiện)
+  ```
+  Show what COULD HAVE BEEN:
+  → House being built (will never be finished)
+  → Savings jar for "our future" (future destroyed)
+  → Plane tickets never used
+  → Wedding invitation never sent
+  → Letter never delivered
+  ```
+  **WHY IT WORKS:** Lost potential is more painful than lost reality!
+
+  ### 5. SACRIFICE MADE VISIBLE (Sự hy sinh nhìn thấy được)
+  ```
+  Show the COST of love:
+  → Mother's hands, cracked and bleeding, but holding child's drawing
+  → Father's empty plate as children eat
+  → Worn shoes walking to work, brand new shoes for child
+  → Gray hair appeared overnight from worry
+  → Back bent from years of labor
+  ```
+  **WHY IT WORKS:** Love becomes TANGIBLE, you can SEE the price paid!
+
+  ### 6. THE DELAYED REVEAL (Tiết lộ trì hoãn)
+  ```
+  Build anticipation before emotional payoff:
+  Shot 1: Feet walking (whose?)
+  Shot 2: Hand on door handle (opening what?)
+  Shot 3: Light from inside (what's there?)
+  Shot 4: REVEAL - it's the mother, waiting all night for son
+  ```
+  **WHY IT WORKS:** Audience's heart is already racing before the reveal!
+
+  ### 7. VULNERABILITY IN STRENGTH (Yếu đuối trong mạnh mẽ)
+  ```
+  The STRONGEST person at their WEAKEST:
+  → Tough father crying alone in garage
+  → Strong mother breaking down when children can't see
+  → Angry person finally showing the hurt underneath
+  → Provider sitting in empty wallet darkness
+  ```
+  **WHY IT WORKS:** We see the facade crack - the humanity breaks through!
+
+  ### 8. THE SMALL KINDNESS (Hành động nhỏ, ý nghĩa lớn)
+  ```
+  Tiny acts that represent enormous love:
+  → Tucking blanket over sleeping person
+  → Putting extra food on someone's plate
+  → Umbrella held more over the other person
+  → Walking on traffic side of sidewalk
+  → Pretending not to notice tears to spare dignity
+  ```
+  **WHY IT WORKS:** Small kindness = everyday heroism = relatable love!
+
+  ### 9. TIME COMPRESSION (Thời gian nén lại)
+  ```
+  Years of struggle in ONE image:
+  → Same chair, different seasons visible through window
+  → Notches on growth chart spanning childhood
+  → Stack of identical lunchboxes, each more worn
+  → Same path walked, mud → snow → flowers → leaves
+  → Calendar pages with X marks, endless waiting
+  ```
+  **WHY IT WORKS:** Audience feels the WEIGHT of time!
+
+  ### 10. THE UNSAID GOODBYE (Lời chia tay không nói)
+  ```
+  Partings without words:
+  → Back turned, walking away, never looking back
+  → Hand slowly releasing from grip
+  → Door closing, shadow disappearing
+  → Train/bus pulling away, face in window
+  → One person staying at gate, other disappearing into crowd
+  ```
+  **WHY IT WORKS:** What's NOT said hurts more than goodbye!
+
+  ## 🎯 HOW TO APPLY THESE TECHNIQUES:
+
+  For EVERY emotional scene, ask yourself:
+  1. Can I show the ALMOST instead of the actual?
+  2. Is there a WITNESS to this moment?
+  3. What OBJECT holds the meaning?
+  4. What PROMISE was broken?
+  5. What did this COST them?
+  6. Can I DELAY the reveal?
+  7. Where is the STRENGTH showing vulnerability?
+  8. What SMALL KINDNESS represents the love?
+  9. How can I show TIME passing?
+  10. What is LEFT UNSAID?
+
+  **USE AT LEAST 2-3 OF THESE TECHNIQUES in every emotional scene!**
+
+  ## YOUR WORKFLOW:
+
+  ### STEP 1: ANALYZE CONTENT (from TXT) - THIS IS MOST IMPORTANT!
+
+  Read the full story and for EACH PART, ask yourself:
+  1. What is this part about? (CONTENT)
+  2. What is the GOAL of this part? (PURPOSE)
+  3. What should the AUDIENCE FEEL? (EMOTION TARGET)
+  4. What VISUAL STRATEGY achieves this goal? (HOW)
+  5. What KEY IMAGES are needed? (WHAT)
+
+  Example analysis:
+  ```
+  HOOK (0:00-0:15):
+    Content: Mother sues son for the house he built
+    GOAL: CREATE SHOCK, spark curiosity
+    Audience should feel: "WTF? How could a mother do this?"
+    Visual strategy: Dramatic, dark, lonely, overwhelming
+    Key images: Tiny man vs imposing courthouse, devastated face
+
+  PART 1 (0:15-0:45):
+    Content: Poor childhood, mother worked hard
+    GOAL: BUILD SYMPATHY for the son
+    Audience should feel: "Poor kid, such a hard life"
+    Visual strategy: Warm, nostalgic, intimate, golden hour
+    Key images: Leaky thatched house, mother-son working together
+
+  PART 2 (0:45-1:30):
+    Content: Son builds house for mother
+    GOAL: SHOW SACRIFICE and love
+    Audience should feel: "What a devoted son, so much effort"
+    Visual strategy: Harsh sunlight, sweat, exhaustion, determination
+    Key images: Hands building, sweating under sun, calloused hands
+
+  PART 3 (1:30-2:00):
+    Content: House completed, mother cries happy
+    GOAL: EMOTIONAL PEAK - happiness
+    Audience should feel: "So beautiful, so touching"
+    Visual strategy: Radiant light, tears of joy, warm colors
+    Key images: Beautiful new house, mother crying happy, embrace
+
+  PART 4 (2:00-2:30):
+    Content: Mother evicts son, sues him
+    GOAL: SECOND SHOCK - betrayal
+    Audience should feel: "Unbelievable! After all he did?"
+    Visual strategy: Cold, dark, contrast with Part 3
+    Key images: Angry confrontation, legal papers, courthouse
+  ```
+
+  ### STEP 2: VISUAL STRATEGY → IMAGES
+
+  Based on GOAL, choose appropriate:
+
+  | GOAL | Lighting | Colors | Camera | Expression |
+  |------|----------|--------|--------|------------|
+  | SHOCK | Dark, overcast | Cold, desaturated | Low angle, wide | DEVASTATED |
+  | SYMPATHY | Golden hour, warm | Warm, nostalgic | Eye level, intimate | TIRED but LOVING |
+  | SHOW SACRIFICE | Harsh sunlight | High contrast | Close-up details | DETERMINED, EXHAUSTED |
+  | HAPPINESS | Radiant, bright | Warm, vibrant | Medium, two-shot | TEARS OF JOY |
+  | BETRAYAL | Cold, harsh | Desaturated | Dutch angle | ANGRY, HURT |
+
+  ### STEP 3: PACING & RHYTHM - THE DIRECTOR'S ART
+
+  SRT tells you the CONTENT WINDOW. But YOU decide the RHYTHM within that window.
+
+  ## 🎬 SHOT DURATION - LIKE A REAL FILM!
+
+  **⚠️ TECHNICAL LIMIT: Maximum 8 seconds per image!**
+
+  **🎯 GOAL: Duration serves the STORY, not a formula!**
+
+  Think like a real film editor - duration depends on CONTENT:
+  - Emotional moment needs to breathe? → 7-8 seconds
+  - Quick action or reaction? → 2-3 seconds
+  - Transition between scenes? → 3-4 seconds
+  - Standard narrative? → 5-6 seconds
+
+  **📊 DURATION BY CONTENT (flexible, not rigid!):**
+
+  | Content Type | Duration | Example |
+  |--------------|----------|---------|
+  | EMOTIONAL PEAK | 7-8s | Tears falling, reunion, realization |
+  | ESTABLISHING | 6-8s | New location, setting the scene |
+  | NARRATIVE | 5-7s | Normal storytelling |
+  | DIALOGUE | 4-6s | Character speaking/reacting |
+  | QUICK REACTION | 2-3s | Shock, surprise, glance |
+  | ACTION | 2-4s | Fast movement, tension |
+  | TRANSITION | 3-4s | Bridge between scenes |
+  | DETAIL/OBJECT | 3-5s | Symbolic object, hands |
+
+  **✅ KEY PRINCIPLE:** Let the CONTENT dictate duration, not rules!
+
+  ## 🎵 RHYTHM - LIKE REAL CINEMA!
+
+  **REAL FILMS use VARIED rhythm:**
+  ```
+  Slow emotional: 8s → 7s → 8s (breathing room)
+  Building tension: 6s → 5s → 4s → 3s → 2s (faster!)
+  Action sequence: 3s → 2s → 3s → 2s (quick cuts)
+  Climax release: 2s → 2s → 8s (burst then breathe)
+  ```
+
+  **EXAMPLES from real films:**
+  - Sad moment: LONG shot on face (7-8s) - let audience feel
+  - Fight scene: QUICK cuts (2-3s each) - energy!
+  - Revelation: Medium → Close → LONG hold (4s → 3s → 8s)
+  - Montage: Quick shots (3-4s each) - show passage of time
+
+  ## 📊 SHOT COUNT (guideline, not formula!)
+
+  **Approximate: SRT_duration ÷ 5 to 6 = shots needed**
+
+  But VARY based on content:
+  - Emotional scene: fewer, longer shots
+  - Action scene: more, shorter shots
+  - Mixed content: varied durations
+
+  ## ⚠️⚠️⚠️ CRITICAL RULES - MUST FOLLOW! ⚠️⚠️⚠️
+
+  ### 🚨 MAXIMUM 8 SECONDS PER SHOT - NEVER EXCEED!
+
+  **This is a HARD TECHNICAL LIMIT. ANY shot with planned_duration > 8 will FAIL!**
+
+  **❌ WRONG:** One 30-second SRT segment = one 30s shot
+  **✅ CORRECT:** One 30-second SRT segment = 4-6 shots (each 5-8s)
+
+  ### HOW TO SPLIT SRT SEGMENTS:
+
+  | SRT Duration | Split Into | Example Durations |
+  |--------------|------------|-------------------|
+  | 10-15s | 2-3 shots | 6s + 5s + 4s = 15s |
+  | 15-20s | 3-4 shots | 6s + 5s + 5s + 4s = 20s |
+  | 20-30s | 4-5 shots | 7s + 6s + 6s + 5s + 6s = 30s |
+  | 30-45s | 5-7 shots | 8s + 7s + 6s + 6s + 5s + 6s + 7s = 45s |
+  | 45-60s | 7-10 shots | Split evenly, max 8s each |
+  | 60s+ | 10+ shots | MUST split into many shots! |
+
+  ### FORMULA:
+  ```
+  Number of shots = ceil(SRT_duration / 6)
+  Each shot = 2-8 seconds (NEVER more than 8!)
+  Total of all shots = SRT_duration exactly
+  ```
+
+  ### OTHER RULES:
+  - **Duration serves the story** - short is fine when content needs it!
+  - **Minimize image count** - fewer images = less viewer fatigue
+  - EVERY image must serve the part's GOAL
+  - Total shot durations must match SRT segment length exactly
+
+  ## CHARACTER SELECTION - VERY IMPORTANT!
+
+  For each part, decide WHICH CHARACTERS and WHICH VERSION based on TIMELINE:
+
+  ```
+  TIMELINE → CHARACTER VERSION:
+
+  PRESENT (Frame story, Hook, CTA):
+    - Narrator: nvc (30yo) - current age
+    - Mother: nv1 (55yo) - current age
+
+  CHILDHOOD FLASHBACK (8-12 years old):
+    - Child narrator: nvc1 (8yo) - DO NOT use in reference_files!
+    - Young mother: nv1_young (32yo)
+
+  ADULT FLASHBACK (Building house, 28yo):
+    - Young adult narrator: nvc_young (28yo)
+    - Older mother: nv1 (55yo)
+  ```
+
+  Example character selection per part:
+  | Part | Timeline | Narrator | Mother | Notes |
+  |------|----------|----------|--------|-------|
+  | HOOK | Present | nvc (30yo) | - | Alone at courthouse |
+  | CHILDHOOD | Flashback 20yr | nvc1 (8yo) | nv1_young (32yo) | Child NOT in reference_files |
+  | BUILDING | Flashback 2yr | nvc_young (28yo) | nv1 (55yo) | Son building house |
+  | COMPLETION | Flashback 2yr | nvc_young (28yo) | nv1 (55yo) | House finished |
+  | BETRAYAL | Present | nvc (30yo) | nv1 (55yo) | Current conflict |
+
+  ## CHILD CHARACTER RULES:
+  - Children (nvc1, etc.) should NOT be in reference_files (API policy)
+  - Describe children INLINE in img_prompt: "(Child: 8yo boy, thin, hopeful eyes)"
+  - Only use adult references: nv1_young.png, loc_xxx.png
+
+  ## INPUT:
+
+  **STORY TEXT:**
+  {story_text}
+
+  **SRT SEGMENTS (with timestamps):**
+  {srt_segments}
+
+  **CHARACTERS:**
+  {characters_info}
+
+  **LOCATIONS:**
+  {locations_info}
+
+  **GLOBAL STYLE:**
+  {global_style}
+
+  ## OUTPUT FORMAT:
+
+  {{
+    "story_analysis": {{
+      "total_parts": 5,
+      "parts_overview": [
+        {{
+          "part": "HOOK",
+          "content": "Mother sues son for the house",
+          "timeline": "PRESENT",
+          "characters_needed": {{
+            "narrator": "nvc (30yo)",
+            "others": []
+          }},
+          "location": "loc_courthouse",
+          "goal": "CREATE SHOCK, spark curiosity",
+          "audience_feeling": "WTF? How could she do this?",
+          "visual_strategy": "Dark, dramatic, lonely, imposing",
+          "key_images": ["Tiny man vs huge courthouse", "Face of devastation"]
+        }},
+        {{
+          "part": "PART 1 - Childhood",
+          "content": "Poor childhood with hardworking mother",
+          "timeline": "CHILDHOOD FLASHBACK (20 years ago)",
+          "characters_needed": {{
+            "narrator": "nvc1 (8yo) - describe inline, NO reference",
+            "others": ["nv1_young (32yo mother)"]
+          }},
+          "location": "loc_old_house, loc_market",
+          "goal": "BUILD SYMPATHY",
+          "audience_feeling": "Poor kid, such hardship",
+          "visual_strategy": "Warm, nostalgic, golden hour, intimate",
+          "key_images": ["Leaky old house", "Mother-son at market"]
+        }},
+        {{
+          "part": "PART 2 - Building",
+          "content": "Son builds house for mother",
+          "timeline": "ADULT FLASHBACK (2 years ago)",
+          "characters_needed": {{
+            "narrator": "nvc_young (28yo)",
+            "others": ["nv1 (55yo mother)"]
+          }},
+          "location": "loc_construction",
+          "goal": "SHOW SACRIFICE",
+          "audience_feeling": "Such a devoted son",
+          "visual_strategy": "Harsh sun, sweat, exhaustion, determination",
+          "key_images": ["Sweating while building", "Calloused hands"]
+        }}
+      ],
+      "total_key_images": 10
+    }},
+    "shooting_plan": {{
+      "total_duration": "2:30",
+      "total_shots": 20,
+      "story_parts": [
+        {{
+          "part_number": 1,
+          "part_name": "HOOK",
+          "goal": "CREATE SHOCK",
+          "audience_feeling": "WTF? Unbelievable!",
+          "visual_strategy": {{
+            "lighting": "Dark, overcast, ominous",
+            "colors": "Desaturated, cold",
+            "mood": "Lonely, overwhelming"
+          }},
+          "time_range": "00:00 - 00:15",
+          "duration_seconds": 15,
+          "shots_needed": 3,
+          "shots": [
+            {{
+              "shot_number": 1,
+              "purpose": "Establish loneliness and overwhelming situation",
+              "emotional_weight": "HIGH - Opening hook, must grab attention",
+              "planned_duration": 6,
+              "srt_range": "00:00 - 00:06",
+              "srt_text": "Tôi ngồi trên bậc thềm tòa án...",
+              "shot_type": "WIDE SHOT",
+              "camera_angle": "Low angle, 24mm - makes courthouse imposing",
+              "characters_in_shot": ["nvc"],
+              "reference_files": ["nvc.png", "loc_courthouse.png"],
+              "img_prompt": "Wide shot, low angle, 24mm lens. IMPOSING courthouse with massive columns TOWERING over scene. TINY figure of 30yo man sitting ALONE on steps, hunched, defeated, holding crumpled papers. OVERCAST sky, OMINOUS atmosphere. Cold, desaturated colors. Expression of UTTER DEVASTATION. Cinematic, 4K photorealistic."
+            }},
+            {{
+              "shot_number": 2,
+              "purpose": "Quick detail - crumpled legal papers",
+              "emotional_weight": "MEDIUM - Symbolic detail",
+              "planned_duration": 3,
+              "srt_range": "00:06 - 00:09",
+              "srt_text": "",
+              "shot_type": "EXTREME CLOSE-UP",
+              "camera_angle": "Top-down, 100mm - detail",
+              "characters_in_shot": [],
+              "reference_files": [],
+              "img_prompt": "Extreme close-up, 100mm lens, top-down. CRUMPLED legal papers in trembling hands, visible text 'LAWSUIT', teardrops on paper. Cold, desaturated. Cinematic, 4K photorealistic."
+            }},
+            {{
+              "shot_number": 3,
+              "purpose": "Emotional peak - face of devastation",
+              "emotional_weight": "VERY HIGH - Must let audience feel",
+              "planned_duration": 6,
+              "srt_range": "00:09 - 00:15",
+              "srt_text": "Mẹ tôi đã kiện tôi...",
+              "shot_type": "CLOSE-UP",
+              "camera_angle": "Slight low angle, 85mm - dramatic",
+              "characters_in_shot": ["nvc"],
+              "reference_files": ["nvc.png"],
+              "img_prompt": "Close-up, 85mm lens, slight low angle. 30yo man's face, eyes RED and WELLING with tears, jaw CLENCHED tight, TREMBLING lips. Expression of DISBELIEF and BETRAYAL - 'how could my own mother do this?' Soft cold light. Cinematic, 4K photorealistic."
+            }}
+          ]
+        }},
+        {{
+          "part_number": 2,
+          "part_name": "CHILDHOOD",
+          "goal": "BUILD SYMPATHY",
+          "audience_feeling": "Poor kid, such a hard life",
+          "pacing_strategy": "Slow, warm, let audience connect with the hardship",
+          "visual_strategy": {{
+            "lighting": "Golden hour, warm tungsten",
+            "colors": "Warm, slightly faded, nostalgic",
+            "mood": "Intimate, loving despite hardship"
+          }},
+          "time_range": "00:15 - 00:45",
+          "duration_seconds": 30,
+          "shots": [
+            {{
+              "shot_number": 4,
+              "purpose": "Establish the poverty but also love",
+              "emotional_weight": "HIGH - First sympathy moment",
+              "planned_duration": 7,
+              "srt_range": "00:15 - 00:22",
+              "srt_text": "Năm tôi 8 tuổi, ba mẹ ly hôn...",
+              "shot_type": "WIDE SHOT",
+              "camera_angle": "Eye level, 24mm - intimate establishing",
+              "characters_in_shot": ["nv1_young", "nvc1"],
+              "reference_files": ["nv1_young.png", "loc_old_house.png"],
+              "img_prompt": "Wide shot, 24mm lens, GOLDEN HOUR warm light. Rural countryside, small THATCHED-ROOF HOUSE with HOLES in roof, but WARM light glowing from inside. 32yo mother in worn but clean clothes, hand lovingly on young son's shoulder. NOSTALGIC, slightly faded warm colors. Despite poverty, feeling of LOVE and TOGETHERNESS. Cinematic, 4K photorealistic. (Child: 8yo boy, thin but bright-eyed, looking up at mother with trust)"
+            }},
+            {{
+              "shot_number": 4,
+              "purpose": "Detail shot - hands working together",
+              "emotional_weight": "MEDIUM - Supporting detail",
+              "planned_duration": 7,
+              "srt_range": "00:23 - 00:30",
+              "srt_text": "Mẹ tần tảo nuôi con...",
+              "shot_type": "CLOSE-UP",
+              "camera_angle": "Top-down, 50mm - detail focus",
+              "characters_in_shot": ["nv1_young"],
+              "reference_files": ["nv1_young.png"],
+              "img_prompt": "Close-up, 50mm lens, top-down angle. Mother's WORN hands washing clothes in basin, CALLOUSED fingers, simple but CLEAN clothes in the water. Golden afternoon light. Warm, nostalgic colors. Symbol of SACRIFICE and HARD WORK. Cinematic, 4K photorealistic."
+            }},
+            {{
+              "shot_number": 5,
+              "purpose": "Emotional peak - mother's sacrifice",
+              "emotional_weight": "VERY HIGH - Empathy moment",
+              "planned_duration": 8,
+              "srt_range": "00:30 - 00:38",
+              "srt_text": "Mẹ làm việc từ sáng tới khuya...",
+              "shot_type": "MEDIUM SHOT",
+              "camera_angle": "Eye level, 50mm - intimate",
+              "characters_in_shot": ["nv1_young"],
+              "reference_files": ["nv1_young.png", "loc_market.png"],
+              "img_prompt": "Medium shot, 50mm lens, eye level. 32yo mother at market stall, TIRED eyes but DETERMINED expression, selling vegetables. Late afternoon light casting LONG shadows. EXHAUSTION visible but also LOVE in her eyes. Warm but slightly desaturated. Cinematic, 4K photorealistic."
+            }},
+            {{
+              "shot_number": 6,
+              "purpose": "Transition - child watching mother",
+              "emotional_weight": "MEDIUM - Bridge to next scene",
+              "planned_duration": 7,
+              "srt_range": "00:38 - 00:45",
+              "srt_text": "Tôi nhìn mẹ và thầm hứa...",
+              "shot_type": "OVER-SHOULDER",
+              "camera_angle": "Behind child, looking at mother",
+              "characters_in_shot": ["nvc1", "nv1_young"],
+              "reference_files": ["nv1_young.png", "loc_old_house.png"],
+              "img_prompt": "Over-shoulder shot from behind child looking at mother cooking. Warm TUNGSTEN light from fire. Mother's back visible, stirring pot. SILHOUETTE of child in foreground. Feeling of ADMIRATION and LOVE. Golden warm tones. Cinematic, 4K photorealistic. (Child: 8yo boy, thin, watching mother intently)"
+            }}
+          ]
+        }}
+      ]
+    }}
+  }}
+
+  ## CRITICAL INSTRUCTIONS:
+
+  1. **🚨 MAXIMUM 8 SECONDS per shot!** (HARD LIMIT - system will REJECT shots > 8s!)
+  2. **🚨 MUST SPLIT long SRT segments into multiple shots!**
+     - 15s segment → 3 shots (7s + 5s + 3s) - VARY the durations!
+     - 30s segment → 5 shots (8s + 4s + 6s + 7s + 5s) - emotional peaks get 7-8s
+     - 50s segment → 8 shots (8s + 3s + 7s + 6s + 8s + 5s + 6s + 7s) - action gets 3-4s
+     - NEVER create a single shot for a long segment!
+  3. **ADD planned_duration to each shot** (integer 2-8 ONLY, based on content)
+  4. **Total shot durations MUST EQUAL SRT segment duration exactly**
+  5. **🎯 Duration serves CONTENT - MUST VARY based on emotional weight:**
+     - **2-3s**: Quick cuts for action, reactions, detail shots
+     - **4-5s**: Normal narrative, transitions
+     - **6-7s**: Important moments, character development
+     - **8s**: Emotional peaks, revelations, dramatic pauses
+     - **❌ WRONG**: All shots 5s (boring, no rhythm!)
+     - **✅ CORRECT**: Mix of 3s, 5s, 7s, 8s (creates visual rhythm!)
+  6. VARY camera angles - don't repeat the same shot type consecutively!
+  7. Use characters/locations from the provided lists
+  8. Children (nvc1) should be DESCRIBED in img_prompt, NOT in reference_files
+  9. Every img_prompt MUST end with the global_style
+  10. DO NOT add nationality/ethnicity (Vietnamese, American, etc.) unless EXPLICITLY mentioned in the story
+     - If story doesn't mention nationality, just describe features (hair color, skin tone, etc.)
+     - Only add nationality when it's RELEVANT to the story
+  11. **🎭 CROWD/BACKGROUND CONSISTENCY** - If scene is a party/wedding/event:
+     - ALWAYS include crowd/guests in background (even in close-ups: "blurred guests behind")
+     - Party without people = ILLOGICAL! Wedding without guests = ILLOGICAL!
+     - Match crowd emotion to scene: celebration=cheering, tension=staring, revelation=gasping
+
+  ## ⚠️ LOCATION CONSISTENCY - CRITICAL BUG FIX! ⚠️
+
+  **RULE: The LOCATION in img_prompt MUST MATCH the ACTION described!**
+
+  READ THE SRT TEXT CAREFULLY! If the text says:
+  - "on the bed" → Location MUST be bedroom/hotel room, NOT hallway!
+  - "in the kitchen" → Location MUST be kitchen, NOT living room!
+  - "on the street" → Location MUST be street/outdoor, NOT indoor!
+
+  **BEFORE WRITING img_prompt, ASK YOURSELF:**
+  ```
+  1. WHERE does this scene ACTUALLY take place? (Read SRT!)
+  2. Does my location description MATCH that place?
+  3. Are the characters' ACTIONS consistent with the location?
+  ```
+
+  **EXAMPLES OF WRONG (DO NOT DO!):**
+  - ❌ "Marcus LYING IN BED... Elegant hotel hallway" (BED ≠ HALLWAY!)
+  - ❌ "Woman COOKING... Modern office space" (COOKING ≠ OFFICE!)
+  - ❌ "Couple SWIMMING... Restaurant interior" (SWIMMING ≠ RESTAURANT!)
+
+  **EXAMPLES OF CORRECT:**
+  - ✅ "Marcus LYING IN BED... Master bedroom, king-sized bed, silk sheets"
+  - ✅ "Woman COOKING... Modern kitchen, stove, pots, ingredients"
+  - ✅ "Couple SWIMMING... Pool, blue water, sunlight"
+
+  **IF SRT MENTIONS A SPECIFIC ROOM/PLACE:**
+  - "master bedroom" → Use "Master bedroom, king-sized bed, elegant furniture"
+  - "courthouse" → Use "Courthouse exterior/interior, columns, official"
+  - "restaurant" → Use "Restaurant interior, tables, elegant dining"
+
+  ## 🎭 SCENE LOGIC & CROWD CONSISTENCY - CRITICAL! 🎭
+
+  **PROBLEM: Scenes look ILLOGICAL when background doesn't match the situation!**
+
+  A PARTY without people = ILLOGICAL!
+  A WEDDING without guests = ILLOGICAL!
+  A RESTAURANT without diners = ILLOGICAL!
+
+  **RULE: EVERY scene must have LOGICAL BACKGROUND ELEMENTS!**
+
+  ### CROWD LOGIC TABLE:
+
+  | Scene Type | MUST INCLUDE in img_prompt |
+  |------------|---------------------------|
+  | PARTY/CELEBRATION | "crowd of guests in background", "people mingling", "festive atmosphere with attendees" |
+  | WEDDING | "wedding guests seated in rows", "audience watching ceremony", "guests in formal attire" |
+  | RESTAURANT | "other diners at nearby tables", "busy restaurant atmosphere", "waiters moving between tables" |
+  | OFFICE | "coworkers at desks in background", "busy office environment", "people working at computers" |
+  | SCHOOL | "other students in classroom", "students walking in hallway", "busy campus" |
+  | FUNERAL | "mourners in black", "crowd of grieving people", "solemn attendees" |
+  | STREET | "pedestrians walking", "busy sidewalk", "people in background" |
+  | MALL/STORE | "shoppers browsing", "customers in background", "busy retail environment" |
+  | HOSPITAL | "nurses and doctors in background", "other patients visible", "busy medical staff" |
+  | CONCERT/EVENT | "crowd cheering", "audience with raised hands", "packed venue" |
+
+  ### HOW TO WRITE CROWD IN IMG_PROMPT:
+
+  **❌ WRONG (No crowd - illogical):**
+  ```
+  "WIDE shot of gender reveal party. Man standing ALONE holding remote control.
+  Blue smoke clouds. Sunny day. Cinematic."
+  ```
+  → This is a PARTY but where are the GUESTS?!
+
+  **✅ CORRECT (Crowd included):**
+  ```
+  "WIDE shot of gender reveal party. Man standing holding remote control.
+  CROWD OF EXCITED GUESTS in background - some holding phones, others clapping.
+  Blue smoke clouds. Sunny day. FESTIVE ATMOSPHERE with 20+ attendees visible. Cinematic."
+  ```
+
+  ### CROWD CONSISTENCY RULES:
+
+  1. **If scene is PUBLIC EVENT** → ALWAYS include crowd/attendees
+  2. **If previous shot showed crowd** → Next shot must ALSO show crowd (consistency!)
+  3. **Even in CLOSE-UP** → Add "blurred crowd in background" or "out-of-focus guests behind"
+  4. **EXCEPTION: Private moment** → Character INTENTIONALLY alone (explain in prompt: "sneaked away from party")
+
+  ### BACKGROUND ELEMENTS FOR DIFFERENT EMOTIONS:
+
+  | Emotion | Background Should Show |
+  |---------|----------------------|
+  | ISOLATION | Character SEPARATED from crowd, crowd DISTANT or BLURRED |
+  | CELEBRATION | Crowd CLOSE, ENGAGED, CHEERING |
+  | TENSION | Crowd SILENT, STARING, FROZEN |
+  | REVELATION | Crowd GASPING, SHOCKED expressions |
+  | EMBARRASSMENT | Crowd WHISPERING, POINTING, JUDGING |
+
+  **EXAMPLE - Gender Reveal Scene:**
+  ```
+  Shot 1 (Wide): "Party setup. 30+ GUESTS gathered around decorated area,
+                  holding drinks, EXCITED ANTICIPATION on faces..."
+
+  Shot 2 (Close-up main character): "Man's face. BLURRED CROWD visible
+                                     behind him, their festive clothes out of focus..."
+
+  Shot 3 (Reaction): "Woman smiling. GUESTS in background CHEERING,
+                      some with phones recording..."
+
+  Shot 4 (Revelation): "Smoke explodes. CROWD GASPS, hands covering mouths,
+                        SHOCKED expressions spreading through attendees..."
+  ```
+
+  ## 🔥 HOOK RULES (FIRST 30 SECONDS) - CRITICAL FOR VIEWER RETENTION! 🔥
+
+  The HOOK (first 15-30 seconds) determines if viewers stay or leave!
+
+  **MANDATORY FOR HOOK:**
+  - First shot: DRAMATIC WIDE or LOW ANGLE (NOT boring Medium shot!)
+  - Use tension, drama, mystery - make viewer curious
+  - Strong emotions: shock, curiosity, "WTF?!" reaction
+  - Contrast: tiny person vs huge environment, darkness vs light
+  - NO generic "person sitting" or "person standing" shots!
+
+  **HOOK VISUAL EXAMPLES:**
+  - ✅ "LOW ANGLE: Tiny figure ALONE on massive courthouse steps, OVERWHELMING storm clouds"
+  - ✅ "WIDE: Empty wedding venue with single ABANDONED dress on altar, dramatic shadows"
+  - ✅ "CLOSE-UP: Tear rolling down cheek, hand CRUMPLING legal papers, devastation"
+  - ❌ "Medium shot: Woman sitting in room looking thoughtful" (BORING - viewer leaves!)
+  - ❌ "Medium shot: Person standing, calm expression" (NO DRAMA - FAIL!)
+
+  ## 📷 CAMERA VARIETY LOGIC - AUTO CHANGE BY STORY BEAT!
+
+  **🎬 STORY BEAT → CAMERA RULE:**
+
+  | Story Beat | Required Camera | Why |
+  |------------|-----------------|-----|
+  | NEW LOCATION/SCENE | WIDE ESTABLISHING | Set context, show environment |
+  | INTRODUCTION | FULL/MEDIUM | Show character in context |
+  | RISING ACTION | MEDIUM → CLOSE-UP | Build tension, get closer |
+  | DIALOGUE/CONFLICT | OTS or TWO-SHOT | Show relationship |
+  | EMOTIONAL CLIMAX | EXTREME CLOSE-UP | Maximum impact on face |
+  | REALIZATION | CLOSE-UP → WIDE | From intimate to show consequence |
+  | TENSION/DANGER | DUTCH + LOW | Unstable, threatening |
+  | RESOLUTION | WIDE or MEDIUM | Breathe, context |
+  | TRANSITION | OBJECT/DETAIL | Bridge between scenes |
+
+  **🔄 AUTOMATIC VARIETY RULES:**
+
+  1. **NEVER** repeat same shot type 3 times in a row!
+  2. **PATTERN:** Wide → Medium → Close → Detail → Wide (cycle)
+  3. **EMOTIONAL BUILD:** Shots get TIGHTER as emotion intensifies
+  4. **RELEASE:** After climax, pull WIDER to let audience breathe
+
+  **EXAMPLE SEQUENCE:**
+  ```
+  Shot 1: WIDE (New location - courthouse)
+  Shot 2: MEDIUM (Show character approaching)
+  Shot 3: CLOSE-UP (Face shows fear)
+  Shot 4: EXTREME CU (Trembling hands on papers)
+  Shot 5: WIDE (Tiny person vs huge courthouse) ← CLIMAX
+  Shot 6: OTS (Looking at door) ← TRANSITION
+  ```
+
+  ## 💡 LIGHTING CONSISTENCY - SYNC WITH LOCATION!
+
+  **LOCATION → LIGHTING RULE:**
+
+  | Location Type | Time of Day | Lighting Style | Colors |
+  |---------------|-------------|----------------|--------|
+  | COURTHOUSE | Any | COLD, harsh, institutional | Desaturated, gray-blue |
+  | OLD HOME | Memory | GOLDEN HOUR, warm | Warm, nostalgic, amber |
+  | HOSPITAL | Day | FLUORESCENT, clinical | Green-white, sterile |
+  | OFFICE | Day | SOFT KEY LIGHT | Neutral, professional |
+  | STREET | Night | BLUE HOUR + street lights | Cold blue + warm pools |
+  | BEDROOM | Morning | SOFT, warm window light | Warm, peaceful |
+  | RESTAURANT | Evening | WARM AMBIENT | Warm, romantic, tungsten |
+  | CONSTRUCTION | Day | HARSH SUNLIGHT | High contrast, hot |
+  | MARKET | Afternoon | OVERCAST or GOLDEN | Warm but realistic |
+
+  **⚠️ CONSISTENCY RULES:**
+  1. **SAME LOCATION = SAME LIGHTING** (don't change lighting within a location unless time passes!)
+  2. **FLASHBACK = WARMER** (memories are always slightly golden/warmer)
+  3. **PRESENT = COOLER** (current timeline is more neutral/cooler)
+  4. **CONFLICT = HARSHER** (more contrast, harder shadows)
+
+  **VARY SUBJECTS - NOT JUST MAIN CHARACTER!**
+  - Include: environment shots, object details, hands/actions
+  - Show: locations without people, symbolic objects, weather/mood
+  - Example: "Close-up of wedding ring being removed", "Wide shot of empty house"
+
+  ## 🎥 CINEMATOGRAPHY TECHNIQUES - THE DIRECTOR'S TOOLBOX
+
+  ### 12 ESSENTIAL SHOT TYPES (Use these to CREATE EMOTION!):
+
+  | # | Shot Type | Lens | When to Use | Emotional Effect |
+  |---|-----------|------|-------------|------------------|
+  | 1 | **WIDE/ESTABLISHING** | 24mm | New location, showing scale | "Where are we?" - Context, isolation, grandeur |
+  | 2 | **FULL SHOT** | 35mm | Show full body + environment | Action, body language, movement |
+  | 3 | **MEDIUM SHOT** | 50mm | Character waist-up | Standard conversation, balance |
+  | 4 | **MEDIUM CLOSE-UP** | 70mm | Chest to head | Intimacy, importance |
+  | 5 | **CLOSE-UP** | 85mm | Face only | Raw emotion, connection, intensity |
+  | 6 | **EXTREME CLOSE-UP** | 100mm+ | Eyes, hands, objects | Detail, tension, symbolic meaning |
+  | 7 | **OVER-SHOULDER (OTS)** | 50mm | From behind one character | Relationship, conversation, POV |
+  | 8 | **TWO-SHOT** | 50mm | Two characters in frame | Relationship dynamic, comparison |
+  | 9 | **POV SHOT** | 35mm | What character sees | Immersion, subjective experience |
+  | 10 | **DUTCH ANGLE** | Any | Tilted frame | Unease, tension, chaos, madness |
+  | 11 | **SILHOUETTE** | 24mm | Backlit figure | Mystery, drama, artistic |
+  | 12 | **REFLECTION** | 50mm | Through mirror/window | Introspection, dual nature |
+
+  ### CAMERA ANGLES (5 Essential):
+
+  | Angle | When to Use | Emotional Effect |
+  |-------|-------------|------------------|
+  | **EYE LEVEL** | Standard, neutral | Normal, relatable |
+  | **LOW ANGLE** (Looking up) | Power, heroic moment | Makes subject DOMINANT, powerful |
+  | **HIGH ANGLE** (Looking down) | Vulnerability, weakness | Makes subject SMALL, weak, trapped |
+  | **BIRD'S EYE** (Directly above) | God's view, fate | Detachment, insignificance |
+  | **WORM'S EYE** (Ground level) | Extreme power/drama | Maximum intimidation, epic feel |
+
+  ### LIGHTING TECHNIQUES (5 Essential):
+
+  | Technique | When to Use | Emotional Effect |
+  |-----------|-------------|------------------|
+  | **KEY LIGHT** (Soft, even) | Happy, normal scenes | Safety, clarity |
+  | **HIGH CONTRAST** (Harsh shadows) | Conflict, tension | Drama, danger, inner conflict |
+  | **SILHOUETTE** (Backlit) | Mystery, drama | Unknown, foreboding |
+  | **GOLDEN HOUR** (Warm glow) | Nostalgia, love, hope | Warmth, beauty, fleeting moment |
+  | **BLUE HOUR** (Cold light) | Sadness, isolation | Melancholy, loneliness |
+
+  ### 🎬 CHOOSING THE RIGHT TECHNIQUE:
+
+  **ASK YOURSELF:**
+  1. What EMOTION should audience feel? → Choose lighting
+  2. How POWERFUL is this character now? → Choose angle
+  3. How INTIMATE should we be? → Choose shot size
+  4. Is this moment STABLE or UNSTABLE? → Normal or Dutch angle
+
+  **EXAMPLES:**
+
+  | Story Moment | Technique Combo | Why |
+  |--------------|-----------------|-----|
+  | Mother sues son | LOW ANGLE + DUTCH + COLD LIGHT | Courthouse is powerful, world is wrong |
+  | Happy childhood memory | MEDIUM + EYE LEVEL + GOLDEN HOUR | Intimate, warm, nostalgic |
+  | Son's sacrifice | CLOSE-UP + LOW CONTRAST + WARM | Focus on emotion, determination |
+  | Betrayal reveal | EXTREME CU + HIGH CONTRAST | Intense emotion, harsh truth |
+  | Lonely moment | WIDE + HIGH ANGLE + BLUE LIGHT | Small person, big empty world |
+
+  OUTPUT: JSON object with complete shooting_plan, NO markdown.
+
+# =============================================================================
+# STEP 3: SCENE PRODUCTION (Tao prompt cho tung scene)
+# =============================================================================
+# Input: {characters_info}, {locations_info}, {pacing_script}, {global_style}
+# Output: JSON array cua scenes
+# =============================================================================
+
+generate_scenes: |
+  Ban la AI Film Director. DICH loi ke thanh HINH ANH ke chuyen (visual storytelling).
+
+  ## NGUYEN TAC SO 1: DICH, KHONG XOA!
+
+  Nguoi ke NOAN cau chuyen. Ban phai TAO HINH ANH THE HIEN cau chuyen do!
+  KHONG chi mo ta "nguoi dung" - phai CHO THAY noi dung cau chuyen!
+
+  ### VI DU DICH NARRATION → VISUAL:
+
+  | Loi ke (SRT text) | SAI (generic) | DUNG (ke chuyen) |
+  |-------------------|---------------|------------------|
+  | "Toi 28 tuoi, tiet kiem du tien mua dat" | "Man standing" | "28yo man dung giua manh dat trong, tay cam giay to dat, cuoi tu hao, hoang hon phia sau" |
+  | "Me lam 2 cong viec de nuoi toi" | "Woman working" | "32yo me met moi van hanh may ep ao, mo hoi tran, dong phuc cu nat, dong ho chi 9PM" |
+  | "Toi xay nha bang chinh doi tay minh" | "Man with tools" | "28yo man dong dinh vao khung go, mun cua tren mat, bung dung cu, nha dang xay phia sau" |
+
+  ## NGUYEN TAC SO 2: KHONG DUOC DUNG TEXT/DIALOGUE TRONG IMG_PROMPT!
+  - img_prompt CHI MO TA HINH ANH
+  - TUYET DOI KHONG copy loi ke vao prompt
+  - "By the time I was 28..." → KHONG DUOC! Se tao chu tren anh!
+
+  ### 1. SCENE LA HANH DONG, KHONG PHAI PORTRAIT:
+  - Nhan vat DANG LAM GI DO - khong phai dung pose
+  - KHONG BAO GIO nhin thang vao camera
+  - KHONG dung "looking at camera", "facing viewer", "portrait"
+  - Mo ta HANH DONG: dang di, dang noi, dang nghi, dang lam viec...
+
+  ### 2. SU DUNG THAM CHIEU DUNG CACH:
+  - **character_lock**: Chi dung MO TA NGOAI HINH (tuoi, toc, mat, quan ao)
+  - KHONG copy phan "looking at camera" tu portrait prompt
+  - Them HANH DONG vao sau mo ta ngoai hinh
+  - Vi du: "Minh, 32 tuoi, toc den ngan... DANG NGOI DOC SACH"
+
+  ### 3. MOI SCENE = 1 KHOANH KHAC:
+  - Moi scene trong input = 1 scene output
+  - Mo ta KHOANH KHAC cu the trong cau chuyen
+
+  ### 4. LOCATION + LIGHTING:
+  - **location_lock**: COPY NGUYEN VAN lam background
+  - Them anh sang phu hop voi thoi diem trong ngay
+
+  ### 4b. ⚠️ LOCATION PHAI KHOP VOI HANH DONG! ⚠️
+  - Doc SRT text ky! "on the bed" → Location = BEDROOM, khong phai hallway!
+  - "in the kitchen" → Location = KITCHEN, khong phai living room!
+  - HANH DONG phai logic voi LOCATION:
+    - ❌ "LYING IN BED... hotel hallway" (SAI! Giuong o dau co hallway!)
+    - ✅ "LYING IN BED... master bedroom, king-sized bed, silk sheets"
+
+  ### 5. GLOBAL STYLE INJECTION:
+  - Ket thuc moi img_prompt bang global_style string
+
+  ## INPUT DATA:
+  **GLOBAL_STYLE:** {global_style}
+
+  **CHARACTERS (Chi dung phan mo ta ngoai hinh, BO QUA "looking at camera"):**
+  {characters_info}
+
+  **LOCATIONS (Dung location_lock nguyen van):**
+  {locations_info}
+
+  **SCENES (Noi dung can tao prompt - TAP TRUNG VAO HANH DONG):**
+  (Moi scene da co Location - PHAI dung location_id do cho location_used!)
+  {scenes_info}
+
+  ## OUTPUT FORMAT - JSON ARRAY:
+
+  Tra ve JSON object voi key "scenes" chua array:
+
+  {{
+    "scenes": [
+      {{
+        "scene_id": 1,
+        "characters_used": ["nv1"],
+        "location_used": "loc1",
+        "reference_files": ["nv1.png", "loc1.png"],
+        "img_prompt": "Wide shot, 24mm lens. Minh, 32-year-old man with short black side-parted hair, oval face, light tan skin, wearing navy blue polo shirt, WALKING SLOWLY toward the window, his back partially turned to viewer. Modern apartment living room, beige sofa, wooden coffee table, large window with city view, warm afternoon sunlight streaming in. Cinematic, 4K photorealistic, shot on Arri Alexa, soft film grain, natural lighting.",
+        "video_prompt": "Slow tracking shot following Minh as he walks to window."
+      }},
+      {{
+        "scene_id": 2,
+        "characters_used": ["nv1", "nv2"],
+        "location_used": "loc1",
+        "reference_files": ["nv1.png", "nv2.png", "loc1.png"],
+        "img_prompt": "Over-the-shoulder shot from behind Lan, 50mm lens. Minh, 32-year-old man with short black side-parted hair, sitting on beige sofa, LEANING FORWARD while speaking, hands gesturing. In soft focus foreground: back of Lan's head, long black hair. Two people in conversation. Modern apartment living room, warm afternoon light. Cinematic, 4K photorealistic, natural lighting.",
+        "video_prompt": "Minh speaks animatedly, hands moving to emphasize points."
+      }},
+      {{
+        "scene_id": 3,
+        "characters_used": ["nv1"],
+        "location_used": "loc1",
+        "reference_files": ["nv1.png", "loc1.png"],
+        "img_prompt": "Extreme close-up, 100mm macro lens. Minh's hands CLENCHING into fists on his lap, knuckles whitening, wedding ring visible. Shallow depth of field. Warm afternoon lighting. Cinematic, 4K photorealistic.",
+        "video_prompt": "The hands slowly tighten, tension building."
+      }}
+    ]
+  }}
+
+  ## 🎬 SHOT TYPE RULES - CRITICAL FOR CINEMATIC FEEL!
+
+  ### HOOK (First 3-5 scenes) - MUST BE DRAMATIC!
+  - Scene 1: WIDE or LOW ANGLE (establish drama, NOT boring medium shot!)
+  - Scene 2-3: Mix of CLOSE-UP (emotion) + WIDE (context)
+  - NO "Medium shot person sitting" for hook - BORING!
+
+  ### SHOT TYPE cho tung loai content:
+  | Content Type | Shot Type | Example |
+  |--------------|-----------|---------|
+  | Emotion/Betrayal/Shock | CLOSE-UP, 85mm | Face with tears, clenched jaw |
+  | Hard Work/Sacrifice | EXTREME CLOSE-UP | Sweaty hands, calloused fingers |
+  | Poverty/Struggle | WIDE shot | Tiny figure in cramped apartment |
+  | Building/Creating | LOW ANGLE | Hero shot, power, determination |
+  | Conversation | OVER-SHOULDER | Two people, relationship |
+  | Memory/Flashback | WIDE + warm filter | Nostalgic, golden hour |
+  | Courtroom/Legal | LOW ANGLE | Imposing building, small person |
+
+  ### VARIETY RULES - KHONG DUOC LAP LAI!
+  - KHONG DUOC: 3+ Medium shots lien tiep!
+  - KHONG DUOC: Cung 1 hanh dong 2 lan lien tiep (vd: "SWINGING HAMMER" x2)
+  - MOI 5 scenes PHAI co: 1 Wide, 1 Close-up, 1 detail shot
+
+  ### DETAIL SHOTS (Extreme Close-up) - TAO CINEMATIC FEEL!
+  Them vao giua cac scene de tang drama:
+  - Tay run cam giay to
+  - Giot mo hoi tren tran
+  - Ban tay om chat vai ai do
+  - Chi tiet cong cu, bui go
+  - Nhan cuoi tren ngon tay
+
+  ## HANH DONG GUIDE (Thay vi pose):
+  - Sad/Thinking: nhin ra cua so, cui dau, tay om mat
+  - Happy: cuoi voi nguoi khac, om, bat tay
+  - Angry: nam dam, dung day, quay lung
+  - Talking: nghieng nguoi, dua tay, nhin nguoi doi dien
+  - Walking: dang buoc di, lung quay lai
+  - Working: dang viet, dang doc, dang lam viec
+
+  ## CAM XUC GUIDE (Match emotion to content!):
+  - KHONG DUOC dung "SMILING" mac dinh!
+  - Lam viec cuc kho → DETERMINED, EXHAUSTED, sweat on face
+  - Hy sinh → TIRED, WEARY, dark circles, worn but LOVING
+  - Ngheo kho → WORRIED, STRUGGLING, worn clothing
+  - Bi phan boi → SHOCKED, HURT, disbelief
+  - Thanh cong → PROUD, satisfied (OK cuoi)
+  - Tuoi tho vui → nostalgic warmth, innocent joy (OK cuoi)
+
+  ## KHONG DUOC LAM:
+  - KHONG: "looking at camera", "facing viewer", "portrait shot"
+  - KHONG: "neutral expression", "standing straight"
+  - KHONG: nhan vat dung yen khong lam gi
+  - KHONG BAO GIO: dua dialogue/narration/subtitle text vao img_prompt!
+  - KHONG: copy scene text truc tiep vao prompt (se tao ra text tren anh!)
+
+  ## QUY TAC VANG:
+  img_prompt = CHARACTER_DESCRIPTION + ACTION + LOCATION + LIGHTING + STYLE
+  img_prompt != dialogue != narration != subtitle
+
+  OUTPUT: JSON object voi key "scenes", KHONG co markdown code block.
+
+# =============================================================================
+# STEP 2.5: SMART SCENE DIVISION (Chia scene theo noi dung)
+# =============================================================================
+# Input: {srt_with_timestamps}, {directors_treatment}, {characters_info}, {locations_info}
+# Output: JSON array cua scenes duoc chia theo noi dung
+# THIS STEP uses the Director's Treatment to guide scene creation!
+# =============================================================================
+
+smart_divide_scenes: |
+  ## !!! CRITICAL - READ THIS FIRST !!!
+
+  SHOW THE MEMORY, NOT THE PERSON REMEMBERING!
+
+  WRONG: "When I was a kid..." → 30yo man at courthouse thinking
+  RIGHT: "When I was a kid..." → 8yo CHILD + 32yo MOTHER in apartment!
+
+  WRONG: "My mother worked two jobs" → 30yo man talking about mom
+  RIGHT: "My mother worked two jobs" → 32yo MOTHER at dry cleaning shop!
+
+  WRONG: "I built my house" → 30yo man at courthouse
+  RIGHT: "I built my house" → 28yo MAN hammering at construction site!
+
+  ## !!! CHILD POLICY - API SAFETY !!!
+
+  CHILDREN (is_child=true) → NO REFERENCE IMAGE!
+  - Do NOT include child IDs in reference_files (causes API policy violation)
+  - Instead: DESCRIBE child FULLY in img_prompt using character_lock
+  - Only use adult + location references
+
+  Example for CHILDHOOD scene:
+  ```
+  characters_in_scene: ["nv1_young", "nvc1"]     // Both listed here
+  reference_files: ["nv1_young.png", "loc_apartment.png"]  // NO nvc1.png!
+  img_prompt: "...32yo mother HUGGING a young 8-year-old boy with messy brown hair, innocent blue eyes, freckles, wearing old faded t-shirt..."
+  ```
+  ↑ Child described INLINE, not referenced!
+
+  ## DECISION TREE - For EACH SRT segment:
+
+  Q1: Does it mention CHILDHOOD or MOTHER'S SACRIFICE?
+      Keywords: "when I was a kid", "my mother", "she worked", "growing up"
+      → scene_type: CHILDHOOD_FLASHBACK
+      → characters: ["nv1_young"] or ["nv1_young", "nvc1"]
+      → location: loc_dryclean, loc_apartment, loc_convenience
+      → SHOW: 32yo mother + 8yo child, NOT 30yo narrator!
+
+  Q2: Does it mention BUILDING HOUSE or CAREER (narrator alone)?
+      Keywords: "I built", "carpenter", "saved money", "bought land"
+      → scene_type: ADULT_FLASHBACK
+      → characters: ["nvc_young"]
+      → location: loc_construction, loc_land
+      → SHOW: 28yo man working, NOT 30yo narrator talking!
+
+  Q2b: ADULT FLASHBACK with MOTHER present?
+      Keywords: "she walked in", "mom came", "she hugged", "she said", "proud of you"
+      → scene_type: ADULT_FLASHBACK
+      → characters: ["nvc_young", "nv1"]
+      → location: loc_finished_house
+      → SHOW: 28yo man + 55yo mother together!
+      → NOTE: Use nv1 (55yo), NOT nv1_young (32yo) - mother is older now!
+
+  Q3: Is it PRESENT MOMENT?
+      Keywords: "right now", "sitting here", "today", "courthouse"
+      → scene_type: FRAME_PRESENT
+      → characters: ["nvc"]
+      → location: loc_courthouse
+      → SHOW: 30yo narrator at courthouse with ACTION
+
+  Q4: Is it YOUTUBE CTA?
+      Keywords: "subscribe", "like button", "comment"
+      → scene_type: YOUTUBE_CTA
+      → characters: ["nvc"]
+      → location: KEEP CURRENT STORY LOCATION (don't use "plain background"!)
+      → SHOW: Narrator at SAME LOCATION, same SERIOUS expression
+      → EMOTION: Match story context! If story is heavy → SERIOUS face, NOT smiling!
+      → NOTE: CTA does NOT mean happy! Keep the emotional weight of the story!
+
+  ## !!! EMOTION MATCHING - CRITICAL !!!
+
+  NEVER use "SMILING" by default! Match emotion to CONTENT:
+
+  | Content Type | WRONG | CORRECT Emotion |
+  |--------------|-------|-----------------|
+  | "10 years hard work" | SMILING | DETERMINED, sweat on face, EXHAUSTED but PROUD |
+  | "I became a carpenter" | HOLDING hammer | SWINGING hammer, FOCUSED expression |
+  | "Mom worked 2 jobs" | SMILING mother | EXHAUSTED face, dark circles, WEARY but LOVING |
+  | "$72,000 every penny" | Casual smile | SERIOUS face, weight of decision |
+  | "She took me to court" | SMILING | SHOCKED, BETRAYED, disbelief |
+  | "We had nothing" | SMILING | WORRIED, STRUGGLING, but HOPEFUL |
+  | "I built this house" | HOLDING blueprints | HAMMERING, SAWING, SWEATING |
+
+  ## ACTION VERBS - Use ACTIVE not PASSIVE:
+
+  | WRONG (passive) | CORRECT (active) |
+  |-----------------|------------------|
+  | HOLDING hammer | SWINGING hammer, HAMMERING nails |
+  | HOLDING blueprints | STUDYING blueprints, POINTING at plans |
+  | HOLDING documents | CLUTCHING documents, READING papers |
+  | Standing with tools | WORKING, BUILDING, SAWING wood |
+  | Sitting with food | EATING, COOKING, SERVING food |
+
+  ## EMOTIONAL WEIGHT GUIDE:
+
+  - SACRIFICE content → tired, weary, exhausted, determined
+  - HARD WORK content → sweating, focused, strained, working hard
+  - POVERTY content → worried, struggling, worn clothing, humble
+  - BETRAYAL content → shocked, hurt, disbelief, pain
+  - SUCCESS content → proud, accomplished, satisfied (OK to smile here)
+  - CHILDHOOD HAPPY → nostalgic warmth, innocent joy (OK to smile here)
+
+  ## 🔥🔥🔥 HOOK (Scene 1-3) - MOST IMPORTANT! VIEWER DECIDES TO STAY OR LEAVE! 🔥🔥🔥
+
+  ### HOOK GOAL: Make viewer think "WTF? I MUST know what happens next!"
+
+  ### SCENE 1 - THE GRABBER (CRITICAL!!!):
+  - Shot: WIDE LOW ANGLE or EXTREME WIDE
+  - ⚠️ MUST INCLUDE CHARACTER! NOT just empty location!
+  - Character must look: DEVASTATED, ISOLATED, OVERWHELMED
+  - Environment TOWERS over character (imposing, dramatic contrast)
+  - Emotion: Shock, despair, "rock bottom" moment
+  - Example: "TINY figure hunched ALONE on MASSIVE courthouse steps, documents SCATTERED"
+  - ❌ WRONG: Just courthouse without person
+  - ❌ WRONG: Person standing normally
+
+  ### SCENE 2 - THE EMOTION:
+  - Shot: EXTREME CLOSE-UP on FACE
+  - Show RAW emotion: tears welling, jaw clenched, trembling lips
+  - Eyes must tell the story: pain, betrayal, disbelief
+  - Example: "Face filling frame, eyes RED and WELLING with tears, TREMBLING lips"
+
+  ### SCENE 3 - THE DETAIL:
+  - Shot: EXTREME CLOSE-UP on symbolic object/action
+  - Hands trembling, clutching documents, wedding ring, etc.
+  - Creates mystery: "What happened? What are those papers?"
+  - Example: "TREMBLING hands CLUTCHING crumpled legal documents, knuckles WHITE"
+
+  ### ❌ BANNED for HOOK:
+  - Empty location shots (boring!)
+  - Medium shot person sitting/standing calmly
+  - Neutral expressions
+  - Person looking at camera
+  - "Smiling" or any positive emotion (this is drama!)
+
+  ## 🎬 SHOT TYPE RULES - CRITICAL FOR CINEMATIC VARIETY!
+
+  ### SHOT TYPE per 5 scenes (MANDATORY MIX!):
+  | Scene # | Required Shot Type | Purpose |
+  |---------|-------------------|---------|
+  | 1 | WIDE or LOW ANGLE | Establish context, drama |
+  | 2 | CLOSE-UP | Emotion, face |
+  | 3 | MEDIUM or OVER-SHOULDER | Action, relationship |
+  | 4 | EXTREME CLOSE-UP | Detail (hands, object) |
+  | 5 | WIDE or TWO-SHOT | Context or relationship |
+
+  ### SHOT TYPE by content:
+  | Content | Shot Type | Lens | Example |
+  |---------|-----------|------|---------|
+  | Courtroom/Legal | LOW ANGLE, WIDE | 24mm | Imposing courthouse towers over tiny figure |
+  | Emotion/Betrayal | CLOSE-UP | 85mm | Face with tears, clenched jaw, trembling lips |
+  | Hard Work | EXTREME CLOSE-UP | 100mm | Sweaty hands gripping hammer, calloused fingers |
+  | Poverty/Struggle | WIDE | 24mm | Tiny figure in cramped apartment |
+  | Building/Creating | LOW ANGLE | 35mm | Hero shot from below, power, determination |
+  | Mother-Son moment | TWO-SHOT or OTS | 50mm | Two people, emotional connection |
+  | Memory transition | WIDE + warm | 24mm | Nostalgic, golden hour lighting |
+
+  ### ❌ BANNED PATTERNS - NEVER DO THIS!
+  - 3+ MEDIUM shots in a row → BREAK with Close-up or Wide!
+  - Same action 2x in a row (e.g., "SWINGING HAMMER" x2) → VARY the action!
+  - Same character pose 2x → Change angle, distance, or action!
+  - "Person sitting/standing" without ACTION → Add specific action!
+
+  ### ✅ REQUIRED VARIETY per 10 scenes:
+  - At least 2 WIDE shots (establishing, context)
+  - At least 2 CLOSE-UP shots (emotion)
+  - At least 1 EXTREME CLOSE-UP (detail shot)
+  - At least 1 LOW ANGLE or HIGH ANGLE (drama)
+  - Maximum 3 MEDIUM shots total!
+
+  ## GLOBAL STYLE (MUST append to EVERY img_prompt!):
+  {global_style}
+
+  ## CHARACTERS:
+  {characters_info}
+
+  ## LOCATIONS:
+  {locations_info}
+
+  ## SRT SEGMENTS:
+  {srt_with_timestamps}
+
+  ## STYLE CONSISTENCY RULE:
+  EVERY img_prompt MUST END with the GLOBAL STYLE above!
+  This ensures all images have consistent colors and quality.
+
+  ## OUTPUT FORMAT:
+
+  {{
+    "scenes": [
+      {{
+        "scene_id": 1,
+        "srt_text": "I am sitting on the courthouse steps right now...",
+        "scene_type": "FRAME_PRESENT",
+        "shot_type": "WIDE LOW ANGLE",
+        "location_id": "loc_courthouse",
+        "characters_in_scene": ["nvc"],
+        "reference_files": ["nvc.png", "loc_courthouse.png"],
+        "img_prompt": "WIDE LOW ANGLE shot, 24mm lens. IMPOSING courthouse columns TOWERING overhead. TINY figure of 30yo man with brown hair, tired eyes, gray t-shirt, hunched ALONE on massive stone steps, documents scattered beside him. Ominous overcast sky. Feeling of ISOLATION and DEVASTATION. Cinematic."
+      }},
+      {{
+        "scene_id": 2,
+        "srt_text": "My own mother took me to court...",
+        "scene_type": "FRAME_PRESENT",
+        "shot_type": "CLOSE-UP",
+        "location_id": "loc_courthouse",
+        "characters_in_scene": ["nvc"],
+        "reference_files": ["nvc.png"],
+        "img_prompt": "CLOSE-UP, 85mm lens. 30yo man's face, eyes RED and WELLING with tears, jaw CLENCHED, TREMBLING lips. Expression of UTTER DISBELIEF and BETRAYAL. Soft cold light on face. Cinematic."
+      }},
+      {{
+        "scene_id": 3,
+        "srt_text": "My mother used to sacrifice everything for me...",
+        "scene_type": "CHILDHOOD_FLASHBACK",
+        "shot_type": "MEDIUM",
+        "location_id": "loc_dryclean",
+        "characters_in_scene": ["nv1_young"],
+        "reference_files": ["nv1_young.png", "loc_dryclean.png"],
+        "img_prompt": "Medium shot, 50mm lens. 32yo blonde mother in faded work uniform, PRESSING shirts at industrial machine, EXHAUSTED face with dark circles, sweat glistening on forehead, wisps of hair escaping ponytail. 1990s dry cleaning shop, fluorescent lights, clock showing 9PM. Warm nostalgic tones. Cinematic."
+      }},
+      {{
+        "scene_id": 4,
+        "srt_text": "She worked two jobs just to keep us fed...",
+        "scene_type": "CHILDHOOD_FLASHBACK",
+        "shot_type": "EXTREME CLOSE-UP",
+        "location_id": "loc_dryclean",
+        "characters_in_scene": ["nv1_young"],
+        "reference_files": ["nv1_young.png"],
+        "img_prompt": "EXTREME CLOSE-UP, 100mm macro lens. Mother's WORN HANDS gripping iron press handle, CRACKED skin, simple wedding ring, steam rising. Detail shot showing SACRIFICE and hard labor. Warm nostalgic. Cinematic."
+      }},
+      {{
+        "scene_id": 5,
+        "srt_text": "When I was a kid we had nothing but each other...",
+        "scene_type": "CHILDHOOD_FLASHBACK",
+        "shot_type": "WIDE",
+        "location_id": "loc_apartment",
+        "characters_in_scene": ["nv1_young", "nvc1"],
+        "reference_files": ["nv1_young.png", "loc_apartment.png"],
+        "img_prompt": "WIDE shot, 24mm lens. Small cramped 1990s apartment. 32yo blonde mother HUGGING a young 8-year-old Caucasian boy with messy brown hair, innocent blue eyes, freckles, wearing old faded t-shirt. Two figures EMBRACING in center of sparse room. Worn furniture, single lamp casting warm glow. Intimate, nostalgic. Cinematic."
+      }},
+      {{
+        "scene_id": 6,
+        "srt_text": "Then I built my first house with my own two hands...",
+        "scene_type": "ADULT_FLASHBACK",
+        "shot_type": "LOW ANGLE",
+        "location_id": "loc_construction",
+        "characters_in_scene": ["nvc_young"],
+        "reference_files": ["nvc_young.png", "loc_construction.png"],
+        "img_prompt": "LOW ANGLE hero shot, 35mm lens. 28yo muscular man SWINGING HAMMER down at wooden beam, shot from below. POWERFUL, DETERMINED expression, sawdust falling, sweat dripping, tool belt at waist. House frame RISING against blue sky behind. Golden hour sunlight. Cinematic."
+      }},
+      {{
+        "scene_id": 7,
+        "srt_text": "Every nail driven by my own hands...",
+        "scene_type": "ADULT_FLASHBACK",
+        "shot_type": "EXTREME CLOSE-UP",
+        "location_id": "loc_construction",
+        "characters_in_scene": ["nvc_young"],
+        "reference_files": ["nvc_young.png"],
+        "img_prompt": "EXTREME CLOSE-UP, 100mm macro lens. CALLOUSED HANDS gripping hammer mid-swing, BLISTERS visible, sawdust on knuckles, wedding ring. Detail shot showing years of SACRIFICE and HARD LABOR. Natural sunlight. Cinematic."
+      }},
+      {{
+        "scene_id": 8,
+        "srt_text": "It cost me $72,000 every penny I had earned over 10 years...",
+        "scene_type": "ADULT_FLASHBACK",
+        "shot_type": "CLOSE-UP",
+        "location_id": "loc_construction",
+        "characters_in_scene": ["nvc_young"],
+        "reference_files": ["nvc_young.png", "loc_construction.png"],
+        "img_prompt": "CLOSE-UP, 85mm lens. 28yo man's face, TIRED but PROUD eyes, sweat on brow, STUDYING blueprints intently. SERIOUS expression showing weight of decade of sacrifice. Construction site blurred behind. Late afternoon light. Cinematic."
+      }},
+      {{
+        "scene_id": 9,
+        "srt_text": "I invited my mom over. She walked through the door and started crying...",
+        "scene_type": "ADULT_FLASHBACK",
+        "shot_type": "TWO-SHOT",
+        "location_id": "loc_finished_house",
+        "characters_in_scene": ["nvc_young", "nv1"],
+        "reference_files": ["nvc_young.png", "nv1.png", "loc_finished_house.png"],
+        "img_prompt": "TWO-SHOT, 50mm lens. 55yo graying blonde mother standing in doorway, hand over mouth, CRYING tears of joy. 28yo muscular son beside her, arm around her shoulder, PROUD but emotional. New house interior visible behind, warm evening light streaming in. Cinematic."
+      }},
+      {{
+        "scene_id": 10,
+        "srt_text": "She hugged me and said, Dane, I am so proud of you...",
+        "scene_type": "ADULT_FLASHBACK",
+        "shot_type": "CLOSE-UP",
+        "location_id": "loc_finished_house",
+        "characters_in_scene": ["nvc_young", "nv1"],
+        "reference_files": ["nvc_young.png", "nv1.png", "loc_finished_house.png"],
+        "img_prompt": "CLOSE-UP, 85mm lens. Mother's face PRESSED against son's chest in tight embrace, tears streaming down wrinkled cheeks, eyes closed with overwhelming PRIDE and LOVE. Son's hand cradling her head. Warm golden interior light. Emotional climax. Cinematic."
+      }},
+      {{
+        "scene_id": 11,
+        "srt_text": "She took me to court for everything I had built...",
+        "scene_type": "FRAME_PRESENT",
+        "shot_type": "MEDIUM",
+        "location_id": "loc_courthouse",
+        "characters_in_scene": ["nvc"],
+        "reference_files": ["nvc.png", "loc_courthouse.png"],
+        "img_prompt": "Medium shot, 50mm lens. 30yo man CLUTCHING crumpled legal documents to chest, SHOCKED expression, wide disbelieving eyes, jaw dropped. Courthouse columns behind him. Cold overcast light. Expression of ULTIMATE BETRAYAL. Cinematic."
+      }},
+      {{
+        "scene_id": 12,
+        "srt_text": "Hit that like button and subscribe if you want to hear how this story ends...",
+        "scene_type": "YOUTUBE_CTA",
+        "shot_type": "WIDE",
+        "location_id": "loc_courthouse",
+        "characters_in_scene": ["nvc"],
+        "reference_files": ["nvc.png", "loc_courthouse.png"],
+        "img_prompt": "WIDE shot, 24mm lens. 30yo man SITTING ALONE on vast courthouse steps, documents scattered beside him, head BOWED in reflection. Imposing columns frame the scene. Overcast sky. LONELY, CONTEMPLATIVE atmosphere. Story weight maintained. Cinematic."
+      }}
+    ]
+  }}
+
+  ## YOUTUBE CTA - WRONG vs RIGHT:
+  WRONG: "subscribe..." → SMILING, plain background, happy mood
+  RIGHT: "subscribe..." → SAME LOCATION, SAME EMOTION as story, serious/reflective
+
+  ## FINAL CHECKLIST:
+  [ ] Every CHILDHOOD memory → nv1_young (32yo mother) NOT nv1!
+  [ ] Every ADULT FLASHBACK with mother → nv1 (55yo) NOT nv1_young!
+  [ ] Every BUILDING scene → nvc_young at construction NOT courthouse!
+  [ ] Different memories = DIFFERENT locations!
+  [ ] NO narration text in img_prompt!
+  [ ] EMOTIONS match content (NO default SMILING!)
+  [ ] ACTIONS are ACTIVE (SWINGING not HOLDING!)
+  [ ] Hard work = DETERMINED/EXHAUSTED face, NOT smiling!
+  [ ] Mother versions: CHILDHOOD=nv1_young(32), ADULT=nv1(55)!
+  [ ] CHILDREN: NOT in reference_files! Describe FULLY in img_prompt!
+  [ ] STYLE CONSISTENCY: Every img_prompt ends with GLOBAL STYLE!
+  [ ] YOUTUBE CTA: Keep story location + emotion! NO smiling, NO plain background!
+  [ ] CROWD CONSISTENCY: Party/wedding/event = ALWAYS include guests/crowd in background!
+  [ ] Even CLOSE-UP shots: "blurred crowd behind", "guests visible in bokeh"
+
+  ## 🔥 HOOK CHECKLIST (Scene 1-3) - MOST CRITICAL!:
+  [ ] Scene 1: WIDE LOW ANGLE with CHARACTER visible (NOT empty location!)
+  [ ] Scene 1: Character looks DEVASTATED, ISOLATED, OVERWHELMED
+  [ ] Scene 2: EXTREME CLOSE-UP on FACE with RAW emotion (tears, pain)
+  [ ] Scene 3: EXTREME CLOSE-UP on DETAIL (trembling hands, documents)
+  [ ] NO smiling or neutral expressions in HOOK!
+  [ ] HOOK creates question: "WTF happened? I must know!"
+
+  ## 🎬 SHOT TYPE CHECKLIST:
+  [ ] NO 3+ MEDIUM shots in a row!
+  [ ] Per 10 scenes: 2+ WIDE, 2+ CLOSE-UP, 1+ EXTREME CLOSE-UP
+  [ ] Maximum 3 MEDIUM shots per 10 scenes!
+  [ ] shot_type field included for EVERY scene!
+  [ ] Different shot_type from previous scene!
+
+  OUTPUT: JSON only, NO markdown code blocks.
+
+# =============================================================================
+# CAMERA REFERENCE
+# =============================================================================
+
+camera_reference:
+  shot_types:
+    "Extreme Wide Shot (EWS)": "Environment dominant, tiny subject"
+    "Wide Shot (WS)": "Full body + environment"
+    "Medium Shot (MS)": "Waist up"
+    "Medium Close-up (MCU)": "Chest up"
+    "Close-up (CU)": "Face fills frame"
+    "Extreme Close-up (ECU)": "Part of face/detail"
+    "Over-the-shoulder (OTS)": "Behind one person looking at another"
+    "Two-shot": "Two people in frame"
+
+  angles:
+    "Eye-level": "Neutral, viewer = observer"
+    "Low angle": "Subject has power, heroic"
+    "High angle": "Subject vulnerable, small"
+    "Dutch tilt": "Unease, tension"
+    "Over-the-shoulder": "Connection, conversation"
+
+  lenses:
+    "24mm": "Wide - Establishing, environments"
+    "35mm": "Wide normal - Full body, groups"
+    "50mm": "Normal - Dialogue, versatile"
+    "85mm": "Portrait - Face detail, interviews"
+    "100mm": "Macro - Details, hands, objects"
+
+# =============================================================================
+# END v5.0
+# =============================================================================

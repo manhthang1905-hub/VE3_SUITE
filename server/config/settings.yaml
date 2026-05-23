@@ -1,0 +1,75 @@
+browser_delay_between_prompts: 2000
+browser_generate_timeout: 120
+browser_headless: false
+browser_login_timeout: 120
+browser_profiles_dir: ./chrome_profiles
+chrome_model_index: 0
+chrome_path: C:\Program Files\Google\Chrome\Application\chrome.exe
+chrome_portable: ./GoogleChromePortable/GoogleChromePortable.exe
+chrome_portable_2: ./GoogleChromePortable - Copy/GoogleChromePortable.exe
+chrome_profile: ''
+deepseek_api_key: sk-d4adad4ab13e4e0585a280ff734b562d
+deepseek_api_keys:
+- sk-db14f7483bbc4fec9356de63f767765f
+early_video_start: 10
+excel_mode: basic
+flow_aspect_ratio: landscape
+flow_bearer_token: ''
+flow_delay: 3.0
+flow_image_count: 1
+flow_project_id: ''
+flow_timeout: 120
+force_model: always
+gemini_api_keys:
+- ''
+gemini_models:
+- gemini-2.0-flash
+- gemini-2.5-flash
+generation_mode: chrome
+groq_api_keys:
+- ''
+ipv6_rotation:
+  disable_ipv4: false
+  enabled: true
+  gateway: ''
+  interface_name: Ethernet
+  local_proxy_port: 1088
+  max_403_before_rotate: 3
+  prefix_length: 56
+  subnet_prefix: ''
+  use_local_proxy: false
+ken_burns_intensity: normal
+log_level: INFO
+max_parallel_api: 10
+max_scene_duration: 8
+max_scenes_per_account: 50
+min_scene_duration: 5
+parallel_browsers: 1
+parallel_chrome: ''
+parallel_voices: 1
+project_root: ./VE3_TOOL
+proxy_api_token: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpZCI6ODMsInJvbGUiOjMsImlhdCI6MTc2NjQxOTE4OX0.D8tvSOeFpXCEgRL_ovWcp_A7pDZvGoOL5kVQRsuuUmc
+proxy_api_url: https://flow-api.nanoai.pics/api/fix/create-video-veo3
+retry_count: 3
+topic: story
+use_proxy: true
+video_aspect_ratio: landscape
+video_compose_mode: fast
+video_count: full
+video_generation_mode: t2v
+video_mode: basic
+video_model: fast
+video_paygate_tier: PAYGATE_TIER_TWO
+wait_timeout: 30
+webshare_proxy:
+  api_key: pfi2ljk73uysoze9ozg58nsp4af7au0vchs0b027
+  enabled: false
+  machine_id: 1
+  proxy_file: config/proxies.txt
+  proxy_mode: direct
+  rotating_base_username: jhvbehdf-residential-rotate
+  rotating_host: p.webshare.io
+  rotating_password: cf1bi3yvq0t1
+  rotating_port: 80
+whisper_language: en
+whisper_model: base

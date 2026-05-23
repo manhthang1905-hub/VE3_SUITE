@@ -48,3 +48,22 @@ desktop.ini
 
 # === CLAUDE CONFIG (mỗi máy riêng) ===
 .claude/
+
+# === SERVER CREDENTIALS & RUNTIME (mỗi VM riêng) ===
+server/config/creds.json
+server/config/config.json
+server/config/accounts.csv
+server/config/.project_accounts*.json
+server/config/.account_index.json
+server/config/.403_tracker.json
+server/config/session_state.yaml
+server/config/ipv6.txt
+server/config/ipv6_list.txt
+server/config/proxies.txt
+server/config/current_branch.txt
+server/.agent/
+server/PROJECTS/
+server/GoogleChromePortable*/
+server/chrome_profile*/
+server/ipv6/config_test.json
+server/suno_token.txt

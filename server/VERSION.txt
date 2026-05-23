@@ -1,0 +1,117 @@
+1.0.690
+2026-05-23 (VN)
+Fix: Flow UI model selection - them Omni Flash vao keywords + fix dropdown detection
+- VAN DE: Google Flow them model moi "Omni Flash" vao dropdown
+  → Bottom bar hien "Omni Flash" thay vi "Veo..." → keywords cu khong match
+  → JS_SWITCH_TO_T2V_MODE dropdown check (Veo|Fast) khong match "Omni Flash"
+  → Khong chon duoc model Veo 3.1 - Lite [Lower Priority]
+- FIX 1: Them 'Omni', 'Flash' vao tat ca keyword arrays
+  → modules/drission_flow_api.py (6 cho)
+  → server/chrome_session.py (2 cho: JS_SELECT_MODEL + JS_SELECT_VIDEO_MODE)
+- FIX 2: T2V/Video dropdown detection them Omni/Flash check
+  → modules/drission_flow_api.py: JS_SWITCH_TO_T2V_MODE
+  → server/chrome_session.py: JS_SELECT_VIDEO_MODE
+- FIX 3: JS_SWITCH_TO_LOWER_PRIORITY viet lai cho UI moi
+  → Cu: Cai dat button + combobox "Mo hinh" (khong con trong UI moi)
+  → Moi: Bottom bar + arrow_drop_down + menuitem Lower Priority
+- TEST: Chrome portable chon dung Veo 3.1 - Lite [Lower Priority] tren UI moi
+- Files: modules/drission_flow_api.py, server/chrome_session.py
+
+1.0.688
+2026-05-16 (VN)
+Fix: Video server 5050 + Flow reload/high-traffic diagnostics
+- FIX 1: app.py - them --port/VE3_SERVER_PORT de VE3 server chay 5050, tranh dung port 5000 cua SOCKS gateway.
+- FIX 2: app.py - /api/ping sieu nhe va /api/status co cache ngan, tranh timeout khi Chrome dang setup/recover.
+- FIX 3: chrome_session.py - khi Flow reload page sau Enter, tiep tuc cho response thay vi fail task voi "page is refreshed".
+- FIX 4: chrome_session.py - giu dung loi goc tu Google operation, vi du PUBLIC_ERROR_HIGH_TRAFFIC, thay vi chi bao MEDIA_GENERATION_STATUS_FAILED.
+- Files: server/app.py, server/chrome_session.py
+
+1.0.687
+2026-05-11 (VN)
+Fix: Video model override - de Chrome UI quyet dinh model (Lite LP)
+- VAN DE: Interceptor ep videoModelKey = veo_3_1_r2v_fast_landscape_ultra_relaxed
+  → Chrome UI da chon Lite [Lower Priority] nhung bi override
+  → Google reject model key khong khop voi entitlement → Error 500/400
+- FIX 1: app.py - video_model = '' (khong forward model cu tu client)
+- FIX 2: chrome_pool.py - xoa hardcoded model fallback
+- FIX 3: chrome_session.py - default video_model='' trong generate_video()
+  → Interceptor chi convert T2V→I2V (_t2v_ → _r2v_), KHONG override model
+  → Chrome UI giu Lite [Lower Priority] → Google chap nhan → video OK
+- Files: server/app.py, server/chrome_pool.py, server/chrome_session.py
+
+1.0.686
+2026-05-11 (VN)
+Fix: Server Chrome chon dung video model Veo 3.1 - Lite [Lower Priority]
+- VAN DE: Giao dien Flow moi hien dropdown video theo thu tu:
+  Veo 3.1 - Lite / Fast / Quality / Lite [Lower Priority]
+  -> Server cu chon item dau tien sau khi mo dropdown
+  -> Roi vao Veo 3.1 - Lite thuong thay vi Lower Priority
+- FIX: Khi vao Video mode, server uu tien item co ca "Lite" va "Lower Priority"
+  -> Neu Google doi text nhe, fallback sang bat ky item "Lower Priority"
+  -> Ap dung cho server Chrome I2V va Drission T2V/model switch
+- TEST: Da mo D:\VE3_SUITE\GoogleChromePortable - Copy\GoogleChromePortable.exe
+  tren port 19331 va JS_SELECT_VIDEO_MODE tra SUCCESS
+- Files: server/chrome_session.py, modules/drission_flow_api.py
+
+1.0.685
+2026-05-08 (VN)
+Fix: Tat GUI khong tat Chrome/CMD - page.quit() treo block _on_close vinh vien
+- VAN DE: page.quit() (DrissionPage) treo khi Chrome bi ket (interceptor/fingerprint)
+  → _on_close() KHONG BAO GIO den os._exit(0) → CMD den van chay, Chrome van song
+  → Phai vao Task Manager tat tay
+- FIX 1: _on_close chay cleanup trong thread rieng, timeout 15s
+  → Neu page.quit() treo → sau 15s bo qua → WMIC batch terminate Chrome
+  → os._exit(0) LUON chay → CMD dong, Python exit
+- FIX 2: _kill_tool_cmd_processes dung WMIC batch terminate + taskkill /F /T
+  → Truoc: kill_pid() chi kill 1 process → Chrome children thanh orphan
+  → Sau: WMIC terminate tat ca cung luc + taskkill /T kill tree (ca children)
+- Files: server/server_gui.py, server/chrome_pool.py
+
+1.0.684
+2026-05-08 (VN)
+Fix: Video poll LUON tra HTTP 400 - media format khong convert dung sang operations
+- VAN DE: Google tra 2 format: {operations:[...]} HOAC {media:[...]}
+  → Khi tra media format (SCHEDULED/PENDING), server gan operations = media_items TRUC TIEP
+  → Poll API (batchCheckAsyncVideoGenerationStatus) can {operations:[{operation:{name:id}}]}
+  → Nhung gui {operations:[{mediaMetadata:{...}}]} → SAI FORMAT → Google tra 400 BAD REQUEST
+  → 100% video poll FAIL → timeout 300s → server danh dau OK nhung KHONG co video URL
+  → Client doi 600s → "Timeout waiting for video from proxy"
+- FIX: Convert media format sang operations format truoc khi poll
+  → Trich media_id tu media items → tao {operation:{name:media_id}, status:PENDING}
+  → Poll API nhan dung format → tra SUCCESSFUL + video URL
+  → SCHEDULED status (moi) cung duoc handle (giong PENDING)
+- File: server/chrome_session.py
+
+Fix: Worker chet vinh vien khong hoi phuc - next_self_heal_at khong duoc khoi tao
+- VAN DE: next_self_heal_at dung trong while True nhung KHONG BAO GIO duoc khai bao
+  → Worker fail setup → vao self-heal block → NameError → thread crash im lang
+  → Worker chet vinh vien (daemon thread), 10 Chrome → con 3-4 sau vai tieng
+- FIX: Khoi tao next_self_heal_at + self_heal_failures truoc while True
+  → Self-heal loop chay dung: retry setup voi delay tang dan (30s → 120s)
+  → Moi 3 lan fail → rotate IPv6 moi truoc khi retry
+  → Worker LUON tu hoi phuc, khong chet vinh vien
+- File: server/chrome_pool.py
+
+Fix: Chrome zombie khi tat GUI - page.quit() fail thi Chrome con song
+- VAN DE: close_all() chi dung page.quit() (DrissionPage)
+  → Chrome hung/crash → quit() fail im lang → Chrome process con chay
+  → Tat GUI nhung Chrome van chiem RAM + port
+- FIX: close_all() them force kill bang taskkill /F
+  → Sau graceful quit → scan chrome.exe co GoogleChromePortable → kill PID
+  → Dam bao 100% Chrome bi tat khi dong GUI
+- File: server/chrome_pool.py
+
+1.0.681
+2026-04-04 (VN)
+Fix: IPv6 Pool GUI - tu dong tat process cu con chay an khi mo lai
+- VAN DE: Tat GUI nhung Python process van chay ngam (giu port 8765)
+  → Mo GUI moi → port bi chiem → API server start that bai hoac dung server cu
+  → Server cu co _log_func = print() → log khong hien thi trong GUI moi
+  → Phai vao Task Manager tat tay process Python cu
+- FIX 1: _kill_old_instances() khi GUI khoi dong
+  → Tim va kill process Python cu dang chay ipv6_gui
+  → Chi kill process khac (khong kill chinh minh)
+- FIX 2: _kill_port_holder() khi bind port that bai (OSError)
+  → Tim PID dang LISTEN tren port 8765 → kill → retry bind
+  → GUI moi luon start API server thanh cong
+- Files: ipv6/ipv6_gui.py, ipv6/ipv6_server.py
