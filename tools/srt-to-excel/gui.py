@@ -272,8 +272,17 @@ class SrtToExcelApp(tk.Tk):
         tk.Label(hdr, text="Tạo prompts cinematographic từ file SRT",
                  bg=PANEL, fg=FG2, font=FONT_BODY).pack(side="left", pady=10)
 
-        # Version badge
-        tk.Label(hdr, text=" v1.0 ", bg=ACCENT2, fg="#000",
+        # Version badge (auto from git commit count)
+        _v = "1.0"
+        try:
+            import subprocess as _sp
+            _r = _sp.run(["git", "rev-list", "--count", "HEAD"],
+                         cwd=os.path.dirname(TOOL_DIR), capture_output=True, text=True, timeout=5)
+            if _r.returncode == 0:
+                _v = f"1.0.{_r.stdout.strip()}"
+        except Exception:
+            pass
+        tk.Label(hdr, text=f" v{_v} ", bg=ACCENT2, fg="#000",
                  font=FONT_SMALL, padx=4).pack(side="right", padx=16, pady=16)
 
         SeparatorH(self).pack(fill="x")
