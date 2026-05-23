@@ -5047,11 +5047,67 @@ Get-CimInstance Win32_Process |
         except Exception:
             return (0, 10**9, 10**9, code)
 
+    def _get_project_channel(self, project_dir) -> str:
+        """Lấy channel (TL1-T1, TL1-T10, TH1-T2...) của project từ metadata cache."""
+        import re
+        pd = Path(project_dir)
+        # 1. Từ .nguon_runtime_metadata.yaml
+        meta_path = pd / ".nguon_runtime_metadata.yaml"
+        if meta_path.exists():
+            try:
+                import yaml
+                d = yaml.safe_load(meta_path.read_text(encoding="utf-8")) or {}
+                ch = str(d.get("reference_channel", "") or "").strip()
+                if ch:
+                    return ch
+            except Exception:
+                pass
+        # 2. Từ .ve3_run_config.json
+        cfg_path = pd / ".ve3_run_config.json"
+        if cfg_path.exists():
+            try:
+                import json
+                d = json.loads(cfg_path.read_text(encoding="utf-8"))
+                ch = str(d.get("reference_channel", "") or "").strip()
+                if ch:
+                    return ch
+            except Exception:
+                pass
+        # 3. Fallback: infer từ project code (TL1-0001 → TL1-T1)
+        code = pd.name
+        m = re.match(r"^([A-Za-z]+\d+)-0*(\d+)$", code, flags=re.IGNORECASE)
+        if m:
+            return f"{m.group(1).upper()}-T{int(m.group(2))}"
+        return "unknown"
+
+    def _interleave_by_channel(self, projects, priority_key_func):
+        """Sắp xếp round-robin theo kênh, trong mỗi kênh dùng priority_key_func."""
+        from collections import OrderedDict
+        # Group by channel
+        channel_groups = OrderedDict()
+        for pd in projects:
+            ch = self._get_project_channel(pd)
+            channel_groups.setdefault(ch, []).append(pd)
+        # Sort within each channel by priority
+        for ch in channel_groups:
+            channel_groups[ch] = sorted(channel_groups[ch], key=priority_key_func)
+        # Round-robin pick
+        result = []
+        while any(channel_groups.values()):
+            for ch in list(channel_groups.keys()):
+                if channel_groups[ch]:
+                    result.append(channel_groups[ch].pop(0))
+                else:
+                    del channel_groups[ch]
+        return result
+
     def _queue_projects_excel(self):
-        return sorted(self._queue_projects(), key=self._excel_priority_key)
+        projects = self._queue_projects()
+        return self._interleave_by_channel(projects, self._excel_priority_key)
 
     def _queue_projects_ve3(self):
-        return sorted(self._queue_projects(), key=self._ve3_priority_key)
+        projects = self._queue_projects()
+        return self._interleave_by_channel(projects, self._ve3_priority_key)
 
     def _project_excel_path(self, project_dir):
         code = project_dir.name
