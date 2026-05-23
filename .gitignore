@@ -18,6 +18,12 @@ tools/ve3/config/flow_accounts.yaml
 GoogleChromePortable*/
 chrome_profiles/
 
+# === REFERENCE IMAGES (mỗi máy copy riêng, quá nặng cho git) ===
+tools/srt-to-excel/reference_characters/**/*.png
+
+# === INSTALLER EXE (không cần track) ===
+*.paf.exe
+
 # === PYTHON CACHE ===
 __pycache__/
 *.pyc
