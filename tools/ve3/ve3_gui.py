@@ -2592,19 +2592,24 @@ foreach ($pid in $children) {{
             from updater import check_update, download_and_apply
             info = check_update()
             if info.get("error"):
-                self.after(0, lambda: self._update_btn.configure(text="Lỗi kết nối", state="normal", text_color="#FF4444"))
-                self.after(3000, lambda: self._update_btn.configure(text="Check Update", text_color="#888"))
+                err = info["error"][:30]
+                self.after(0, lambda: self._update_btn.configure(text=f"Lỗi: {err}", state="normal", text_color="#FF4444"))
+                self.after(5000, lambda: self._update_btn.configure(text="Check Update", text_color="#888"))
             elif info["available"]:
+                remote = info["remote"]
                 self.after(0, lambda: self._update_btn.configure(
-                    text=f"Update v{info['remote']}", state="normal",
+                    text=f"Update v{remote}", state="normal",
                     fg_color="#2E7D32", text_color="#FFF",
                     command=lambda: self._do_update()))
+                self.after(0, lambda: self._version_label.configure(
+                    text=f"v{info['local']}  →  v{remote}", text_color="#FFA500"))
             else:
                 self.after(0, lambda: self._update_btn.configure(text="Mới nhất ✓", state="normal", text_color="#43e97b"))
-                self.after(3000, lambda: self._update_btn.configure(text="Check Update", text_color="#888", fg_color=SB2))
+                self.after(5000, lambda: self._update_btn.configure(text="Check Update", text_color="#888", fg_color=SB2))
         except Exception as e:
-            self.after(0, lambda: self._update_btn.configure(text="Lỗi", state="normal", text_color="#FF4444"))
-            self.after(3000, lambda: self._update_btn.configure(text="Check Update", text_color="#888"))
+            err_msg = str(e)[:30]
+            self.after(0, lambda: self._update_btn.configure(text=f"Lỗi: {err_msg}", state="normal", text_color="#FF4444"))
+            self.after(5000, lambda: self._update_btn.configure(text="Check Update", text_color="#888"))
 
     def _do_update(self):
         self._update_btn.configure(text="Đang tải...", state="disabled", text_color="#FFA500")
