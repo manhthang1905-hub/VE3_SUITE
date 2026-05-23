@@ -3324,8 +3324,10 @@ Return JSON only:
         min_shots = max(2, int(duration / 7))
         max_shots = max(2, int(duration / 4))
 
-        prompt = f"""You are a FILM DIRECTOR. This scene is {duration:.1f} seconds - TOO LONG for one shot (max 8s).
-Split it into {min_shots}-{max_shots} DISTINCT cinematic shots.
+        _split_role = {"finance": "FINANCIAL VISUAL DIRECTOR", "success": "SELF-DEVELOPMENT VISUAL DIRECTOR"}.get(self.topic, "FILM DIRECTOR")
+        _split_type = {"finance": "financial illustration", "success": "self-development illustration"}.get(self.topic, "cinematic shot")
+        prompt = f"""You are a {_split_role}. This scene is {duration:.1f} seconds - TOO LONG for one shot (max 8s).
+Split it into {min_shots}-{max_shots} DISTINCT {_split_type}s.
 
 ORIGINAL SCENE:
 - Duration: {duration:.1f}s (from {srt_start} to {srt_end})
@@ -4546,7 +4548,8 @@ Return JSON only:
         relevant_locs = [f"- {lid}: {llock}" for lid, llock in list(loc_locks.items())[:3]]
 
         # Build prompt
-        prompt = f"""Create {image_count} cinematic shots for this story segment.
+        _shot_type = {"finance": "financial illustration", "success": "self-development illustration"}.get(self.topic, "cinematic shot")
+        prompt = f"""Create {image_count} {_shot_type}s for this content segment.
 
 SEGMENT: "{seg_name}"
 Story: {message}
@@ -4661,7 +4664,8 @@ Return JSON only:
             for idx, entry in batch_entries:
                 srt_text += f"[{idx+1}] {entry.start_time} --> {entry.end_time}\n{entry.text}\n\n"
 
-            prompt = f"""Create cinematic shots for this content.
+            _shot_type2 = {"finance": "financial illustration", "success": "self-development illustration"}.get(self.topic, "cinematic shot")
+            prompt = f"""Create {_shot_type2}s for this content.
 
 CONTEXT: {context_lock}
 
@@ -4903,7 +4907,11 @@ Scene {unit['scene_id']}:
 - Transition to next beat: "{unit.get('transition_to_next', '')}"
 """
 
-                enrich_prompt = f"""You are a FILM DIRECTOR. Enrich pre-defined SRT scenes.
+                _director_role = {
+                    "finance": "FINANCIAL EDUCATION VISUAL DIRECTOR. You visualize money concepts through concrete everyday financial situations — savings, budgets, investments, debt — using financial props (coins, charts, piggy banks, wallets) and relatable money moments",
+                    "success": "SELF-DEVELOPMENT VISUAL DIRECTOR. You visualize personal growth through concrete everyday improvement situations — habits, goals, discipline, morning routines — using growth props (notebooks, alarm clocks, running shoes, growing plants) and relatable self-improvement moments",
+                }.get(self.topic, "FILM DIRECTOR. You create visual storytelling through cinematic composition, emotional body language, and symbolic visual metaphors")
+                enrich_prompt = f"""You are a {_director_role}. Enrich pre-defined SRT scenes.
 
 SEGMENT: "{seg_name}" (batch {batch_i+1}/{n_batches})
 STORY: {message}
@@ -5403,7 +5411,11 @@ Scene {scene.get('scene_id')}:
 - Next scene beat: {next_scene.get('primary_subject', '')} / {next_scene.get('primary_action', '')}
 """
 
-            prompt = f"""You are a film director planning each scene's artistic vision.
+            _planner_role = {
+                "finance": "a financial education visual planner. For each scene, plan how to illustrate the money concept through concrete financial situations, props (coins, charts, wallets, piggy banks), and relatable everyday money moments. The viewer should immediately understand the financial idea from the image alone",
+                "success": "a self-development visual planner. For each scene, plan how to illustrate the growth concept through concrete daily improvement situations, props (notebooks, alarm clocks, running shoes, growing plants), and relatable before/after moments. The viewer should feel motivated to take action from the image alone",
+            }.get(self.topic, "a film director planning each scene's artistic vision")
+            prompt = f"""You are {_planner_role}.
 
 STORY CONTEXT:
 {context_lock}

@@ -349,9 +349,9 @@ class FinancePrompts(_StyledTopicPrompts):
     TOPIC_DOMAIN = "personal finance / financial literacy educational content"
     TOPIC_THEMES_DEFAULT = ["financial concept", "money management", "financial literacy lesson"]
     TOPIC_VISUAL_RULES_LABEL = "FINANCE"
-    TOPIC_SEGMENT_EXAMPLE_MESSAGE = "DETAILED explanation of the financial concept or money situation"
-    TOPIC_SEGMENT_EXAMPLE_ELEMENTS = ["visual metaphor", "nv1 with financial prop", "symbolic object", "anonymous silhouettes"]
-    TOPIC_SEGMENT_EXAMPLE_SUMMARY = "2-3 sentences describing finance visuals in the channel style for this segment."
+    TOPIC_SEGMENT_EXAMPLE_MESSAGE = "DETAILED explanation of the financial concept: what money decision is being discussed, why it matters, what the viewer should understand"
+    TOPIC_SEGMENT_EXAMPLE_ELEMENTS = ["financial visual metaphor", "nv1 with money/chart/investment prop", "before/after financial contrast", "anonymous silhouettes"]
+    TOPIC_SEGMENT_EXAMPLE_SUMMARY = "2-3 sentences describing how to visually illustrate this financial concept through the character's situation."
     TOPIC_SEGMENT_EXAMPLE_QUESTION = "What financial decision, risk, or opportunity is being explored?"
     TOPIC_DEFAULT_LOCK = (
         "cute minimalist finance channel character with round white head, simple dot eyes, "
@@ -366,6 +366,117 @@ class FinancePrompts(_StyledTopicPrompts):
     )
     TOPIC_DEFAULT_IMAGE_STYLE = "Clean minimalist finance illustration style, paper texture background, warm educational YouTube aesthetic"
     TOPIC_METAPHOR_LABEL = "finance metaphors"
+
+    def step1_analyze(self, sampled_text: str) -> str:
+        image_style = self._style("image_style", self.TOPIC_DEFAULT_IMAGE_STYLE)
+        palette = self._style("palette", "warm soft pastels, white space, gentle contrast")
+        negative_prompt = self._style("negative_prompt", "no readable text in images")
+        audience_block = self._audience_insight_block(strict=True)
+        return f"""Analyze this personal finance / financial literacy content for visual production.
+
+CONTENT (SAMPLED):
+{sampled_text}
+
+This channel uses one fixed visual style and one recurring reference character across the whole video.
+CHANNEL IMAGE STYLE: {image_style}
+CHANNEL PALETTE: {palette}
+NEGATIVE RULES: {negative_prompt}
+{audience_block}
+FINANCE VISUAL APPROACH:
+- Show financial concepts through concrete everyday money situations: saving, spending, investing, budgeting, debt management
+- Use financial visual metaphors: growing plants from coins (compound interest), stacking blocks (wealth building), leaking bucket (wasteful spending), shield/umbrella (financial protection), ladder/stairs (financial goals), chains (debt), open door (opportunity)
+- Props: coins, piggy banks, wallets, simple charts showing growth/decline, houses, cars, shopping bags, bills, phones with banking apps
+- Settings: home offices, kitchen tables with bills, banks, shopping areas, workplaces
+- Show the character in relatable money situations that make the viewer think "that's me"
+- Do NOT use abstract or therapy-like imagery. Finance is practical, concrete, and action-oriented.
+- Do not rely on written words inside images.
+
+Return JSON only:
+{{
+    "setting": {{
+        "era": "modern day",
+        "location": "everyday financial life environments: homes, offices, banks, shopping areas",
+        "atmosphere": "warm, practical, empowering"
+    }},
+    "themes": ["financial concept", "money management", "financial literacy lesson"],
+    "visual_style": {{
+        "cinematography": "{image_style}",
+        "color_palette": "{palette}",
+        "lighting": "lighting/rendering matching the channel style"
+    }},
+    "context_lock": "{image_style}, one recurring character nv1, anonymous silhouette/background people only for crowds, show financial concepts through concrete money situations and visual metaphors, {negative_prompt}"
+}}
+"""
+
+    def segment_prompt(self, srt_content: str, entry_start: int, entry_end: int,
+                       total_entries: int, total_duration: float, context_lock: str,
+                       themes: list, is_part: bool = False, part_label: str = "") -> str:
+        part_note = f"\nNOTE: This is {part_label}. Create segments ONLY for SRT [{entry_start}] to [{entry_end}]." if is_part else ""
+        image_style = self._style("image_style", context_lock or "channel finance illustration style")
+        palette = self._style("palette", "")
+        negative_prompt = self._style("negative_prompt", "no readable text")
+        audience_line = self._audience_insight_block(strict=True)
+        return f"""Analyze this personal finance / financial literacy content and divide it into visual segments.
+
+CONTENT CONTEXT:
+{context_lock}
+CHANNEL IMAGE STYLE: {image_style}
+CHANNEL PALETTE: {palette}
+NEGATIVE RULES: {negative_prompt}
+{audience_line}
+
+THEMES: {', '.join(themes) if themes else 'personal finance, money management, financial literacy'}
+TOTAL DURATION: {total_duration:.1f} seconds
+TOTAL SRT ENTRIES: {total_entries}
+{part_note}
+
+FULL SRT CONTENT (with index numbers):
+{srt_content}
+
+CRITICAL REQUIREMENT:
+- Your segments MUST cover ALL SRT entries from [{entry_start}] to [{entry_end}]
+- First segment starts at srt_range_start: {entry_start}
+- Last segment MUST end at srt_range_end: {entry_end}
+- NO gaps between segments
+- Use [index] numbers accurately
+
+FINANCE VISUAL RULES:
+- Use only the recurring main character nv1 for reference character scenes
+- Other people are anonymous silhouettes or simple background figures, not separate character IDs
+- Show financial concepts through concrete visual metaphors: growing coin plants, stacking savings blocks, piggy banks filling up, investment ladders, debt chains breaking, budget pie charts (no readable text on them)
+- Props must be finance-related: coins, bills, wallets, simple charts, houses, cars, phones with banking apps, shopping bags, piggy banks
+- Settings must be everyday financial situations: home desk with bills, bank interior, shopping area, workplace, kitchen table
+- The SRT narration decides the visual. Use audience-familiar financial settings only when they directly clarify the current SRT idea.
+- No readable words, labels, captions, UI text, chart text, document text, signs, numbers, logos, or watermarks
+- Finance visuals should feel practical and actionable, NOT abstract or emotional like psychology
+
+Return JSON only:
+{{
+    "segments": [
+        {{
+            "segment_id": 1,
+            "segment_name": "Financial Concept Introduction",
+            "message": "DETAILED explanation of the financial concept: what money decision is discussed, why it matters",
+            "key_elements": ["financial visual metaphor", "nv1 with money prop", "before/after financial contrast", "anonymous silhouettes"],
+            "visual_summary": "2-3 sentences describing how to visually show this financial concept through the character.",
+            "mood": "practical/concerned/hopeful/empowering",
+            "characters_involved": ["nv1"],
+            "dramatic_question": "What financial decision, risk, or opportunity is being explored?",
+            "emotional_shift": "from financial confusion to understanding",
+            "visual_arc": "begin with relatable money problem, show the financial concept visually, end with clearer financial understanding",
+            "continuity_markers": ["nv1", "channel style", "financial props"],
+            "forbidden_inventions": ["no readable text", "no extra character reference IDs", "no documents unless stated in SRT"],
+            "image_count": 3,
+            "estimated_duration": 15.0,
+            "srt_range_start": {entry_start},
+            "srt_range_end": 10,
+            "importance": "high/medium/low"
+        }}
+    ],
+    "total_images": 20,
+    "summary": "Brief overview of the financial education content structure"
+}}
+"""
 
 
 class SuccessPrompts(_StyledTopicPrompts):
@@ -391,6 +502,119 @@ class SuccessPrompts(_StyledTopicPrompts):
     )
     TOPIC_DEFAULT_IMAGE_STYLE = "Clean minimalist self-development illustration style, paper texture background, warm motivational YouTube aesthetic"
     TOPIC_METAPHOR_LABEL = "success metaphors"
+
+    def step1_analyze(self, sampled_text: str) -> str:
+        image_style = self._style("image_style", self.TOPIC_DEFAULT_IMAGE_STYLE)
+        palette = self._style("palette", "warm soft pastels, white space, gentle contrast")
+        negative_prompt = self._style("negative_prompt", "no readable text in images")
+        audience_block = self._audience_insight_block(strict=True)
+        return f"""Analyze this self-development / personal success content for visual production.
+
+CONTENT (SAMPLED):
+{sampled_text}
+
+This channel uses one fixed visual style and one recurring reference character across the whole video.
+CHANNEL IMAGE STYLE: {image_style}
+CHANNEL PALETTE: {palette}
+NEGATIVE RULES: {negative_prompt}
+{audience_block}
+SELF-DEVELOPMENT VISUAL APPROACH:
+- Show personal growth concepts through concrete daily life situations: building habits, setting goals, overcoming procrastination, morning routines, discipline, time management
+- Use growth and motivation visual metaphors: climbing stairs step by step (progress), planting seeds that grow (long-term habits), building blocks stacking (skill building), opening doors (new opportunities), sunrise/dawn (fresh starts), path splitting (choices), weight lifting off shoulders (relief from bad habits)
+- Props: alarm clocks, notebooks/planners, running shoes, books, small plants growing, water bottles, to-do lists (no readable text), calendars, dumbbells, mirrors
+- Settings: bedrooms at dawn, study desks, parks for morning walks, gyms, kitchen tables, home workspaces
+- Show before/after contrasts: lazy couch vs active morning, cluttered desk vs organized workspace, heavy clouds vs clear sky
+- The character should feel relatable and human — show struggles, small wins, and gradual progress, NOT perfection
+- Do NOT use therapy/clinical imagery or abstract emotional concepts. Self-development is practical, action-based, and forward-looking.
+- Do not rely on written words inside images.
+
+Return JSON only:
+{{
+    "setting": {{
+        "era": "modern day",
+        "location": "everyday self-improvement environments: bedrooms, desks, parks, gyms, kitchens",
+        "atmosphere": "warm, motivating, encouraging"
+    }},
+    "themes": ["success habit", "personal growth", "self-improvement lesson"],
+    "visual_style": {{
+        "cinematography": "{image_style}",
+        "color_palette": "{palette}",
+        "lighting": "lighting/rendering matching the channel style"
+    }},
+    "context_lock": "{image_style}, one recurring character nv1, anonymous silhouette/background people only for crowds, show self-development concepts through concrete daily situations and growth metaphors, {negative_prompt}"
+}}
+"""
+
+    def segment_prompt(self, srt_content: str, entry_start: int, entry_end: int,
+                       total_entries: int, total_duration: float, context_lock: str,
+                       themes: list, is_part: bool = False, part_label: str = "") -> str:
+        part_note = f"\nNOTE: This is {part_label}. Create segments ONLY for SRT [{entry_start}] to [{entry_end}]." if is_part else ""
+        image_style = self._style("image_style", context_lock or "channel self-development illustration style")
+        palette = self._style("palette", "")
+        negative_prompt = self._style("negative_prompt", "no readable text")
+        audience_line = self._audience_insight_block(strict=True)
+        return f"""Analyze this self-development / personal success content and divide it into visual segments.
+
+CONTENT CONTEXT:
+{context_lock}
+CHANNEL IMAGE STYLE: {image_style}
+CHANNEL PALETTE: {palette}
+NEGATIVE RULES: {negative_prompt}
+{audience_line}
+
+THEMES: {', '.join(themes) if themes else 'success habits, personal growth, self-improvement'}
+TOTAL DURATION: {total_duration:.1f} seconds
+TOTAL SRT ENTRIES: {total_entries}
+{part_note}
+
+FULL SRT CONTENT (with index numbers):
+{srt_content}
+
+CRITICAL REQUIREMENT:
+- Your segments MUST cover ALL SRT entries from [{entry_start}] to [{entry_end}]
+- First segment starts at srt_range_start: {entry_start}
+- Last segment MUST end at srt_range_end: {entry_end}
+- NO gaps between segments
+- Use [index] numbers accurately
+
+SELF-DEVELOPMENT VISUAL RULES:
+- Use only the recurring main character nv1 for reference character scenes
+- Other people are anonymous silhouettes or simple background figures, not separate character IDs
+- Show growth through concrete visual metaphors: climbing stairs (progress), planting seeds (habits), building blocks (skills), sunrise (fresh start), path splitting (choices), opening doors (opportunity), weight lifting off shoulders (overcoming)
+- Props must relate to self-improvement: alarm clocks, notebooks, running shoes, books, small growing plants, water bottles, calendars, dumbbells, mirrors
+- Settings must be everyday improvement situations: bedroom at dawn, study desk, park walk, gym, kitchen, home workspace
+- Show before/after contrasts: the struggle THEN the small win — not just the result
+- The SRT narration decides the visual. Use audience-familiar growth settings only when they directly clarify the current SRT idea.
+- No readable words, labels, captions, UI text, chart text, document text, signs, numbers, logos, or watermarks
+- Self-development visuals should feel motivating and practical, NOT clinical or abstract like psychology
+
+Return JSON only:
+{{
+    "segments": [
+        {{
+            "segment_id": 1,
+            "segment_name": "Growth Concept Introduction",
+            "message": "DETAILED explanation of the self-development concept: what habit or mindset is discussed, what the viewer should change",
+            "key_elements": ["growth visual metaphor", "nv1 in daily improvement situation", "before/after contrast", "motivational prop"],
+            "visual_summary": "2-3 sentences describing how to visually show this growth concept through the character's daily situation.",
+            "mood": "determined/struggling/hopeful/empowering",
+            "characters_involved": ["nv1"],
+            "dramatic_question": "What habit, goal, or personal breakthrough is being explored?",
+            "emotional_shift": "from procrastination/confusion to motivation/clarity",
+            "visual_arc": "begin with relatable struggle, show the growth effort, end with small visible progress",
+            "continuity_markers": ["nv1", "channel style", "growth props"],
+            "forbidden_inventions": ["no readable text", "no extra character reference IDs", "no documents unless stated in SRT"],
+            "image_count": 3,
+            "estimated_duration": 15.0,
+            "srt_range_start": {entry_start},
+            "srt_range_end": 10,
+            "importance": "high/medium/low"
+        }}
+    ],
+    "total_images": 20,
+    "summary": "Brief overview of the self-development content structure"
+}}
+"""
 
 
 def is_styled_topic(topic: str) -> bool:
