@@ -1293,9 +1293,9 @@ Generator/context error:
             or (wb.get_config_value("psychology_reference_image") if wb is not None else "")
             or ""
         ).strip()
-        if configured:
+        if configured and configured not in (".", ".."):
             path = Path(configured)
-            if path.exists():
+            if path.exists() and path.is_file():
                 return path
         channel = str(
             self.config.get("reference_channel", "")
