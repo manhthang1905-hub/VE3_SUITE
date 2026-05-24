@@ -947,27 +947,24 @@ Generator/context error:
             self.bearer_token = self.bearer_token[7:].strip()
             self.log("ÄÃ£ tá»± Ä‘á»™ng bá» prefix 'Bearer ' khá»i token", "WARN")
 
-        if (not self.bearer_token or not self.flow_project_id) and not self._ensure_flow_auth(wb, force_refresh=False, reason="startup"):
-            result["errors"].append("Thiáº¿u token/project_id vÃ  khÃ´ng thá»ƒ tá»± láº¥y Flow auth")
-            return result
 
-        if not self.bearer_token:
-            result["errors"].append("Thiáº¿u bearer token! Nháº­p trong GUI hoáº·c sheet config")
-            return result
+        is_server_mode = self.generation_backend == "server" and self.pool and self.pool.servers
+        if not is_server_mode:
+            if (not self.bearer_token or not self.flow_project_id) and not self._ensure_flow_auth(wb, force_refresh=False, reason="startup"):
+                result["errors"].append("Thieu token/project_id")
+                return result
+            if not self.bearer_token:
+                result["errors"].append("Thieu bearer token")
+                return result
+            if not self.flow_project_id:
+                result["errors"].append("Thieu flow_project_id")
+                return result
+        else:
+            if not self.bearer_token or not self.flow_project_id:
+                self.log("[AUTH] Server mode: skip local auth, server se tu xu ly token", "INFO")
+                self.bearer_token = self.bearer_token or "server-managed"
+                self.flow_project_id = self.flow_project_id or "server-managed"
 
-        if not self.flow_project_id:
-            result["errors"].append("Thiáº¿u flow_project_id! Nháº­p trong GUI hoáº·c sheet config")
-            return result
-
-        if not self.bearer_token.startswith("ya29."):
-            result["errors"].append(
-                f"Bearer token khÃ´ng há»£p lá»‡ (pháº£i báº¯t Ä‘áº§u báº±ng 'ya29.'). "
-                f"Token hiá»‡n táº¡i: '{self.bearer_token[:20]}...'. "
-                f"HÃ£y nháº­p láº¡i token trong GUI (khÃ´ng cáº§n chá»¯ 'Bearer')"
-            )
-            return result
-
-        # Táº¡o thÆ° má»¥c output
         self.nv_dir.mkdir(parents=True, exist_ok=True)
         self.img_dir.mkdir(parents=True, exist_ok=True)
         self.vid_dir.mkdir(parents=True, exist_ok=True)
