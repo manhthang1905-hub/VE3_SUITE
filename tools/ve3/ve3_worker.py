@@ -2864,8 +2864,8 @@ Generator/context error:
                     if "401" in err or "Authentication" in err:
                         self.log(f"    [{output_path.stem}] TOKEN Háº¾T Háº N â€” cáº§n Ä‘á»•i token má»›i (láº§n {attempt+1})", "ERROR")
                         self.log(f"    [{output_path.stem}] Server se tu refresh token, retry...", "WARN")
-                            self.log(f"    [{output_path.stem}] ÄÃ£ láº¥y token má»›i, retry ngay", "SUCCESS")
-                            continue
+                        import time as _time; _time.sleep(3)
+                        continue
                     elif "400" in err or "invalid" in err.lower():
                         self.log(f"    [{output_path.stem}] GOOGLE Tá»ª CHá»I â€” {err[:300]} (láº§n {attempt+1})", "ERROR")
                     elif "FAILED" in err:
