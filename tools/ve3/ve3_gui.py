@@ -5017,63 +5017,35 @@ Get-CimInstance Win32_Process |
 
     def _excel_priority_key(self, project_dir):
         code = project_dir.name.lower()
-        ep = self._project_excel_path(project_dir)
         srt_path = project_dir / f"{project_dir.name}.srt"
         has_srt = srt_path.exists()
-        size_hint = srt_path.stat().st_size if has_srt else 10**15
-        mtime_hint = -project_dir.stat().st_mtime
-        has_excel = ep.exists()
-        resume_priority = 2
-        if has_excel:
-            try:
-                from modules.excel_manager import PromptWorkbook
-                wb = PromptWorkbook(str(ep)); wb.load_or_create()
-                stats = wb.get_stats()
-                scenes = int(stats.get("scenes_with_prompts", 0) or stats.get("total_scenes", 0) or 0)
-                images_done = int(stats.get("images_done", 0) or 0)
-                videos_done = int(stats.get("videos_done", 0) or 0)
-                if scenes > 0 and (images_done < scenes or videos_done < scenes):
-                    resume_priority = 0
-                else:
-                    resume_priority = 1
-            except Exception:
-                resume_priority = 0
-        return (resume_priority, 0 if has_excel else 1, 0 if has_srt else 1, size_hint, mtime_hint, code)
+        has_excel = self._project_excel_path(project_dir).exists()
+        has_img = (project_dir / "img").exists()
+        mtime_hint = 0
+        try:
+            mtime_hint = -project_dir.stat().st_mtime
+        except Exception:
+            pass
+        if has_img:
+            resume_priority = 0
+        elif has_excel:
+            resume_priority = 1
+        else:
+            resume_priority = 2
+        return (resume_priority, 0 if has_excel else 1, 0 if has_srt else 1, mtime_hint, code)
 
     def _ve3_priority_key(self, project_dir):
-        ep = self._project_excel_path(project_dir)
         code = project_dir.name.lower()
-        if not ep.exists():
-            return (999, code)  # Excel chÆ°a cÃ³ â†’ priority tháº¥p nháº¥t
-        cache_key = str(ep)
-        now = _time.time()
-        try:
-            st = ep.stat()
-            cache_sig = (float(st.st_mtime), int(st.st_size))
-            cached = self._ve3_priority_cache.get(cache_key)
-            if cached and cached.get("sig") == cache_sig and now - float(cached.get("ts", 0.0) or 0.0) < self._ve3_priority_cache_ttl:
-                return cached.get("key")
-        except Exception:
-            cache_sig = None
-        try:
-            from modules.excel_manager import PromptWorkbook
-            wb = PromptWorkbook(str(ep))
-            wb.load()  # Chá»‰ load, khÃ´ng create
-            stats = wb.get_stats()
-            scenes = int(stats.get("scenes_with_prompts", 0) or stats.get("total_scenes", 0) or 0)
-            images_done = int(stats.get("images_done", 0) or 0)
-            videos_done = int(stats.get("videos_done", 0) or 0)
-
-            total_units = max(1, scenes * 2)
-            done_units = images_done + videos_done
-            completion_ratio = done_units / total_units
-            remaining_units = total_units - done_units
-            key = (-completion_ratio, remaining_units, scenes, code)
-            if cache_sig is not None:
-                self._ve3_priority_cache[cache_key] = {"sig": cache_sig, "ts": now, "key": key}
-            return key
-        except Exception:
-            return (0, 10**9, 10**9, code)
+        if not self._project_excel_path(project_dir).exists():
+            return (999, code)
+        img_dir = project_dir / "img"
+        img_count = 0
+        if img_dir.exists():
+            try:
+                img_count = sum(1 for _ in img_dir.iterdir())
+            except Exception:
+                pass
+        return (-img_count, code)
 
     _channel_cache = {}
     _in_progress_cache = {}
