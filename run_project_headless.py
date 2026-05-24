@@ -177,14 +177,14 @@ def lookup_reference_channel_from_nguon_sheet(code: str) -> str:
             "channel", "ma kenh", "mã kênh", "channel code",
         }
         channel_cols = [idx for idx, name in enumerate(headers) if name in channel_header_terms]
-        root = SRT_TOOL_DIR / "reference_characters" / "psychology"
-
         def valid_channel(text):
             text = str(text or "").strip()
             if not text:
                 return ""
-            if (root / text / "nv1.png").exists() or (root / text / "style.yaml").exists():
-                return text
+            for ref_dir in ["psychology", "finance", "success"]:
+                root = SRT_TOOL_DIR / "reference_characters" / ref_dir
+                if (root / text / "nv1.png").exists() or (root / text / "style.yaml").exists():
+                    return text
             return ""
 
         for row in rows[1:] if rows else []:
@@ -265,7 +265,14 @@ def load_project_nguon_metadata(project_dir: Path, code: str) -> dict:
     if not topic and _nguon_sheet_cache:
         topic = lookup_topic_from_nguon_sheet(code)
     reference_channel = resolve_psychology_reference_channel(sheet_reference_channel or "", code)
-    ref = SRT_TOOL_DIR / "reference_characters" / "psychology" / reference_channel / "nv1.png"
+    ref_dir = {"finance": "finance", "success": "success"}.get(topic, "psychology")
+    ref = SRT_TOOL_DIR / "reference_characters" / ref_dir / reference_channel / "nv1.png"
+    if not ref.exists():
+        for try_dir in ["psychology", "finance", "success"]:
+            try_ref = SRT_TOOL_DIR / "reference_characters" / try_dir / reference_channel / "nv1.png"
+            if try_ref.exists():
+                ref = try_ref
+                break
     data = {
         "project_code": code,
         "topic": topic or "",

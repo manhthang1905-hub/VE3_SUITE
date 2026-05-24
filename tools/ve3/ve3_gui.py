@@ -2380,7 +2380,14 @@ foreach ($pid in $children) {{
         if not topic and self.__class__._nguon_sheet_cache:
             topic = self._lookup_topic_from_nguon_sheet(code)
         reference_channel = self._resolve_psychology_reference_channel(sheet_reference_channel or "", code)
-        ref = SUITE_ROOT / "tools" / "srt-to-excel" / "reference_characters" / "psychology" / reference_channel / "nv1.png"
+        ref_dir = {"finance": "finance", "success": "success"}.get(topic, "psychology")
+        ref = SUITE_ROOT / "tools" / "srt-to-excel" / "reference_characters" / ref_dir / reference_channel / "nv1.png"
+        if not ref.exists():
+            for try_dir in ["psychology", "finance", "success"]:
+                try_ref = SUITE_ROOT / "tools" / "srt-to-excel" / "reference_characters" / try_dir / reference_channel / "nv1.png"
+                if try_ref.exists():
+                    ref = try_ref
+                    break
         data = {
             "project_code": code,
             "topic": topic or "",
