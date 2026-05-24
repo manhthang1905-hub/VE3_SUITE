@@ -5075,48 +5075,35 @@ Get-CimInstance Win32_Process |
         except Exception:
             return (0, 10**9, 10**9, code)
 
+    _channel_cache = {}
+    _in_progress_cache = {}
+    _cache_ts = 0
+
     def _get_project_channel(self, project_dir) -> str:
-        """Lấy channel (TL1-T1, TL1-T10, TH1-T2...) của project từ metadata cache."""
+        """Lấy channel từ project code (không đọc file)."""
         import re
-        pd = Path(project_dir)
-        # 1. Từ .nguon_runtime_metadata.yaml
-        meta_path = pd / ".nguon_runtime_metadata.yaml"
-        if meta_path.exists():
-            try:
-                import yaml
-                d = yaml.safe_load(meta_path.read_text(encoding="utf-8")) or {}
-                ch = str(d.get("reference_channel", "") or "").strip()
-                if ch:
-                    return ch
-            except Exception:
-                pass
-        # 2. Từ .ve3_run_config.json
-        cfg_path = pd / ".ve3_run_config.json"
-        if cfg_path.exists():
-            try:
-                import json
-                d = json.loads(cfg_path.read_text(encoding="utf-8"))
-                ch = str(d.get("reference_channel", "") or "").strip()
-                if ch:
-                    return ch
-            except Exception:
-                pass
-        # 3. Fallback: infer từ project code (TL1-0001 → TL1-T1)
-        code = pd.name
+        code = Path(project_dir).name
+        if code in self._channel_cache:
+            return self._channel_cache[code]
         m = re.match(r"^([A-Za-z]+\d+)-0*(\d+)$", code, flags=re.IGNORECASE)
-        if m:
-            return f"{m.group(1).upper()}-T{int(m.group(2))}"
-        return "unknown"
+        ch = f"{m.group(1).upper()}-T{int(m.group(2))}" if m else "unknown"
+        self._channel_cache[code] = ch
+        return ch
 
     def _is_project_in_progress(self, project_dir) -> bool:
-        """Project đang làm dở = có Excel + có ít nhất 1 ảnh trong img/."""
+        """Project đang làm dở = có ít nhất 1 ảnh trong img/."""
         pd = Path(project_dir)
-        if not self._project_excel_path(pd).exists():
-            return False
+        now = _time.time()
+        if now - self._cache_ts > 60:
+            self._in_progress_cache.clear()
+            self._cache_ts = now
+        code = pd.name
+        if code in self._in_progress_cache:
+            return self._in_progress_cache[code]
         img_dir = pd / "img"
-        if not img_dir.exists():
-            return False
-        return any(img_dir.glob("*.png")) or any(img_dir.glob("*.jpg"))
+        result = img_dir.exists() and bool(next(img_dir.glob("*.png"), None))
+        self._in_progress_cache[code] = result
+        return result
 
     def _interleave_by_channel(self, projects, priority_key_func):
         """Ưu tiên mã đang làm dở trước, sau đó round-robin theo kênh cho mã mới."""
