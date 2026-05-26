@@ -308,6 +308,39 @@ async def poll_video(request: Request):
     return {"success": True, "result": result.get("data", result)}
 
 
+# ─── Check Media Status (called by Gateway for I2V workflows) ─
+
+@app.post("/api/check-media")
+async def check_media(request: Request):
+    """Check media status by ID — used when I2V returns workflows instead of operations.
+
+    Uses API key auth (not bearer token) to match Google Flow SDK pattern.
+    Response when video ready: {name, video: {encodedVideo: "<base64 MP4>"}}
+    """
+    if not _client.connected:
+        return {"success": False, "error": "EXTENSION_NOT_CONNECTED"}
+
+    data = await request.json()
+    media_id = data.get("media_id", "")
+
+    if not media_id:
+        return {"success": False, "error": "MISSING_PARAMS"}
+
+    check_url = f"{GOOGLE_FLOW_API}/v1/media/{media_id}?key={GOOGLE_API_KEY}&clientContext.tool=PINHOLE"
+
+    result = await _client.send("api_request", {
+        "url": check_url,
+        "method": "GET",
+        "headers": _random_headers(),
+    }, timeout=30)
+
+    status = result.get("status", 500)
+    if result.get("error"):
+        return {"success": False, "error": result["error"], "status": status}
+
+    return {"success": True, "result": result.get("data", result), "status": status}
+
+
 # ─── Upload Image (called by Gateway) ───────────────────────
 
 @app.post("/api/upload-image")

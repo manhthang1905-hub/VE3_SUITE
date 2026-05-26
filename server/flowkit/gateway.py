@@ -21,6 +21,7 @@ import httpx
 import yaml
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
 logger = logging.getLogger(__name__)
@@ -276,6 +277,32 @@ async def _process_image_task(task_id: str, data: dict):
     stats["total_failed"] += 1
 
 
+def _deep_find_video_url(obj):
+    """Recursively find video URL in any JSON structure."""
+    if isinstance(obj, str):
+        if obj.startswith(("http://", "https://")) and any(
+            h in obj for h in (".mp4", "video", "fife", "download", "lh3.", "ugc/")
+        ):
+            return obj
+        return None
+    if isinstance(obj, dict):
+        for key in ("fifeUrl", "signedUrl", "downloadUrl", "videoUrl", "url", "uri"):
+            val = obj.get(key)
+            found = _deep_find_video_url(val)
+            if found:
+                return found
+        for val in obj.values():
+            found = _deep_find_video_url(val)
+            if found:
+                return found
+    if isinstance(obj, list):
+        for item in obj:
+            found = _deep_find_video_url(item)
+            if found:
+                return found
+    return None
+
+
 async def _process_video_task(task_id: str, data: dict):
     """Process video generation: submit + poll."""
     tasks[task_id]["status"] = "processing"
@@ -331,24 +358,50 @@ async def _process_video_task(task_id: str, data: dict):
     # Step 2: Extract operations and poll
     response_data = result.get("result", {})
     operations = response_data.get("operations", [])
+    logger.info("[Gateway] Video %s: ops=%d, workflows=%s",
+                task_id[:8], len(operations),
+                bool(response_data.get("workflows")) if isinstance(response_data, dict) else False)
+
+    # Check if media already has video URL (fast completion)
+    def _has_video_url(data):
+        return bool(_deep_find_video_url(data))
+
+    # Check for I2V workflow response (Google returns workflows instead of operations)
+    workflows = response_data.get("workflows", [])
+    primary_media_id = ""
+    if workflows:
+        for wf in workflows:
+            pm = wf.get("metadata", {}).get("primaryMediaId", "")
+            if pm:
+                primary_media_id = pm
+                break
 
     if not operations:
         media = response_data.get("media", [])
-        workflows = response_data.get("workflows", [])
-        if media or workflows:
+
+        if media and _has_video_url(response_data):
             tasks[task_id]["status"] = "completed"
             tasks[task_id]["result"] = response_data
             stats["total_completed"] += 1
             inst.mark_success()
             return
-        tasks[task_id]["status"] = "failed"
-        tasks[task_id]["error"] = "No operations in video response"
-        stats["total_failed"] += 1
-        return
 
-    # Poll loop
+        # I2V workflow: poll by media ID instead of operations
+        if workflows and primary_media_id:
+            logger.info("[Gateway] Video %s: I2V workflow detected! workflows=%s, polling media %s",
+                        task_id[:8], [w.get("name", "?")[:16] for w in workflows], primary_media_id)
+            await _poll_video_by_media_id(task_id, inst, bearer_token, primary_media_id)
+            return
+
+        if not media and not workflows:
+            tasks[task_id]["status"] = "failed"
+            tasks[task_id]["error"] = "No operations/workflows in video response"
+            stats["total_failed"] += 1
+            return
+
+    # Standard poll loop (T2V with operations)
     timeout_at = time.time() + VIDEO_POLL_TIMEOUT
-    poll_inst = inst  # Use same instance for polling (no captcha needed)
+    poll_inst = inst
 
     while time.time() < timeout_at:
         await asyncio.sleep(VIDEO_POLL_INTERVAL)
@@ -373,15 +426,19 @@ async def _process_video_task(task_id: str, data: dict):
 
         op = ops[0]
         op_status = op.get("status", "")
+        is_done = op.get("done", False)
 
-        if op_status in ("SUCCESSFUL", "COMPLETED"):
+        if "SUCCESSFUL" in op_status or "COMPLETED" in op_status or is_done:
+            video_url = _deep_find_video_url(poll_data)
+            if video_url:
+                poll_data["_video_url"] = video_url
             tasks[task_id]["status"] = "completed"
             tasks[task_id]["result"] = poll_data
             stats["total_completed"] += 1
             inst.mark_success()
             logger.info("[Gateway] Video %s DONE via %s", task_id[:8], inst.name)
             return
-        elif op_status in ("FAILED", "CANCELLED"):
+        elif "FAILED" in op_status or "CANCELLED" in op_status:
             error_msg = op.get("metadata", {}).get("error", {}).get("message", op_status)
             tasks[task_id]["status"] = "failed"
             tasks[task_id]["error"] = error_msg
@@ -389,11 +446,118 @@ async def _process_video_task(task_id: str, data: dict):
             inst.mark_failed()
             return
 
-        operations = ops  # Update with latest operation state
+        operations = ops
 
     # Timeout
     tasks[task_id]["status"] = "failed"
     tasks[task_id]["error"] = f"Video generation timeout ({VIDEO_POLL_TIMEOUT}s)"
+    stats["total_failed"] += 1
+
+
+async def _poll_video_by_media_id(task_id: str, inst, bearer_token: str, media_id: str):
+    """Poll I2V video by media ID — used when Google returns workflows instead of operations.
+
+    Google Flow's get_media API returns the video as base64 MP4 in video.encodedVideo.
+    We decode it, save to a temp file, and return a file:// URL for VE3 to pick up.
+    """
+    import base64 as _b64
+    import tempfile
+
+    start_time = time.time()
+    timeout_at = start_time + VIDEO_POLL_TIMEOUT
+    poll_count = 0
+
+    while time.time() < timeout_at:
+        await asyncio.sleep(VIDEO_POLL_INTERVAL)
+        poll_count += 1
+
+        try:
+            async with httpx.AsyncClient(timeout=30) as client:
+                resp = await client.post(f"{inst.base_url}/api/check-media", json={
+                    "media_id": media_id,
+                })
+                poll_result = resp.json()
+        except Exception:
+            continue
+
+        if not poll_result.get("success"):
+            continue
+
+        media_data = poll_result.get("result", {})
+        if not isinstance(media_data, dict):
+            continue
+
+        # Check for base64-encoded video (workflow mode response)
+        video_block = media_data.get("video", {})
+        encoded_video = video_block.get("encodedVideo", "") if isinstance(video_block, dict) else ""
+
+        if encoded_video:
+            try:
+                binary = _b64.b64decode(encoded_video)
+                # Validate MP4 magic: bytes 4-8 should be "ftyp"
+                is_mp4 = len(binary) >= 12 and binary[4:8] == b"ftyp"
+                if is_mp4:
+                    # Save to temp file
+                    out_dir = os.path.join(os.path.dirname(__file__), "_workflow_videos")
+                    os.makedirs(out_dir, exist_ok=True)
+                    out_path = os.path.join(out_dir, f"{media_id}.mp4")
+                    with open(out_path, "wb") as f:
+                        f.write(binary)
+                    gw_port = CONFIG.get("gateway_port", 5100)
+                    video_url = f"http://127.0.0.1:{gw_port}/api/fix/video-file/{media_id}"
+                    result_data = {
+                        "operations": [{
+                            "done": True,
+                            "status": "MEDIA_GENERATION_STATUS_SUCCESSFUL",
+                            "operation": {
+                                "metadata": {"video": {"fifeUrl": video_url, "mediaId": media_id}}
+                            },
+                        }],
+                        "_video_url": video_url,
+                        "_video_path": os.path.abspath(out_path),
+                        "_video_size": len(binary),
+                    }
+                    tasks[task_id]["status"] = "completed"
+                    tasks[task_id]["result"] = result_data
+                    stats["total_completed"] += 1
+                    inst.mark_success()
+                    elapsed = int(time.time() - start_time)
+                    logger.info("[Gateway] Video %s DONE (I2V encoded, %d bytes, %ds) via %s",
+                                task_id[:8], len(binary), elapsed, inst.name)
+                    return
+                else:
+                    if poll_count % 6 == 1:
+                        logger.debug("[Gateway] Video %s: got %d bytes but not MP4 yet", task_id[:8], len(binary))
+            except Exception as e:
+                logger.debug("[Gateway] Video %s: decode error: %s", task_id[:8], e)
+
+        # Also check for fifeUrl (alternative response format)
+        video_url = _deep_find_video_url(media_data)
+        if video_url:
+            result_data = {
+                "operations": [{
+                    "done": True,
+                    "status": "MEDIA_GENERATION_STATUS_SUCCESSFUL",
+                    "operation": {
+                        "metadata": {"video": {"fifeUrl": video_url}}
+                    },
+                }],
+                "_video_url": video_url,
+            }
+            tasks[task_id]["status"] = "completed"
+            tasks[task_id]["result"] = result_data
+            stats["total_completed"] += 1
+            inst.mark_success()
+            elapsed = int(time.time() - start_time)
+            logger.info("[Gateway] Video %s DONE (I2V URL, %ds) via %s", task_id[:8], elapsed, inst.name)
+            return
+
+        if poll_count % 6 == 1:
+            elapsed = int(time.time() - start_time)
+            logger.info("[Gateway] Video %s: media poll #%d (%ds), waiting...", task_id[:8], poll_count, elapsed)
+
+    tasks[task_id]["status"] = "failed"
+    tasks[task_id]["error"] = f"I2V video timeout ({VIDEO_POLL_TIMEOUT}s)"
     stats["total_failed"] += 1
 
 
@@ -559,6 +723,16 @@ async def task_status(taskId: str = ""):
         return {"success": False, "error": task.get("error", "Unknown")}
     else:
         return {"success": True, "status": task["status"], "worker": task.get("worker")}
+
+
+@app.get("/api/fix/video-file/{media_id}")
+async def serve_video_file(media_id: str):
+    """Serve a saved workflow video file."""
+    video_dir = os.path.join(os.path.dirname(__file__), "_workflow_videos")
+    video_path = os.path.join(video_dir, f"{media_id}.mp4")
+    if not os.path.isfile(video_path):
+        return {"success": False, "error": "Video file not found"}
+    return FileResponse(video_path, media_type="video/mp4", filename=f"{media_id}.mp4")
 
 
 @app.post("/api/fix/upload-image")

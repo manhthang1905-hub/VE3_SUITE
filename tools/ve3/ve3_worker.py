@@ -3179,6 +3179,31 @@ Generator/context error:
                     return m["name"]
         return ""
 
+    def _deep_find_video_url(self, obj) -> str:
+        """Recursively find video URL in any JSON structure."""
+        if isinstance(obj, str):
+            if obj.startswith(("http://", "https://")) and any(
+                h in obj for h in (".mp4", "video", "fife", "download", "lh3.", "ugc/")
+            ):
+                return obj
+            return ""
+        if isinstance(obj, dict):
+            for key in ("fifeUrl", "signedUrl", "downloadUrl", "videoUrl", "url", "_video_url"):
+                val = obj.get(key)
+                found = self._deep_find_video_url(val)
+                if found:
+                    return found
+            for val in obj.values():
+                found = self._deep_find_video_url(val)
+                if found:
+                    return found
+        if isinstance(obj, list):
+            for item in obj:
+                found = self._deep_find_video_url(item)
+                if found:
+                    return found
+        return ""
+
     def _download_flowkit_video(self, server_url: str, media_id: str, output_path: Path) -> bool:
         """Download video content via FlowKit get_media endpoint."""
         import requests as _req
@@ -3426,7 +3451,7 @@ Generator/context error:
                     import requests as _req
                     resp = _req.post(
                         f"{server.url}/api/fix/create-video-veo3",
-                        json={"body_json": body_json, "job_id": client_job_id},
+                        json={"body_json": body_json, "flow_auth_token": self.bearer_token, "job_id": client_job_id},
                         timeout=60,
                     )
                     result = resp.json()
@@ -3445,21 +3470,46 @@ Generator/context error:
                             try:
                                 sr = _req.get(f"{server.url}/api/fix/task-status?taskId={task_id}", timeout=15)
                                 st = sr.json()
-                                if st.get("status") == "completed":
+                                if st.get("success") and st.get("result"):
                                     vid_data = st.get("result", {})
-                                    media_id = self._extract_video_media_id(vid_data)
-                                    if media_id:
-                                        downloaded = self._download_flowkit_video(server.url, media_id, output_path)
-                                        if downloaded:
+                                    # Try local file path first (I2V workflow saves MP4 on gateway)
+                                    video_path = vid_data.get("_video_path", "")
+                                    video_url = vid_data.get("_video_url", "")
+                                    if not video_url:
+                                        video_url = self._deep_find_video_url(vid_data)
+                                    output_path.parent.mkdir(parents=True, exist_ok=True)
+                                    if video_path and os.path.isfile(video_path):
+                                        shutil.copy2(video_path, output_path)
+                                        pool.mark_success(server)
+                                        elapsed = int(time.time() - t_start)
+                                        sz = os.path.getsize(output_path) // 1024
+                                        self.log(f"    [{output_path.stem}] VIDEO OK ({elapsed}s, {sz}KB)", "SUCCESS")
+                                        return True, sinfo, ""
+                                    elif video_url and video_url.startswith("file://"):
+                                        local = video_url.replace("file://", "")
+                                        if os.path.isfile(local):
+                                            shutil.copy2(local, output_path)
                                             pool.mark_success(server)
                                             elapsed = int(time.time() - t_start)
                                             self.log(f"    [{output_path.stem}] VIDEO OK ({elapsed}s)", "SUCCESS")
                                             return True, sinfo, ""
+                                    elif video_url and video_url.startswith("http"):
+                                        vr = _req.get(video_url, timeout=120, stream=True)
+                                        if vr.status_code == 200:
+                                            with open(output_path, "wb") as f:
+                                                for chunk in vr.iter_content(chunk_size=8192):
+                                                    f.write(chunk)
+                                            pool.mark_success(server)
+                                            elapsed = int(time.time() - t_start)
+                                            self.log(f"    [{output_path.stem}] VIDEO OK ({elapsed}s)", "SUCCESS")
+                                            return True, sinfo, ""
+                                        else:
+                                            self.log(f"    [{output_path.stem}] VIDEO download HTTP {vr.status_code}", "WARN")
                                     pool.mark_success(server)
                                     elapsed = int(time.time() - t_start)
-                                    self.log(f"    [{output_path.stem}] VIDEO completed, media_id={media_id or '?'} ({elapsed}s)", "INFO")
+                                    self.log(f"    [{output_path.stem}] VIDEO completed but no download ({elapsed}s)", "WARN")
                                     return True, sinfo, ""
-                                elif st.get("status") == "failed":
+                                elif st.get("success") is False and st.get("error"):
                                     last_error = st.get("error", "Video failed")
                                     break
                             except Exception:
