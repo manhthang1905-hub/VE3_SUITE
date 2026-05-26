@@ -3038,7 +3038,8 @@ Generator/context error:
             (success: bool, server_info: dict, error_text: str)
         """
         if self.generation_backend == "nanopic":
-            return self._submit_video_nanopic(prompt, output_path, reference_image_id)
+            ok, sinfo, err = self._submit_video_nanopic(prompt, output_path, reference_image_id)
+            return ok, sinfo, err
 
         # FlowKit mode: try FlowKit pool first
         if self.generation_backend in ("flowkit", "combined") and self.flowkit_pool:
@@ -3166,12 +3167,19 @@ Generator/context error:
 
     def _extract_video_media_id(self, vid_data: dict) -> str:
         """Extract media_id from FlowKit video response (various formats)."""
-        # Format 1: media[].name (direct completion)
+        # Format 1: operations[].operation.metadata.video.mediaId (gateway I2V workflow)
+        for op in vid_data.get("operations", []):
+            operation = op.get("operation", {})
+            meta_video = operation.get("metadata", {}).get("video", {})
+            mid = meta_video.get("mediaId", "")
+            if mid:
+                return mid
+        # Format 2: media[].name (direct completion)
         for m in vid_data.get("media", []):
             name = m.get("name", "")
             if name:
                 return name
-        # Format 2: operations[].response.media[].name (async completion)
+        # Format 3: operations[].response.media[].name (async completion)
         for op in vid_data.get("operations", []):
             resp = op.get("response", {})
             for m in resp.get("media", []):
@@ -3472,43 +3480,40 @@ Generator/context error:
                                 st = sr.json()
                                 if st.get("success") and st.get("result"):
                                     vid_data = st.get("result", {})
-                                    # Try local file path first (I2V workflow saves MP4 on gateway)
+                                    vid_mid = self._extract_video_media_id(vid_data)
                                     video_path = vid_data.get("_video_path", "")
                                     video_url = vid_data.get("_video_url", "")
                                     if not video_url:
                                         video_url = self._deep_find_video_url(vid_data)
                                     output_path.parent.mkdir(parents=True, exist_ok=True)
+                                    downloaded = False
                                     if video_path and os.path.isfile(video_path):
                                         shutil.copy2(video_path, output_path)
-                                        pool.mark_success(server)
-                                        elapsed = int(time.time() - t_start)
-                                        sz = os.path.getsize(output_path) // 1024
-                                        self.log(f"    [{output_path.stem}] VIDEO OK ({elapsed}s, {sz}KB)", "SUCCESS")
-                                        return True, sinfo, ""
+                                        downloaded = True
                                     elif video_url and video_url.startswith("file://"):
                                         local = video_url.replace("file://", "")
                                         if os.path.isfile(local):
                                             shutil.copy2(local, output_path)
-                                            pool.mark_success(server)
-                                            elapsed = int(time.time() - t_start)
-                                            self.log(f"    [{output_path.stem}] VIDEO OK ({elapsed}s)", "SUCCESS")
-                                            return True, sinfo, ""
+                                            downloaded = True
                                     elif video_url and video_url.startswith("http"):
                                         vr = _req.get(video_url, timeout=120, stream=True)
                                         if vr.status_code == 200:
                                             with open(output_path, "wb") as f:
                                                 for chunk in vr.iter_content(chunk_size=8192):
                                                     f.write(chunk)
-                                            pool.mark_success(server)
-                                            elapsed = int(time.time() - t_start)
-                                            self.log(f"    [{output_path.stem}] VIDEO OK ({elapsed}s)", "SUCCESS")
-                                            return True, sinfo, ""
+                                            downloaded = True
                                         else:
                                             self.log(f"    [{output_path.stem}] VIDEO download HTTP {vr.status_code}", "WARN")
-                                    pool.mark_success(server)
-                                    elapsed = int(time.time() - t_start)
-                                    self.log(f"    [{output_path.stem}] VIDEO completed but no download ({elapsed}s)", "WARN")
-                                    return True, sinfo, ""
+                                    if downloaded:
+                                        pool.mark_success(server)
+                                        elapsed = int(time.time() - t_start)
+                                        sz = os.path.getsize(output_path) // 1024
+                                        self.log(f"    [{output_path.stem}] VIDEO OK ({elapsed}s, {sz}KB)", "SUCCESS")
+                                        return True, sinfo, ""
+                                    else:
+                                        self.log(f"    [{output_path.stem}] VIDEO completed but no downloadable content", "WARN")
+                                        last_error = "Video completed but no downloadable content"
+                                        break
                                 elif st.get("success") is False and st.get("error"):
                                     last_error = st.get("error", "Video failed")
                                     break

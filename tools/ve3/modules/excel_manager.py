@@ -724,6 +724,11 @@ class PromptWorkbook:
         except Exception as e:
             self.logger.warning(f"Ensure characters sheet schema error: {e}")
 
+        try:
+            self._ensure_scenes_sheet_schema()
+        except Exception as e:
+            self.logger.warning(f"Ensure scenes sheet schema error: {e}")
+
         # v1.0.441: Flush pending writes từ lần trước (nếu có)
         try:
             self._flush_pending_writes()
@@ -777,6 +782,26 @@ class PromptWorkbook:
         
         # Lưu file
         self.save()
+
+    def _ensure_scenes_sheet_schema(self) -> None:
+        """Append any missing scene columns at the end for backward compatibility."""
+        if self.workbook is None or self.SCENES_SHEET not in self.workbook.sheetnames:
+            return
+
+        ws = self.workbook[self.SCENES_SHEET]
+        headers = [cell.value for cell in ws[1]]
+        existing = {str(h) for h in headers if h}
+        changed = False
+        for column_name in SCENES_COLUMNS:
+            if column_name in existing:
+                continue
+            col_idx = ws.max_column + 1
+            ws.cell(row=1, column=col_idx, value=column_name)
+            ws.column_dimensions[get_column_letter(col_idx)].width = 18
+            changed = True
+
+        if changed:
+            self.logger.info("Updated scenes sheet schema with missing columns")
 
     def _ensure_characters_sheet_schema(self) -> None:
         """Append any missing character columns at the end for backward compatibility."""

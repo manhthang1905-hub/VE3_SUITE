@@ -1518,10 +1518,6 @@ class GoogleFlowAPI:
         proxy_label = "local server" if is_local else "nanoai.pics"
         self._log(f"POST {self.PROXY_VIDEO_API_URL} (via {proxy_label})")
 
-        # Build proxy request - format theo nanoai.pics API
-        # Copy request data from payload (includes referenceImages if Image-to-Video)
-        request_data = payload["requests"][0]
-
         # Check I2V
         is_i2v = "referenceImages" in payload.get("requests", [{}])[0]
 
@@ -1530,16 +1526,46 @@ class GoogleFlowAPI:
         else:
             flow_url = f"{self.BASE_URL}/v1/video:batchAsyncGenerateVideoText"
 
-        # Đảm bảo clientContext đúng
-        payload["clientContext"] = {
-            "sessionId": self.session_id,
-            "projectId": self.project_id,
-            "tool": self.TOOL_NAME,
-            "userPaygateTier": self.paygate_tier.value
-        }
+        if is_local:
+            # FlowKit: transform payload to Flow UI format (browser extension)
+            request_data = payload["requests"][0]
 
-        # Server cần referenceImages trong body_json.requests[0] để extract mediaId
-        # Server sẽ tự xử lý gửi cho Google đúng format
+            if "prompt" in request_data.get("textInput", {}):
+                prompt_text = request_data["textInput"]["prompt"]
+                request_data["textInput"] = {
+                    "structuredPrompt": {"parts": [{"text": prompt_text}]}
+                }
+
+            if is_i2v:
+                request_data["videoModelKey"] = "veo_3_1_r2v_lite_low_priority"
+
+            if "metadata" not in request_data:
+                request_data["metadata"] = {}
+
+            payload["mediaGenerationContext"] = {
+                "batchId": str(uuid.uuid4()),
+                "audioFailurePreference": "BLOCK_SILENCED_VIDEOS",
+            }
+            payload["useV2ModelConfig"] = True
+
+            payload["clientContext"] = {
+                "projectId": self.project_id,
+                "tool": "PINHOLE",
+                "userPaygateTier": self.paygate_tier.value,
+                "sessionId": f";{int(time.time() * 1000)}",
+                "recaptchaContext": {
+                    "token": "",
+                    "applicationType": "RECAPTCHA_APPLICATION_TYPE_WEB",
+                },
+            }
+        else:
+            payload["clientContext"] = {
+                "sessionId": self.session_id,
+                "projectId": self.project_id,
+                "tool": self.TOOL_NAME,
+                "userPaygateTier": self.paygate_tier.value
+            }
+
         if is_i2v:
             ref_imgs = payload["requests"][0].get("referenceImages", [])
             mid = ref_imgs[0].get("mediaId", "?") if ref_imgs else "?"
