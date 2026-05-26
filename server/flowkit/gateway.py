@@ -377,20 +377,20 @@ async def _process_video_task(task_id: str, data: dict):
                 break
 
     if not operations:
-        media = response_data.get("media", [])
+        # I2V workflow: poll by media ID (must check BEFORE media URL check,
+        # because I2V responses include input image media with fifeUrl)
+        if workflows and primary_media_id:
+            logger.info("[Gateway] Video %s: I2V workflow, polling media %s",
+                        task_id[:8], primary_media_id)
+            await _poll_video_by_media_id(task_id, inst, bearer_token, primary_media_id)
+            return
 
+        media = response_data.get("media", [])
         if media and _has_video_url(response_data):
             tasks[task_id]["status"] = "completed"
             tasks[task_id]["result"] = response_data
             stats["total_completed"] += 1
             inst.mark_success()
-            return
-
-        # I2V workflow: poll by media ID instead of operations
-        if workflows and primary_media_id:
-            logger.info("[Gateway] Video %s: I2V workflow detected! workflows=%s, polling media %s",
-                        task_id[:8], [w.get("name", "?")[:16] for w in workflows], primary_media_id)
-            await _poll_video_by_media_id(task_id, inst, bearer_token, primary_media_id)
             return
 
         if not media and not workflows:
@@ -728,10 +728,11 @@ async def task_status(taskId: str = ""):
 @app.get("/api/fix/video-file/{media_id}")
 async def serve_video_file(media_id: str):
     """Serve a saved workflow video file."""
+    from fastapi.responses import JSONResponse
     video_dir = os.path.join(os.path.dirname(__file__), "_workflow_videos")
     video_path = os.path.join(video_dir, f"{media_id}.mp4")
     if not os.path.isfile(video_path):
-        return {"success": False, "error": "Video file not found"}
+        return JSONResponse({"success": False, "error": "Video file not found"}, status_code=404)
     return FileResponse(video_path, media_type="video/mp4", filename=f"{media_id}.mp4")
 
 
