@@ -1600,7 +1600,12 @@ Generator/context error:
             import requests as _req
             resp = _req.post(
                 f"{server.url}/api/fix/upload-image",
-                json={"image_base64": img_b64, "mime_type": "image/png", "project_id": self.flow_project_id},
+                json={
+                    "flow_auth_token": self.bearer_token,
+                    "image_base64": img_b64,
+                    "mime_type": "image/png",
+                    "project_id": self.flow_project_id,
+                },
                 timeout=60,
             )
             data = resp.json()
