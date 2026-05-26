@@ -624,13 +624,15 @@ async function handleApiRequest(msg) {
       updateRequestLog(logId, { status: 'failed', error: `API_${response.status}`, httpStatus: response.status, responseSummary });
     }
   } catch (e) {
+    const errDetail = `${e.message || 'API_REQUEST_FAILED'} [${method || 'POST'} ${url.substring(0, 80)}]`;
+    console.error(`[FlowAgent] Fetch error: ${errDetail}`);
     sendToAgent({
       id,
       status: 500,
-      error: e.message || 'API_REQUEST_FAILED',
+      error: errDetail,
     });
-    if (hasCaptcha) { metrics.failedCount++; metrics.lastError = e.message; }
-    updateRequestLog(logId, { status: 'failed', error: e.message || 'API_REQUEST_FAILED' });
+    if (hasCaptcha) { metrics.failedCount++; metrics.lastError = errDetail; }
+    updateRequestLog(logId, { status: 'failed', error: errDetail });
   }
 
   chrome.storage.local.set({ metrics });

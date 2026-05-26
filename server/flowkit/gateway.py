@@ -315,13 +315,17 @@ async def _process_video_task(task_id: str, data: dict):
 
     if not result.get("success"):
         error = result.get("error", "")
+        detail = result.get("detail", "")
         if result.get("status") == 403:
             inst.mark_403()
         else:
             inst.mark_failed()
         tasks[task_id]["status"] = "failed"
         tasks[task_id]["error"] = error
+        if detail:
+            tasks[task_id]["detail"] = detail
         stats["total_failed"] += 1
+        logger.warning("[Gateway] Video %s FAILED: %s (status=%s)", task_id[:8], error, result.get("status"))
         return
 
     # Step 2: Extract operations and poll

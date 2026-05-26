@@ -260,7 +260,11 @@ async def generate_video(request: Request):
 
         if isinstance(status, int) and status >= 400:
             _total_failed += 1
-            return {"success": False, "error": f"HTTP {status}", "status": status}
+            response_data = result.get("data", {})
+            err_msg = ""
+            if isinstance(response_data, dict):
+                err_msg = response_data.get("error", {}).get("message", f"HTTP {status}")
+            return {"success": False, "error": err_msg or f"HTTP {status}", "status": status, "detail": response_data}
 
         _consecutive_403 = 0
         _total_completed += 1
