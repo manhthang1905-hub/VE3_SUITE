@@ -1518,6 +1518,10 @@ class GoogleFlowAPI:
         proxy_label = "local server" if is_local else "nanoai.pics"
         self._log(f"POST {self.PROXY_VIDEO_API_URL} (via {proxy_label})")
 
+        # Build proxy request - format theo nanoai.pics API
+        # Copy request data from payload (includes referenceImages if Image-to-Video)
+        request_data = payload["requests"][0]
+
         # Check I2V
         is_i2v = "referenceImages" in payload.get("requests", [{}])[0]
 
@@ -1526,46 +1530,16 @@ class GoogleFlowAPI:
         else:
             flow_url = f"{self.BASE_URL}/v1/video:batchAsyncGenerateVideoText"
 
-        if is_local:
-            # FlowKit: transform payload to Flow UI format (browser extension)
-            request_data = payload["requests"][0]
+        # Đảm bảo clientContext đúng
+        payload["clientContext"] = {
+            "sessionId": self.session_id,
+            "projectId": self.project_id,
+            "tool": self.TOOL_NAME,
+            "userPaygateTier": self.paygate_tier.value
+        }
 
-            if "prompt" in request_data.get("textInput", {}):
-                prompt_text = request_data["textInput"]["prompt"]
-                request_data["textInput"] = {
-                    "structuredPrompt": {"parts": [{"text": prompt_text}]}
-                }
-
-            if is_i2v:
-                request_data["videoModelKey"] = "veo_3_1_r2v_lite_low_priority"
-
-            if "metadata" not in request_data:
-                request_data["metadata"] = {}
-
-            payload["mediaGenerationContext"] = {
-                "batchId": str(uuid.uuid4()),
-                "audioFailurePreference": "BLOCK_SILENCED_VIDEOS",
-            }
-            payload["useV2ModelConfig"] = True
-
-            payload["clientContext"] = {
-                "projectId": self.project_id,
-                "tool": "PINHOLE",
-                "userPaygateTier": self.paygate_tier.value,
-                "sessionId": f";{int(time.time() * 1000)}",
-                "recaptchaContext": {
-                    "token": "",
-                    "applicationType": "RECAPTCHA_APPLICATION_TYPE_WEB",
-                },
-            }
-        else:
-            payload["clientContext"] = {
-                "sessionId": self.session_id,
-                "projectId": self.project_id,
-                "tool": self.TOOL_NAME,
-                "userPaygateTier": self.paygate_tier.value
-            }
-
+        # Server cần referenceImages trong body_json.requests[0] để extract mediaId
+        # Server sẽ tự xử lý gửi cho Google đúng format
         if is_i2v:
             ref_imgs = payload["requests"][0].get("referenceImages", [])
             mid = ref_imgs[0].get("mediaId", "?") if ref_imgs else "?"
@@ -1700,6 +1674,12 @@ class GoogleFlowAPI:
         last_status = ""
         attempt = 0
         down_since = None
+
+        def _fix_localhost_url(url):
+            if url and self.local_server_url and "://127.0.0.1" in url:
+                import re as _re
+                return _re.sub(r'http://127\.0\.0\.1:\d+', self.local_server_url, url)
+            return url
 
         def _deep_find_url(obj):
             """Tìm video URL trong bất kỳ cấu trúc JSON nào."""
@@ -1866,6 +1846,7 @@ class GoogleFlowAPI:
                     is_done, is_failed, video_url, err_msg = _check_operations_status(cur_ops)
 
                     if is_done and video_url:
+                        video_url = _fix_localhost_url(video_url)
                         self._log(f"Video completed via proxy! URL: {video_url[:80]}... ({int(elapsed)}s)")
                         return True, VideoGenerationResult(
                             video_url=video_url,
@@ -1888,6 +1869,7 @@ class GoogleFlowAPI:
                 is_done, is_failed, video_url, gen_status = _check_media_status(task_result)
 
                 if is_done and video_url:
+                    video_url = _fix_localhost_url(video_url)
                     self._log(f"Video completed via media! URL: {video_url[:80]}... ({int(elapsed)}s)")
                     op_name = ""
                     if cur_ops:
@@ -1900,8 +1882,7 @@ class GoogleFlowAPI:
                     ), ""
 
                 if is_done and not video_url:
-                    # Done nhưng không có URL — tìm URL ở bất kỳ đâu trong result
-                    any_url = _deep_find_url(task_result)
+                    any_url = _fix_localhost_url(_deep_find_url(task_result))
                     if any_url:
                         self._log(f"Video completed (deep search)! URL: {any_url[:80]}... ({int(elapsed)}s)")
                         return True, VideoGenerationResult(

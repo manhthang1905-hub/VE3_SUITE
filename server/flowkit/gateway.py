@@ -457,11 +457,13 @@ async def _process_video_task(task_id: str, data: dict):
 async def _poll_video_by_media_id(task_id: str, inst, bearer_token: str, media_id: str):
     """Poll I2V video by media ID — used when Google returns workflows instead of operations.
 
-    Google Flow's get_media API returns the video as base64 MP4 in video.encodedVideo.
-    We decode it, save to a temp file, and return a file:// URL for VE3 to pick up.
+    Tries direct Google API call first (just a GET, no captcha needed).
+    Falls back to extension if direct call fails to connect.
     """
     import base64 as _b64
-    import tempfile
+
+    GOOGLE_API = "https://aisandbox-pa.googleapis.com"
+    API_KEY = "AIzaSyBtrm0o5ab1c-Ec8ZuLcGt3oJAA5VWt3pY"
 
     start_time = time.time()
     timeout_at = start_time + VIDEO_POLL_TIMEOUT
@@ -471,20 +473,45 @@ async def _poll_video_by_media_id(task_id: str, inst, bearer_token: str, media_i
         await asyncio.sleep(VIDEO_POLL_INTERVAL)
         poll_count += 1
 
+        media_data = None
+
+        # Method 1: Direct Google API (no captcha needed for GET)
         try:
+            check_url = f"{GOOGLE_API}/v1/media/{media_id}?key={API_KEY}&clientContext.tool=PINHOLE"
             async with httpx.AsyncClient(timeout=30) as client:
-                resp = await client.post(f"{inst.base_url}/api/check-media", json={
-                    "media_id": media_id,
+                resp = await client.get(check_url, headers={
+                    "Authorization": f"Bearer {bearer_token}",
                 })
-                poll_result = resp.json()
-        except Exception:
-            continue
+                if resp.status_code == 200:
+                    media_data = resp.json()
+                elif poll_count <= 2:
+                    logger.info("[Gateway] Video %s: direct poll HTTP %d", task_id[:8], resp.status_code)
+        except Exception as e:
+            if poll_count <= 2:
+                logger.info("[Gateway] Video %s: direct poll error: %s", task_id[:8], e)
 
-        if not poll_result.get("success"):
-            continue
+        # Method 2: Via extension (uses extension's own flowKey)
+        if media_data is None:
+            try:
+                async with httpx.AsyncClient(timeout=30) as client:
+                    resp = await client.post(f"{inst.base_url}/api/check-media", json={
+                        "media_id": media_id,
+                    })
+                    poll_result = resp.json()
+                    if poll_count <= 3:
+                        logger.info("[Gateway] Video %s: extension poll success=%s status=%s",
+                                    task_id[:8], poll_result.get("success"), poll_result.get("status"))
+                    if poll_result.get("success"):
+                        media_data = poll_result.get("result", {})
+            except Exception as e:
+                if poll_count <= 2:
+                    logger.info("[Gateway] Video %s: extension poll error: %s", task_id[:8], e)
 
-        media_data = poll_result.get("result", {})
         if not isinstance(media_data, dict):
+            if poll_count % 6 == 1:
+                elapsed = int(time.time() - start_time)
+                logger.info("[Gateway] Video %s: media poll #%d (%ds), waiting...",
+                            task_id[:8], poll_count, elapsed)
             continue
 
         # Check for base64-encoded video (workflow mode response)
