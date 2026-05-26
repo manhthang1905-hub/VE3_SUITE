@@ -564,11 +564,15 @@ async function handleApiRequest(msg) {
     const fetchHeaders = { ...(headers || {}) };
     fetchHeaders['authorization'] = `Bearer ${activeFlowKey}`;
 
+    // When using external bearerToken (from main machine), omit browser cookies
+    // to avoid conflicting auth (server Chrome is logged into a different account)
+    const credMode = params.bearerToken ? 'omit' : 'include';
+
     // Step 4: Make the API call from browser context
     const response = await fetch(url, {
       method: method || 'POST',
       headers: fetchHeaders,
-      credentials: 'include',
+      credentials: credMode,
       body: method === 'GET' ? undefined : JSON.stringify(finalBody),
     });
 

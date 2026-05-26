@@ -160,10 +160,7 @@ async def generate_image(request: Request):
         return {"success": False, "error": "MISSING_BEARER_TOKEN"}
 
     if not flow_url:
-        flow_url = f"{GOOGLE_FLOW_API}/v1/projects/{project_id}/flowMedia:batchGenerateImages?key={GOOGLE_API_KEY}"
-    elif 'key=' not in flow_url:
-        sep = '&' if '?' in flow_url else '?'
-        flow_url = f"{flow_url}{sep}key={GOOGLE_API_KEY}"
+        flow_url = f"{GOOGLE_FLOW_API}/v1/projects/{project_id}/flowMedia:batchGenerateImages"
 
     # Ensure recaptchaContext exists for captcha injection
     _ensure_recaptcha_context(body_json)
@@ -232,10 +229,7 @@ async def generate_video(request: Request):
     if not bearer_token:
         return {"success": False, "error": "MISSING_BEARER_TOKEN"}
     if not flow_url:
-        flow_url = f"{GOOGLE_FLOW_API}/v1/video:batchAsyncGenerateVideoReferenceImages?key={GOOGLE_API_KEY}"
-    elif 'key=' not in flow_url:
-        sep = '&' if '?' in flow_url else '?'
-        flow_url = f"{flow_url}{sep}key={GOOGLE_API_KEY}"
+        flow_url = f"{GOOGLE_FLOW_API}/v1/video:batchAsyncGenerateVideoReferenceImages"
 
     _ensure_recaptcha_context(body_json)
 
@@ -294,7 +288,7 @@ async def poll_video(request: Request):
     if not bearer_token or not operations:
         return {"success": False, "error": "MISSING_PARAMS"}
 
-    check_url = f"{GOOGLE_FLOW_API}/v1/video:batchCheckAsyncVideoGenerationStatus?key={GOOGLE_API_KEY}"
+    check_url = f"{GOOGLE_FLOW_API}/v1/video:batchCheckAsyncVideoGenerationStatus"
 
     result = await _client.send("api_request", {
         "url": check_url,
@@ -327,7 +321,7 @@ async def upload_image(request: Request):
     if not bearer_token or not image_b64:
         return {"success": False, "error": "MISSING_PARAMS"}
 
-    upload_url = f"{GOOGLE_FLOW_API}/v1/flow/uploadImage?key={GOOGLE_API_KEY}"
+    upload_url = f"{GOOGLE_FLOW_API}/v1/flow/uploadImage"
     body = {
         "clientContext": {"projectId": project_id, "tool": "PINHOLE"},
         "fileName": "image.jpg",
