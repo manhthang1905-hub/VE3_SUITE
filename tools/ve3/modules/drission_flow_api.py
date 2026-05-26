@@ -3305,6 +3305,11 @@ class DrissionFlowAPI:
                 # Chrome portable - CHỈ thêm flags tối thiểu để automation hoạt động
                 options.set_argument('--no-first-run')
                 options.set_argument('--no-default-browser-check')
+                # FlowKit: load extension if specified
+                _fk_ext = os.environ.get('FLOWKIT_LOAD_EXTENSION', '')
+                if _fk_ext and os.path.isdir(_fk_ext):
+                    options.set_argument(f'--load-extension={_fk_ext}')
+                    self.log(f"[FLOWKIT] Loading extension: {_fk_ext}")
                 # KHÔNG disable extensions, gpu, sandbox - giữ nguyên như mở bằng tay
                 self.log("[NATIVE MODE] Chrome portable - giữ nguyên settings gốc")
             else:

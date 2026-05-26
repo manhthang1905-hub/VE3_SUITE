@@ -67,6 +67,22 @@ class FlowReferenceBridge:
     def log(self, msg: str, level: str = "INFO") -> None:
         self.log_func(msg, level)
 
+    def _flowkit_extension_dir(self) -> str:
+        """Derive FlowKit extension dir from Chrome path (Copy N → ext_810{N-1})."""
+        import re as _re
+        chrome_path = self._resolved_browser_path()
+        m = _re.search(r"Copy \((\d+)\)", chrome_path)
+        if m:
+            idx = int(m.group(1)) - 1
+            ext_dir = self.suite_root / "flowkit_extensions" / f"ext_{8100 + idx}"
+            if ext_dir.is_dir():
+                return str(ext_dir)
+        # Fallback: Chrome without Copy → use ext_8100
+        ext_dir = self.suite_root / "flowkit_extensions" / "ext_8100"
+        if ext_dir.is_dir():
+            return str(ext_dir)
+        return ""
+
     def _ensure_reference_on_path(self) -> None:
         ref_str = str(self.reference_root)
         if ref_str not in sys.path:
@@ -383,13 +399,14 @@ print('__RESULT__=' + json.dumps(out, ensure_ascii=False))
             result.error = str(exc)
             return result
 
-    def acquire_token(self, existing_project_id: str = "", existing_project_url: str = "", prompt: str = "") -> FlowReferenceResult:
+    def acquire_token(self, existing_project_id: str = "", existing_project_url: str = "", prompt: str = "", keep_chrome_open: bool = False) -> FlowReferenceResult:
         result = FlowReferenceResult()
         try:
             capture_prompt = prompt or "simple neutral product photo of a white ceramic mug on a wooden table, natural daylight"
             profile_dir = self._resolved_user_data_dir()
             browser_path = self._resolved_browser_path()
             acct = self._build_account_info()
+            _fk_ext = self._flowkit_extension_dir() if keep_chrome_open else ""
             script = f"""
 import json
 import shutil
@@ -408,6 +425,8 @@ proxy_arg = r'{self.config.proxy_arg}'
 existing_project_id = {json.dumps(existing_project_id)}
 existing_project_url = {json.dumps(existing_project_url or "")}
 capture_prompt = {json.dumps(capture_prompt, ensure_ascii=False)}
+keep_chrome_open = {keep_chrome_open}
+flowkit_ext_dir = {json.dumps(_fk_ext)}
 
 def log(msg):
     print(msg, flush=True)
@@ -416,6 +435,9 @@ def build_api():
     kwargs = {{}}
     if user_data_dir:
         kwargs['profile_dir'] = user_data_dir
+    if flowkit_ext_dir:
+        import os as _os
+        _os.environ['FLOWKIT_LOAD_EXTENSION'] = flowkit_ext_dir  # noqa
     return DrissionFlowAPI(
         chrome_portable=chrome_path,
         skip_portable_detection=True,
@@ -445,6 +467,8 @@ def build_options(port):
     options.set_local_port(port)
     options.set_argument('--no-first-run')
     options.set_argument('--no-default-browser-check')
+    if flowkit_ext_dir:
+        options.set_argument('--load-extension=' + flowkit_ext_dir)
     return options
 
 def read_logged_email(page):
@@ -498,14 +522,39 @@ def clear_user_data():
     target = Path(user_data_dir)
     if not target.exists():
         return True, 'user_data_missing'
+    # Preserve extension dirs so Load Unpacked extensions survive clear
+    _ext_keep = {'Extensions', 'Extension State', 'Extension Rules',
+                 'Local Extension Settings', 'Extension Scripts',
+                 'IndexedDB', 'Local Storage', 'Secure Preferences',
+                 'Preferences'}
     for child in target.iterdir():
         try:
             if child.is_dir():
+                if child.name in _ext_keep:
+                    continue
+                # Also check inside Default/
                 shutil.rmtree(child, ignore_errors=False)
             else:
+                if child.name in ('Preferences', 'Secure Preferences'):
+                    continue
                 child.unlink()
         except Exception as exc:
             return False, str(exc)
+    # Clear inside Default/ but keep extension subdirs
+    default_dir = target / 'Default'
+    if default_dir.is_dir():
+        for child in default_dir.iterdir():
+            if child.name in _ext_keep:
+                continue
+            try:
+                if child.is_dir():
+                    shutil.rmtree(child, ignore_errors=False)
+                else:
+                    if child.name in ('Preferences', 'Secure Preferences'):
+                        continue
+                    child.unlink()
+            except Exception:
+                pass
     return True, ''
 
 def warmup_flow_home():
@@ -563,7 +612,7 @@ try:
     log("[INFO] [REF-VERIFY] initial state=" + str(verify_state) + " email=" + str(verify_email))
 
     if verify_state in ('logged_out', 'mismatch'):
-        cleared, clear_error = clear_user_data()
+        cleared, clear_error = (True, '') if keep_chrome_open else clear_user_data()
         if not cleared:
             out["error"] = "Clear chrome profile failed: " + str(clear_error)
         else:
@@ -642,11 +691,14 @@ try:
             out["project_id"] = pid or ''
             out["project_url"] = existing_project_url or (f'https://labs.google/fx/vi/tools/flow/project/{{pid}}' if pid else '')
 finally:
-    try:
-        if api:
-            api.close()
-    except Exception:
-        pass
+    if not keep_chrome_open:
+        try:
+            if api:
+                api.close()
+        except Exception:
+            pass
+    else:
+        log("[INFO] [FLOWKIT] Keeping Chrome open for FlowKit extension")
 print("__RESULT__=" + json.dumps(out, ensure_ascii=False))
 """
             self.log("[REF] Trigger one real image request to capture token...", "INFO")

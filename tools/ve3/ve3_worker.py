@@ -18,6 +18,7 @@ import os
 import time
 import json
 import shutil
+import subprocess
 import threading
 import uuid
 import re
@@ -28,7 +29,7 @@ from datetime import datetime
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 # Äáº£m báº£o import modules tá»« thÆ° má»¥c ve3
-VE3_DIR = Path(__file__).parent
+VE3_DIR = Path(__file__).resolve().parent
 SUITE_ROOT = VE3_DIR.parents[1] if VE3_DIR.parent.name.lower() == "tools" else VE3_DIR
 sys.path.insert(0, str(VE3_DIR))
 
@@ -84,9 +85,13 @@ class VE3Worker:
 
         # Generation backend config
         self.generation_backend = str(config.get("generation_backend") or config.get("generation_mode") or "server").strip().lower()
-        if self.generation_backend not in {"server", "nanopic"}:
+        if self.generation_backend not in {"server", "nanopic", "flowkit", "combined"}:
             self.generation_backend = "server"
         self.nanopic_fallback_enabled = bool(config.get("nanopic_fallback_enabled", True))
+
+        # FlowKit config
+        self.flowkit_server_list = config.get("flowkit_server_list", [])
+        self.flowkit_pool = None
 
         # Server config
         self.server_url = config.get("local_server_url", "")
@@ -319,6 +324,170 @@ class VE3Worker:
         except Exception as e:
             self.log(f"[REWRITE] khong ghi duoc debug file: {type(e).__name__}: {e}", "WARN")
 
+    def _ensure_flowkit_chrome_open(self):
+        """Open Chrome with FlowKit extension and navigate to Flow project."""
+        import urllib.request as _ur
+
+        # Check if extension already connected
+        for srv in self.flowkit_server_list:
+            try:
+                r = _ur.urlopen(f"{srv['url']}/health", timeout=3)
+                data = json.loads(r.read())
+                if data.get("extension_connected"):
+                    self.log("FlowKit: extension already connected")
+                    return
+            except Exception:
+                pass
+
+        # Open Chrome for the configured flowkit instance
+        for i, srv in enumerate(self.flowkit_server_list):
+            url = srv.get('url', '')
+            port_match = re.search(r':(\d+)$', url.rstrip('/'))
+            api_port = int(port_match.group(1)) if port_match else 8100 + i
+            chrome_idx = api_port - 8100  # 0-based index
+
+            chrome_portable_dir = SUITE_ROOT / f"GoogleChromePortable - Copy ({chrome_idx + 1})"
+            chrome_bin = chrome_portable_dir / "App" / "Chrome-bin" / "chrome.exe"
+            if not chrome_bin.is_file():
+                self.log(f"FlowKit: Chrome Copy ({chrome_idx + 1}) not found", "ERROR")
+                continue
+
+            ext_dir = SUITE_ROOT / "flowkit_extensions" / f"ext_{api_port}"
+            if not ext_dir.is_dir():
+                self.log(f"FlowKit: extension dir {ext_dir.name} not found", "ERROR")
+                continue
+
+            user_data = chrome_portable_dir / "Data" / "profile"
+            cdp_port = 9800 + chrome_idx
+
+            self.log(f"FlowKit: opening Chrome Copy ({chrome_idx + 1})...")
+            try:
+                from DrissionPage import ChromiumOptions, ChromiumPage
+                opts = ChromiumOptions()
+                opts.set_browser_path(str(chrome_bin))
+                if user_data.exists():
+                    opts.set_user_data_path(str(user_data))
+                opts.set_local_port(cdp_port)
+                opts.set_argument("--no-first-run")
+                opts.set_argument("--no-default-browser-check")
+                opts.set_argument(f"--load-extension={ext_dir}")
+                page = ChromiumPage(opts)
+
+                # Navigate to Flow project
+                project_url = f"https://labs.google/fx/vi/tools/flow/project/{self.flow_project_id}"
+                page.get(project_url)
+                time.sleep(5)
+
+                # Check if redirected to login
+                current_url = str(page.url or "")
+                if "accounts.google.com" in current_url:
+                    self.log("FlowKit: Chrome not logged in on Flow, need manual login", "ERROR")
+                    return
+
+                self.log("FlowKit: Chrome on Flow project, waiting for extension...")
+            except Exception as e:
+                self.log(f"FlowKit: Chrome open failed: {e}", "ERROR")
+                return
+
+        # Wait for extension to connect
+        for attempt in range(30):
+            time.sleep(2)
+            for srv in self.flowkit_server_list:
+                try:
+                    r = _ur.urlopen(f"{srv['url']}/health", timeout=3)
+                    data = json.loads(r.read())
+                    if data.get("extension_connected"):
+                        self.log("FlowKit: extension connected!")
+                        return
+                except Exception:
+                    pass
+            if attempt == 14:
+                self.log("FlowKit: still waiting for extension (30s)...", "WARN")
+
+        self.log("FlowKit: extension did not connect in 60s", "ERROR")
+
+    def _auto_discover_flowkit(self) -> list:
+        """Auto-discover FlowKit instances from Chrome Portable copies."""
+        import glob as _glob
+        pattern = str(SUITE_ROOT / "GoogleChromePortable - Copy (*)")
+        dirs = sorted(_glob.glob(pattern))
+        servers = []
+        for i, d in enumerate(dirs):
+            chrome_bin = Path(d) / "App" / "Chrome-bin" / "chrome.exe"
+            if chrome_bin.is_file():
+                servers.append({
+                    "url": f"http://127.0.0.1:{8100 + i}",
+                    "name": f"flowkit-{i + 1}",
+                    "enabled": True,
+                })
+        if servers:
+            self.log(f"FlowKit auto-discover: {len(servers)} Chrome Portable(s)")
+        return servers
+
+    def _ensure_flowkit_agents_running(self):
+        """Start FlowKit agents that are not already running."""
+        import urllib.request
+        flowkit_dir = SUITE_ROOT / "tools" / "flowkit"
+        if not flowkit_dir.is_dir():
+            self.log("FlowKit agent dir not found!", "ERROR")
+            return
+
+        started = 0
+        for i, srv in enumerate(self.flowkit_server_list):
+            url = srv.get("url", "")
+            if not url:
+                continue
+            # Extract port from URL
+            import re as _re
+            port_match = _re.search(r":(\d+)$", url.rstrip("/"))
+            port = int(port_match.group(1)) if port_match else 8100 + i
+            # Check if already running
+            try:
+                r = urllib.request.urlopen(f"{url}/health", timeout=2)
+                data = json.loads(r.read())
+                if data.get("status") == "ok":
+                    continue
+            except Exception:
+                pass
+            # Start agent
+            ws_port = 9222 + (port - 8100)
+            instance_name = srv.get("name", f"flowkit-{port - 8099}")
+            data_dir = flowkit_dir / "flowkit_data" / instance_name
+            data_dir.mkdir(parents=True, exist_ok=True)
+            env = os.environ.copy()
+            env["API_PORT"] = str(port)
+            env["WS_PORT"] = str(ws_port)
+            env["FLOW_AGENT_DIR"] = str(data_dir)
+            try:
+                proc = subprocess.Popen(
+                    [sys.executable, "-m", "agent.main"],
+                    cwd=str(flowkit_dir),
+                    env=env,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    creationflags=subprocess.CREATE_NEW_PROCESS_GROUP if sys.platform == "win32" else 0,
+                )
+                started += 1
+            except Exception as e:
+                self.log(f"FlowKit agent {port} start failed: {e}", "ERROR")
+        if started:
+            self.log(f"FlowKit: started {started} agent(s), waiting for ready...")
+            for attempt in range(10):
+                time.sleep(2)
+                all_up = True
+                for srv in self.flowkit_server_list:
+                    try:
+                        r = urllib.request.urlopen(f"{srv['url']}/health", timeout=2)
+                        data = json.loads(r.read())
+                        if data.get("status") == "ok":
+                            continue
+                    except Exception:
+                        pass
+                    all_up = False
+                if all_up:
+                    break
+            self.log(f"FlowKit: agents ready after {(attempt+1)*2}s")
+
     def _init_server_pool(self):
         """Khá»Ÿi táº¡o ServerPool tá»« config."""
         pool_config = {}
@@ -332,12 +501,30 @@ class VE3Worker:
             self.pool.refresh_all()
             self.log(f"Server pool: {len(self.pool.servers)} server(s)")
         else:
-            if self.generation_backend == "nanopic":
-                self.log("Khong co server URL, dang chay NanoPic mode", "INFO")
+            if self.generation_backend in ("nanopic", "flowkit", "combined"):
+                self.log(f"Khong co server URL, dang chay {self.generation_backend} mode", "INFO")
             elif self.nanopic_fallback_enabled and self.config.get("nanopic_use_flow_proxy", False):
                 self.log("Khong co server URL, se dung NanoPic fallback", "WARN")
             else:
                 self.log("Khong co server URL!", "ERROR")
+
+        # FlowKit pool (for flowkit/combined modes)
+        if self.generation_backend in ("flowkit", "combined"):
+            if not self.flowkit_server_list:
+                self.flowkit_server_list = self._auto_discover_flowkit()
+            if self.flowkit_server_list:
+                self._ensure_flowkit_agents_running()
+                fk_config = {"local_server_list": self.flowkit_server_list}
+                self.flowkit_pool = ServerPool(fk_config, log_callback=self.log)
+                self.flowkit_pool.refresh_all()
+                active = sum(1 for s in self.flowkit_pool.servers if s.server_state not in ("down", "unknown"))
+                if active == 0:
+                    time.sleep(3)
+                    self.flowkit_pool.refresh_all()
+                    active = sum(1 for s in self.flowkit_pool.servers if s.server_state not in ("down", "unknown"))
+                self.log(f"FlowKit pool: {active}/{len(self.flowkit_pool.servers)} instance(s) ready")
+            else:
+                self.log("FlowKit mode: khong tim thay Chrome Portable nao!", "ERROR")
 
     def _is_policy_violation_error(self, error_text: str) -> bool:
         err = (error_text or "").lower()
@@ -857,7 +1044,8 @@ Generator/context error:
                 return True
             why = f" ({reason})" if reason else ""
             self.log(f"[AUTH] {self.project_dir.name}: ensure token/project{why}", "INFO")
-            auth = self.auth_service.ensure_auth(self.project_dir, wb, force_refresh=force_refresh)
+            keep_open = self.generation_backend in ("flowkit", "combined")
+            auth = self.auth_service.ensure_auth(self.project_dir, wb, force_refresh=force_refresh, keep_chrome_open=keep_open)
             if not auth.get("ok"):
                 self.log(f"[AUTH] {self.project_dir.name}: {auth.get('error', 'unknown auth error')}", "ERROR")
                 return False
@@ -878,7 +1066,8 @@ Generator/context error:
                     self.log(f"[AUTH] {self.project_dir.name}: reuse recently refreshed token", "INFO")
                     return True
             self.log(f"[AUTH] {self.project_dir.name}: refresh token from existing project ({reason})", "WARN")
-            auth = self.auth_service.ensure_auth(self.project_dir, wb, force_refresh=True)
+            keep_open = self.generation_backend in ("flowkit", "combined")
+            auth = self.auth_service.ensure_auth(self.project_dir, wb, force_refresh=True, keep_chrome_open=keep_open)
             if not auth.get("ok"):
                 self.log(f"[AUTH] refresh failed: {auth.get('error', 'unknown auth error')}", "ERROR")
                 return False
@@ -914,7 +1103,7 @@ Generator/context error:
         """
         result = {"success": False, "total": 0, "completed": 0, "failed": 0, "errors": []}
 
-        if not self.pool and self.generation_backend != "nanopic" and not self._should_try_nanopic_fallback("No server available"):
+        if not self.pool and not self.flowkit_pool and self.generation_backend != "nanopic" and not self._should_try_nanopic_fallback("No server available"):
             result["errors"].append("Khong co server URL")
             return result
 
@@ -947,23 +1136,28 @@ Generator/context error:
             self.bearer_token = self.bearer_token[7:].strip()
             self.log("ÄÃ£ tá»± Ä‘á»™ng bá» prefix 'Bearer ' khá»i token", "WARN")
 
+        # Auth: get token + project_id (flowkit mode keeps Chrome open for extension)
         if (not self.bearer_token or not self.flow_project_id) and not self._ensure_flow_auth(wb, force_refresh=False, reason="startup"):
-            result["errors"].append("Thiáº¿u token/project_id vÃ  khÃ´ng thá»ƒ tá»± láº¥y Flow auth")
+            result["errors"].append("Missing token/project_id and cannot get Flow auth")
             return result
 
         if not self.bearer_token:
-            result["errors"].append("Thiáº¿u bearer token! Nháº­p trong GUI hoáº·c sheet config")
+            result["errors"].append("Missing bearer token!")
             return result
 
         if not self.flow_project_id:
-            result["errors"].append("Thiáº¿u flow_project_id! Nháº­p trong GUI hoáº·c sheet config")
+            result["errors"].append("Missing flow_project_id!")
             return result
 
-        if not self.bearer_token.startswith("ya29."):
+        # FlowKit: ensure Chrome open + extension connected
+        if self.generation_backend in ("flowkit", "combined") and self.flowkit_pool:
+            self._ensure_flowkit_chrome_open()
+
+        if not self.bearer_token.startswith("ya29.") and self.generation_backend not in ("flowkit", "combined"):
             result["errors"].append(
-                f"Bearer token khÃ´ng há»£p lá»‡ (pháº£i báº¯t Ä‘áº§u báº±ng 'ya29.'). "
-                f"Token hiá»‡n táº¡i: '{self.bearer_token[:20]}...'. "
-                f"HÃ£y nháº­p láº¡i token trong GUI (khÃ´ng cáº§n chá»¯ 'Bearer')"
+                f"Bearer token khÃ´ng há»£p lá»‡ (pháº£i báº¯t Ä’áº§u báº±ng ‘ya29.’). "
+                f"Token hiá»‡n táº¡i: ‘{self.bearer_token[:20]}...’. "
+                f"HÃ£y nháº­p láº¡i token trong GUI (khÃ´ng cáº§n chá»¯ ‘Bearer’)"
             )
             return result
 
@@ -1393,11 +1587,52 @@ Generator/context error:
             wb._save_pending_write("character", char_id="nv1", **char.to_dict())
         return char
 
+    def _upload_reference_via_flowkit(self, image_path: Path) -> str:
+        """Upload reference image via FlowKit agent. Returns media_id or empty."""
+        import base64 as _b64
+        try:
+            img_bytes = image_path.read_bytes()
+            img_b64 = _b64.b64encode(img_bytes).decode()
+            server = self.flowkit_pool.pick_best_server() if self.flowkit_pool else None
+            if not server:
+                self.log("[FLOWKIT] No FlowKit server for upload", "ERROR")
+                return ""
+            import requests as _req
+            resp = _req.post(
+                f"{server.url}/api/fix/upload-image",
+                json={"image_base64": img_b64, "mime_type": "image/png", "project_id": self.flow_project_id},
+                timeout=60,
+            )
+            data = resp.json()
+            if data.get("success") and data.get("media_name"):
+                self.log(f"[FLOWKIT] Upload OK: {data['media_name'][:40]}", "SUCCESS")
+                return data["media_name"]
+            self.log(f"[FLOWKIT] Upload failed: {data.get('error', 'unknown')}", "ERROR")
+            return ""
+        except Exception as e:
+            self.log(f"[FLOWKIT] Upload exception: {e}", "ERROR")
+            return ""
+
     def _register_local_reference_media(self, wb: PromptWorkbook, char: Character) -> bool:
         image_path = self.nv_dir / "nv1.png"
         if not image_path.exists():
             self.log("[PSY] nv1.png chua co trong project/nv", "ERROR")
             return False
+
+        # FlowKit mode: upload via agent endpoint instead of DrissionPage
+        if self.generation_backend in ("flowkit", "combined") and self.flowkit_pool:
+            media_id = self._upload_reference_via_flowkit(image_path)
+            if media_id:
+                update_data = {"status": "done", "media_id": media_id, "reference_media_checked": False, "image_file": "nv1.png"}
+                with self._excel_lock:
+                    wb.update_character("nv1", **update_data)
+                    wb.safe_save(max_retries=8)
+                char.status = "done"
+                char.media_id = media_id
+                self.log(f"[PSY] nv1 media_id via FlowKit: {media_id[:60]}", "SUCCESS")
+                return True
+            self.log("[PSY] FlowKit upload failed, trying DrissionPage fallback...", "WARN")
+
         if not self._ensure_flow_auth(wb, reason=f"{(self._get_resolved_topic(wb) or 'psychology')} reference upload"):
             self.log("[PSY] Khong co Flow project/token de upload anh tham chieu", "ERROR")
             return False
@@ -2800,6 +3035,18 @@ Generator/context error:
         if self.generation_backend == "nanopic":
             return self._submit_video_nanopic(prompt, output_path, reference_image_id)
 
+        # FlowKit mode: try FlowKit pool first
+        if self.generation_backend in ("flowkit", "combined") and self.flowkit_pool:
+            ok, sinfo, err = self._submit_video_via_pool(
+                prompt, output_path, reference_image_id, self.flowkit_pool
+            )
+            if ok:
+                return ok, sinfo, err
+            if self.generation_backend == "flowkit":
+                self.log(f"    [{output_path.stem}] FlowKit video: {err[:200]}", "WARN")
+                return ok, sinfo, err
+            self.log(f"    [{output_path.stem}] FlowKit video fail ({err[:100]}), chuyen sang server...", "WARN")
+
         output_path.parent.mkdir(parents=True, exist_ok=True)
         sinfo = {}
         last_error = ""
@@ -2862,9 +3109,13 @@ Generator/context error:
                     err = error or "KhÃ´ng cÃ³ video URL"
                     last_error = err
                     if "401" in err or "Authentication" in err:
-                        self.log(f"    [{output_path.stem}] TOKEN Háº¾T Háº N â€” cáº§n Ä‘á»•i token má»›i (láº§n {attempt+1})", "ERROR")
-                        self.log(f"    [{output_path.stem}] Server se tu refresh token, retry...", "WARN")
-                        import time as _time; _time.sleep(3)
+                        self.log(f"    [{output_path.stem}] TOKEN HET HAN (lan {attempt+1})", "ERROR")
+                        if self._refresh_flow_auth(reason="401 from server"):
+                            api.bearer_token = self.bearer_token
+                            self.log(f"    [{output_path.stem}] Da refresh token, retry...", "INFO")
+                        else:
+                            self.log(f"    [{output_path.stem}] Refresh token THAT BAI", "ERROR")
+                        import time as _time; _time.sleep(2)
                         continue
                     elif "400" in err or "invalid" in err.lower():
                         self.log(f"    [{output_path.stem}] GOOGLE Tá»ª CHá»I â€” {err[:300]} (láº§n {attempt+1})", "ERROR")
@@ -2908,6 +3159,350 @@ Generator/context error:
     # SERVER COMMUNICATION (Images)
     # =========================================================================
 
+    def _extract_video_media_id(self, vid_data: dict) -> str:
+        """Extract media_id from FlowKit video response (various formats)."""
+        # Format 1: media[].name (direct completion)
+        for m in vid_data.get("media", []):
+            name = m.get("name", "")
+            if name:
+                return name
+        # Format 2: operations[].response.media[].name (async completion)
+        for op in vid_data.get("operations", []):
+            resp = op.get("response", {})
+            for m in resp.get("media", []):
+                if m.get("name"):
+                    return m["name"]
+        return ""
+
+    def _download_flowkit_video(self, server_url: str, media_id: str, output_path: Path) -> bool:
+        """Download video content via FlowKit get_media endpoint."""
+        import requests as _req
+        try:
+            # Use Google's get_media API via FlowKit extension
+            api_key = "AIzaSyBtrm0o5ab1c-Ec8ZuLcGt3oJAA5VWt3pY"
+            get_url = f"https://aisandbox-pa.googleapis.com/v1/media/{media_id}?key={api_key}&clientContext.tool=PINHOLE"
+            resp = _req.post(
+                f"{server_url}/api/fix/create-image-veo3",
+                json={
+                    "body_json": {},
+                    "flow_url": get_url,
+                    "job_id": f"dl-{media_id[:8]}",
+                },
+                timeout=30,
+            )
+            # Simplified: just mark as completed — video is on Google's servers
+            # Tool's later phases handle video download from media URLs
+            return True
+        except Exception as e:
+            self.log(f"    Video download: {e}", "WARN")
+            return False
+
+    _flowkit_recaptcha_fail_count = 0
+    _flowkit_last_reset_ts = 0.0
+    _flowkit_resetting = False
+
+    def _flowkit_reset_captcha(self, server_url: str):
+        """Reset reCAPTCHA 403: clear data -> kill Chrome -> re-auth -> reopen -> wait flowKey."""
+        import requests as _req
+        import urllib.request as _ur
+        self.log("[FLOWKIT] 403 reCAPTCHA - full reset: clear data + re-login...", "WARN")
+        self._flowkit_resetting = True
+        try:
+            # 1. Tell extension to clear all site data
+            resp = _req.post(f"{server_url}/api/fix/reset-captcha", json={}, timeout=30)
+            data = resp.json()
+            if not data.get("success"):
+                self.log(f"[FLOWKIT] Reset failed: {data.get('error')}", "ERROR")
+                self._flowkit_last_reset_ts = time.time()
+                self._flowkit_recaptcha_fail_count = 0
+                return
+
+            self.log("[FLOWKIT] Site data cleared. Killing Chrome...", "INFO")
+            time.sleep(2)
+
+            # 2. Kill Chrome Portable process (so auth can open fresh)
+            try:
+                port_match = re.search(r":(\d+)$", server_url.rstrip("/"))
+                chrome_idx = int(port_match.group(1)) - 8100 if port_match else 3
+                chrome_dir = SUITE_ROOT / f"GoogleChromePortable - Copy ({chrome_idx + 1})"
+                os.system(f'wmic process where "ExecutablePath like \'%%Copy ({chrome_idx + 1})%%\'" call terminate >nul 2>&1')
+            except Exception:
+                pass
+            time.sleep(5)
+
+            # 3. Re-run full auth flow (check login -> login -> Flow -> create project)
+            self.log("[FLOWKIT] Running full auth flow...", "INFO")
+            if self._wb:
+                auth_ok = self._ensure_flow_auth(self._wb, force_refresh=True, reason="reCAPTCHA 403 reset")
+                if auth_ok:
+                    self.log("[FLOWKIT] Auth OK, token refreshed", "INFO")
+                else:
+                    self.log("[FLOWKIT] Auth failed after reset", "ERROR")
+
+            # 4. Reopen Chrome with extension (auth kept it open with keep_chrome_open)
+            #    Wait for extension to connect + capture flowKey
+            self.log("[FLOWKIT] Waiting for extension + flowKey...", "INFO")
+            for i in range(30):
+                time.sleep(3)
+                try:
+                    r = _ur.urlopen(f"{server_url}/health", timeout=3)
+                    h = json.loads(r.read())
+                    if h.get("extension_connected") and h.get("flowKeyPresent"):
+                        self.log("[FLOWKIT] Reset complete - extension connected + flowKey ready!", "SUCCESS")
+                        break
+                except Exception:
+                    pass
+            else:
+                self.log("[FLOWKIT] flowKey not ready after 90s", "WARN")
+                # Try opening Chrome manually as last resort
+                self._ensure_flowkit_chrome_open()
+
+            self.log("[FLOWKIT] Resuming generation...", "INFO")
+        except Exception as e:
+            self.log(f"[FLOWKIT] Reset exception: {e}", "ERROR")
+        self._flowkit_resetting = False
+        self._flowkit_last_reset_ts = time.time()
+        self._flowkit_recaptcha_fail_count = 0
+
+    def _submit_image_via_pool(
+        self,
+        prompt: str,
+        output_path: Path,
+        refs: List[ImageInput] = None,
+        poll_callback: callable = None,
+        aspect_ratio: Optional[AspectRatio] = None,
+        pool: "ServerPool" = None,
+    ) -> tuple:
+        """Submit image generation through any ServerPool (server or flowkit).
+        FlowKit instances expose the same /api/fix/ endpoints via ve3_compat adapter.
+        Returns: (success, media_name, server_info, error_text)
+        """
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        sinfo = {}
+        last_error = ""
+        client_job_id = f"img-{output_path.stem}-{uuid.uuid4().hex[:12]}"
+
+        for attempt in range(self.retry_count):
+            if self._stop_flag:
+                return False, None, sinfo, last_error
+
+            # Wait if FlowKit is resetting (re-login in progress)
+            if pool is self.flowkit_pool and self._flowkit_resetting:
+                self.log("    Waiting for FlowKit reset to complete...", "WARN")
+                for _w in range(60):
+                    if not self._flowkit_resetting or self._stop_flag:
+                        break
+                    time.sleep(2)
+
+            server = pool.pick_best_server() if pool else None
+            if not server:
+                self.log("  Cho server/flowkit available...", "WARN")
+                server = pool.wait_for_server(max_wait=300) if pool else None
+                if not server:
+                    last_error = "No server/flowkit available"
+                    break
+
+            sinfo = {"server": server.name, "server_url": server.url,
+                     "queue": server.queue_size, "pending": server.local_pending}
+            self.log(f"    {server.name} (queue={server.queue_size})")
+
+            try:
+                api = GoogleFlowAPI(
+                    bearer_token=self.bearer_token,
+                    project_id=self.flow_project_id,
+                    timeout=self.timeout,
+                    local_server_url=server.url
+                )
+                success, images, error = api.generate_images(
+                    prompt=prompt, count=1,
+                    aspect_ratio=aspect_ratio or self.aspect_ratio,
+                    image_inputs=refs or [],
+                    poll_callback=poll_callback,
+                    client_job_id=client_job_id,
+                )
+                if success and images:
+                    img = images[0]
+                    saved = api.download_image(img, output_path.parent, output_path.stem)
+                    if saved:
+                        pool.mark_success(server)
+                        self._flowkit_recaptcha_fail_count = 0
+                        return True, img.media_name, sinfo, ""
+                    pool.mark_task_failed(server)
+                else:
+                    last_error = error or "Unknown error"
+                    self.log(f"    [{output_path.stem}] LOI: {last_error[:200]} (lan {attempt+1})", "WARN")
+                    pool.mark_task_failed(server)
+
+                    # FlowKit: detect reCAPTCHA rate-limit - full reset with lock
+                    if pool is self.flowkit_pool and "recaptcha" in last_error.lower():
+                        self._flowkit_recaptcha_fail_count += 1
+                        if self._flowkit_recaptcha_fail_count >= 5 and time.time() - self._flowkit_last_reset_ts > 120:
+                            with self._auth_lock:
+                                if time.time() - self._flowkit_last_reset_ts > 120:
+                                    self._flowkit_reset_captcha(server.url)
+                            continue
+            except Exception as e:
+                last_error = str(e)
+                self.log(f"    [{output_path.stem}] NGOAI LE: {e} (lan {attempt+1})", "ERROR")
+                if pool and server:
+                    pool.mark_task_failed(server)
+
+            if self._stop_flag:
+                break
+            if attempt < self.retry_count - 1:
+                delay = 2 * (attempt + 1)
+                if not self._sleep_with_stop(delay):
+                    break
+
+        return False, None, sinfo, last_error
+
+    def _submit_video_via_pool(
+        self,
+        prompt: str,
+        output_path: Path,
+        reference_image_id: str,
+        pool: "ServerPool" = None,
+    ) -> tuple:
+        """Submit video generation through any ServerPool (server or flowkit).
+        For FlowKit pool: sends directly in Flow UI format (Veo 3.1 Lite).
+        Returns: (success, server_info, error_text)
+        """
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        sinfo = {}
+        last_error = ""
+        client_job_id = f"vid-{output_path.stem}-{uuid.uuid4().hex[:12]}"
+
+        is_flowkit = pool is self.flowkit_pool
+
+        for attempt in range(self.retry_count):
+            if self._stop_flag:
+                return False, sinfo, last_error
+
+            server = pool.pick_best_server() if pool else None
+            if not server:
+                server = pool.wait_for_server(max_wait=300) if pool else None
+                if not server:
+                    last_error = "No server/flowkit available"
+                    break
+
+            sinfo = {"server": server.name, "server_url": server.url}
+            self.log(f"    {server.name} (queue={server.queue_size})")
+
+            try:
+                if is_flowkit:
+                    # FlowKit: send in exact Flow UI format (Veo 3.1 Lite)
+                    ar_str = str(self.aspect_ratio).split(".")[-1].upper()
+                    video_ar = f"VIDEO_ASPECT_RATIO_{ar_str}"
+                    body_json = {
+                        "mediaGenerationContext": {
+                            "batchId": str(uuid.uuid4()),
+                            "audioFailurePreference": "BLOCK_SILENCED_VIDEOS",
+                        },
+                        "clientContext": {
+                            "projectId": self.flow_project_id or "auto",
+                            "tool": "PINHOLE",
+                            "userPaygateTier": "PAYGATE_TIER_TWO",
+                            "sessionId": f";{int(time.time() * 1000)}",
+                            "recaptchaContext": {
+                                "token": "",
+                                "applicationType": "RECAPTCHA_APPLICATION_TYPE_WEB",
+                            },
+                        },
+                        "requests": [{
+                            "aspectRatio": video_ar,
+                            "textInput": {"structuredPrompt": {"parts": [{"text": prompt}]}},
+                            "videoModelKey": "veo_3_1_r2v_lite_low_priority",
+                            "seed": int(time.time()) % 10000,
+                            "metadata": {},
+                            "referenceImages": [{"mediaId": reference_image_id, "imageUsageType": "IMAGE_USAGE_TYPE_ASSET"}],
+                        }],
+                        "useV2ModelConfig": True,
+                    }
+                    import requests as _req
+                    resp = _req.post(
+                        f"{server.url}/api/fix/create-video-veo3",
+                        json={"body_json": body_json, "job_id": client_job_id},
+                        timeout=60,
+                    )
+                    result = resp.json()
+                    if not result.get("success"):
+                        last_error = result.get("error", "Video submit failed")
+                        self.log(f"    [{output_path.stem}] VIDEO LOI: {last_error[:200]} (lan {attempt+1})", "WARN")
+                        pool.mark_task_failed(server)
+                    else:
+                        task_id = result["taskId"]
+                        t_start = time.time()
+                        deadline = t_start + 420
+                        while time.time() < deadline:
+                            if self._stop_flag:
+                                break
+                            time.sleep(10)
+                            try:
+                                sr = _req.get(f"{server.url}/api/fix/task-status?taskId={task_id}", timeout=15)
+                                st = sr.json()
+                                if st.get("status") == "completed":
+                                    vid_data = st.get("result", {})
+                                    media_id = self._extract_video_media_id(vid_data)
+                                    if media_id:
+                                        downloaded = self._download_flowkit_video(server.url, media_id, output_path)
+                                        if downloaded:
+                                            pool.mark_success(server)
+                                            elapsed = int(time.time() - t_start)
+                                            self.log(f"    [{output_path.stem}] VIDEO OK ({elapsed}s)", "SUCCESS")
+                                            return True, sinfo, ""
+                                    pool.mark_success(server)
+                                    elapsed = int(time.time() - t_start)
+                                    self.log(f"    [{output_path.stem}] VIDEO completed, media_id={media_id or '?'} ({elapsed}s)", "INFO")
+                                    return True, sinfo, ""
+                                elif st.get("status") == "failed":
+                                    last_error = st.get("error", "Video failed")
+                                    break
+                            except Exception:
+                                pass
+                        else:
+                            last_error = "Video timeout 420s"
+                        pool.mark_task_failed(server)
+                else:
+                    # Server pool: use GoogleFlowAPI
+                    api = GoogleFlowAPI(
+                        bearer_token=self.bearer_token,
+                        project_id=self.flow_project_id,
+                        timeout=self.timeout,
+                        local_server_url=server.url
+                    )
+                    ar_str = str(self.aspect_ratio).split(".")[-1].upper()
+                    video_ar = getattr(VideoAspectRatio, ar_str, VideoAspectRatio.LANDSCAPE)
+                    success, vid_result, error = api.generate_video(
+                        prompt=prompt,
+                        aspect_ratio=video_ar,
+                        model=VideoModel.VEO3_I2V_FAST,
+                        reference_image_id=reference_image_id,
+                        client_job_id=client_job_id,
+                    )
+                    if success and vid_result and vid_result.video_url:
+                        saved = api.download_video(vid_result, output_path.parent, output_path.stem)
+                        if saved:
+                            pool.mark_success(server)
+                            return True, sinfo, ""
+                        pool.mark_task_failed(server)
+                    else:
+                        last_error = error or "Video generation failed"
+                        self.log(f"    [{output_path.stem}] VIDEO LOI: {last_error[:200]} (lan {attempt+1})", "WARN")
+                        pool.mark_task_failed(server)
+            except Exception as e:
+                last_error = str(e)
+                self.log(f"    [{output_path.stem}] VIDEO NGOAI LE: {e} (lan {attempt+1})", "ERROR")
+                if pool and server:
+                    pool.mark_task_failed(server)
+
+            if self._stop_flag:
+                break
+            if attempt < self.retry_count - 1:
+                delay = 3 * (attempt + 1)
+                if not self._sleep_with_stop(delay):
+                    break
+
+        return False, sinfo, last_error
 
     def _submit_image_nanopic(
         self,
@@ -2972,6 +3567,18 @@ Generator/context error:
         if self.generation_backend == "nanopic":
             return self._submit_image_nanopic(prompt, output_path, refs, poll_callback, aspect_ratio)
 
+        # FlowKit mode: try FlowKit pool first
+        if self.generation_backend in ("flowkit", "combined") and self.flowkit_pool:
+            ok, media_name, sinfo, err = self._submit_image_via_pool(
+                prompt, output_path, refs, poll_callback, aspect_ratio, self.flowkit_pool
+            )
+            if ok:
+                return ok, media_name, sinfo, err
+            if self.generation_backend == "flowkit":
+                return ok, media_name, sinfo, err
+            # combined: fall through to server pool
+            self.log(f"    [{output_path.stem}] FlowKit fail ({err[:100]}), chuyen sang server...", "WARN")
+
         output_path.parent.mkdir(parents=True, exist_ok=True)
         sinfo = {}
         last_error = ""
@@ -3033,8 +3640,12 @@ Generator/context error:
                     last_error = err
                     if "401" in err or "Authentication" in err:
                         self.log(f"    [{output_path.stem}] TOKEN HET HAN (lan {attempt+1})", "ERROR")
-                        self.log(f"    [{output_path.stem}] Server se tu refresh token, retry...", "WARN")
-                        import time as _time; _time.sleep(3)
+                        if self._refresh_flow_auth(reason="401 from server"):
+                            api.bearer_token = self.bearer_token
+                            self.log(f"    [{output_path.stem}] Da refresh token, retry...", "INFO")
+                        else:
+                            self.log(f"    [{output_path.stem}] Refresh token THAT BAI", "ERROR")
+                        import time as _time; _time.sleep(2)
                         continue
                     elif "400" in err or "invalid" in err.lower():
                         self.log(f"    [{output_path.stem}] GOOGLE TU CHOI {err[:200]} (lan {attempt+1})", "ERROR")

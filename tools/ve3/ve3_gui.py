@@ -1438,7 +1438,7 @@ class SettingsPage(ctk.CTkScrollableFrame):
             "Pool Creative Fallback": "claude_pool",
         }
         self.excel_ai_provider_labels = {v: k for k, v in self.excel_ai_provider_options.items()}
-        self.generation_backend_options = {"Server": "server", "NanoPic": "nanopic"}
+        self.generation_backend_options = {"Server": "server", "NanoPic": "nanopic", "FlowKit": "flowkit", "Combined": "combined"}
         self.generation_backend_labels = {v: k for k, v in self.generation_backend_options.items()}
         self.grid_columnconfigure(0, weight=1)
 
@@ -1848,6 +1848,23 @@ class SettingsPage(ctk.CTkScrollableFrame):
         else:
             self.sw_music_workspace.deselect()
 
+    def _auto_flowkit_server_list(self) -> list:
+        """Auto-generate flowkit_server_list from Chrome Portable copies."""
+        import glob as _glob
+        suite_root = Path(__file__).resolve().parent.parent.parent
+        pattern = str(suite_root / "GoogleChromePortable - Copy (*)")
+        dirs = sorted(_glob.glob(pattern))
+        servers = []
+        for i, d in enumerate(dirs):
+            chrome_bin = Path(d) / "App" / "Chrome-bin" / "chrome.exe"
+            if chrome_bin.is_file():
+                servers.append({
+                    "url": f"http://127.0.0.1:{8100 + i}",
+                    "name": f"flowkit-{i + 1}",
+                    "enabled": True,
+                })
+        return servers
+
     def _save(self):
         cfg = self.app.config_data
         try:
@@ -1862,6 +1879,8 @@ class SettingsPage(ctk.CTkScrollableFrame):
         selected_backend_label = self.opt_generation_backend.get().strip() or "Server"
         cfg["generation_backend"] = self.generation_backend_options.get(selected_backend_label, "server")
         cfg["generation_mode"] = cfg["generation_backend"]
+        if cfg["generation_backend"] in ("flowkit", "combined") and not cfg.get("flowkit_server_list"):
+            cfg["flowkit_server_list"] = self._auto_flowkit_server_list()
         cfg["flow_auth_auto_enabled"] = bool(self.sw_flow_auto.get())
         cfg["music_workspace_mode_enabled"] = bool(self.sw_music_workspace.get())
         selected_provider_label = self.opt_excel_ai_provider.get().strip() or "DeepSeek"

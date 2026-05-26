@@ -1151,9 +1151,13 @@ def login_google_chrome(account_info: dict, chrome_portable: str = None, profile
         driver.get("https://accounts.google.com/signin")
         time.sleep(3)
 
-        # Kiá»ƒm tra xem Ä‘Ã£ Ä‘Äƒng nháº­p chÆ°a
+        # Kiá»ƒm tra xem Ä’Ã£ Ä’Äƒng nháº­p chÆ°a
         if "myaccount.google.com" in driver.url or "google.com/search" in driver.url:
             log("Already logged in!", "OK")
+            try:
+                driver.quit()
+            except Exception:
+                pass
             return True
 
         # === BÆ¯á»šC 1: ÄIá»€N EMAIL ===

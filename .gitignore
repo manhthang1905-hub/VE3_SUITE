@@ -41,6 +41,8 @@ __pycache__/
 .nguon_runtime_metadata.yaml
 .ve3_run_config.json
 .progress_totals.json
+.fingerprint_seed_*
+.flow_auth_state.json
 
 # === OS FILES ===
 Thumbs.db
@@ -70,5 +72,11 @@ server/logs/
 server/PROJECTS/
 server/GoogleChromePortable*/
 server/chrome_profile*/
+
+# === FLOWKIT SERVER (mỗi VM riêng) ===
+server/flowkit/config/flowkit_gui.json
+server/flowkit/GoogleChromePortable*/
+server/flowkit/logs/
+server/flowkit/update_temp*
 
 old/

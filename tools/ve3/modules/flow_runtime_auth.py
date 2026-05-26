@@ -301,6 +301,7 @@ class FlowRuntimeAuthService:
         project_dir: str | Path,
         wb: PromptWorkbook,
         force_refresh: bool = False,
+        keep_chrome_open: bool = False,
     ) -> Dict[str, str]:
         if not self.is_enabled():
             return {"ok": "", "error": "auto auth disabled"}
@@ -313,7 +314,7 @@ class FlowRuntimeAuthService:
         if existing_auth.get("source") == "backup" and (existing_pid or existing_url):
             self.log(f"[AUTH] {project_dir.name}: restoring project identity from auth backup", "WARN")
             self._restore_auth_to_workbook(wb, existing_auth)
-        if not existing_pid and not existing_url:
+        if not existing_pid and not existing_url and not keep_chrome_open:
             guard = self._detect_project_guard(project_dir, wb)
             if guard["blocked"]:
                 workbook_stats = guard["workbook"]
@@ -344,6 +345,7 @@ class FlowRuntimeAuthService:
         result = bridge.acquire_token(
             existing_project_id=existing_pid if force_refresh or existing_pid else "",
             existing_project_url=existing_url if force_refresh or existing_url else "",
+            keep_chrome_open=keep_chrome_open,
         )
 
         if not result.ok:
