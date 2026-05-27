@@ -247,9 +247,9 @@ class FlowRuntimeAuthService:
             for pattern in patterns:
                 count += sum(1 for _ in folder.glob(pattern))
             fs_counts[stat_key] = count
-        has_files = any(fs_counts.values())
+        has_generated = any(v for k, v in fs_counts.items() if k != "refs")
         return {
-            "blocked": bool(workbook_assets.get("has_assets") or has_files),
+            "blocked": bool(workbook_assets.get("has_assets") or has_generated),
             "workbook": workbook_assets,
             "files": fs_counts,
         }
@@ -335,18 +335,32 @@ class FlowRuntimeAuthService:
         if not account:
             return {"ok": "", "error": "no enabled flow accounts configured"}
 
-        self.log(
-            f"[AUTH] {project_dir.name}: "
-            + ("refresh token from existing project" if (existing_pid or existing_url) else "create new project + get token"),
-            "INFO",
-        )
+        if force_refresh and (existing_pid or existing_url):
+            self.log(
+                f"[AUTH] {project_dir.name}: "
+                "refresh token via new throwaway project (keep old project identity)",
+                "INFO",
+            )
+        else:
+            self.log(
+                f"[AUTH] {project_dir.name}: "
+                + ("refresh token from existing project" if (existing_pid or existing_url) else "create new project + get token"),
+                "INFO",
+            )
 
         bridge = self._bridge_for_account(account, project_dir)
-        result = bridge.acquire_token(
-            existing_project_id=existing_pid if force_refresh or existing_pid else "",
-            existing_project_url=existing_url if force_refresh or existing_url else "",
-            keep_chrome_open=keep_chrome_open,
-        )
+        if force_refresh and (existing_pid or existing_url):
+            result = bridge.acquire_token(
+                existing_project_id="",
+                existing_project_url="",
+                keep_chrome_open=keep_chrome_open,
+            )
+        else:
+            result = bridge.acquire_token(
+                existing_project_id=existing_pid,
+                existing_project_url=existing_url,
+                keep_chrome_open=keep_chrome_open,
+            )
 
         if not result.ok:
             return {
@@ -358,9 +372,13 @@ class FlowRuntimeAuthService:
                 "account_name": account.name,
             }
 
-        pid = result.project_id.strip()
-        purl = self._normalize_project_url(pid, result.project_url.strip())
         token = result.token.strip()
+        if force_refresh and (existing_pid or existing_url):
+            pid = existing_pid
+            purl = existing_url or self._normalize_project_url(pid, "")
+        else:
+            pid = result.project_id.strip()
+            purl = self._normalize_project_url(pid, result.project_url.strip())
         self._write_auth_back(project_dir, wb, token, pid, purl, account.name)
         self.log(f"[AUTH] {project_dir.name}: token ready for project {pid[:8]}...", "SUCCESS")
         return {

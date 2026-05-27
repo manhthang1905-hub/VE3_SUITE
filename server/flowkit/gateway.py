@@ -258,9 +258,9 @@ async def _process_image_task(task_id: str, data: dict):
             # Non-403 failure → don't retry
             inst.mark_failed()
             tasks[task_id]["status"] = "failed"
-            tasks[task_id]["error"] = error
+            tasks[task_id]["error"] = f"[{status_code}] {error}" if status_code in (401, 429) else error
             stats["total_failed"] += 1
-            logger.warning("[Gateway] Image %s FAILED via %s: %s", task_id[:8], inst.name, error[:100])
+            logger.warning("[Gateway] Image %s FAILED via %s: [%s] %s", task_id[:8], inst.name, status_code, error[:100])
             return
 
         except Exception as e:
@@ -343,16 +343,17 @@ async def _process_video_task(task_id: str, data: dict):
     if not result.get("success"):
         error = result.get("error", "")
         detail = result.get("detail", "")
-        if result.get("status") == 403:
+        status_code = result.get("status", 500)
+        if status_code == 403:
             inst.mark_403()
         else:
             inst.mark_failed()
         tasks[task_id]["status"] = "failed"
-        tasks[task_id]["error"] = error
+        tasks[task_id]["error"] = f"[{status_code}] {error}" if status_code in (401, 429) else error
         if detail:
             tasks[task_id]["detail"] = detail
         stats["total_failed"] += 1
-        logger.warning("[Gateway] Video %s FAILED: %s (status=%s)", task_id[:8], error, result.get("status"))
+        logger.warning("[Gateway] Video %s FAILED: [%s] %s", task_id[:8], status_code, error[:100])
         return
 
     # Step 2: Extract operations and poll

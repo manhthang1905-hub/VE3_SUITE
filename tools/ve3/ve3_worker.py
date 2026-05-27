@@ -3114,7 +3114,7 @@ Generator/context error:
                 else:
                     err = error or "KhÃ´ng cÃ³ video URL"
                     last_error = err
-                    if "401" in err or "Authentication" in err:
+                    if "401" in err or "authentication" in err.lower():
                         self.log(f"    [{output_path.stem}] TOKEN HET HAN (lan {attempt+1})", "ERROR")
                         if self._refresh_flow_auth(reason="401 from server"):
                             api.bearer_token = self.bearer_token
@@ -3698,7 +3698,7 @@ Generator/context error:
                 else:
                     err = error or "Khong ro loi"
                     last_error = err
-                    if "401" in err or "Authentication" in err:
+                    if "401" in err or "authentication" in err.lower():
                         self.log(f"    [{output_path.stem}] TOKEN HET HAN (lan {attempt+1})", "ERROR")
                         if self._refresh_flow_auth(reason="401 from server"):
                             api.bearer_token = self.bearer_token

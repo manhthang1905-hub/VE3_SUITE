@@ -492,7 +492,7 @@ async function handleTrpcRequest(msg) {
 
 async function handleApiRequest(msg) {
   const { id, params } = msg;
-  const { url, method, headers, body, captchaAction } = params;
+  const { url, method, headers, body, captchaAction, bearerToken } = params;
 
   if (!url) {
     sendToAgent({ id, error: 'MISSING_URL' });
@@ -551,7 +551,7 @@ async function handleApiRequest(msg) {
     }
 
     // Step 3: Use flowKey for auth
-    const activeFlowKey = flowKey;
+    const activeFlowKey = bearerToken || flowKey;
     if (!activeFlowKey) {
       sendToAgent({ id, status: 503, error: 'NO_FLOW_KEY' });
       if (hasCaptcha) { metrics.failedCount++; metrics.lastError = 'NO_FLOW_KEY'; }
