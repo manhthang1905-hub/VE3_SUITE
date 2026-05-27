@@ -123,11 +123,12 @@ class FlowKitGUI(tk.Tk):
         hdr.pack(fill='x', padx=10, pady=(8, 4))
         tk.Label(hdr, text="FlowKit Server", font=('Segoe UI', 14, 'bold'),
                  fg=BLUE, bg=BG).pack(side='left')
-        tk.Label(hdr, text=f"v{self._version}", font=('Consolas', 9),
-                 fg=FG2, bg=BG).pack(side='left', padx=(6, 0))
+        self._version_label = tk.Label(hdr, text=f"v{self._version}", font=('Consolas', 9),
+                 fg=FG2, bg=BG)
+        self._version_label.pack(side='left', padx=(6, 0))
 
         self._update_btn = tk.Button(
-            hdr, text="UPDATE", command=self._run_update,
+            hdr, text="Check Update", command=self._on_check_update,
             bg='#0984e3', fg='#fff', font=('Segoe UI', 9, 'bold'),
             relief='flat', cursor='hand2', padx=10)
         self._update_btn.pack(side='right')
@@ -842,12 +843,79 @@ class FlowKitGUI(tk.Tk):
     # ============================================================
     # Update
     # ============================================================
+
+    def _get_remote_version(self) -> str:
+        """Get remote version from GitHub (commit count or VERSION file)."""
+        import json as _json
+        from urllib.request import urlopen, Request
+        api_url = f"https://api.github.com/repos/{GITHUB_REPO}/commits?sha=main&per_page=1"
+        try:
+            req = Request(api_url, headers={"User-Agent": "FlowKit-Updater"})
+            with urlopen(req, timeout=10) as resp:
+                link = resp.headers.get("Link", "")
+                if 'rel="last"' in link:
+                    import re
+                    m = re.search(r'[&?]page=(\d+)>;\s*rel="last"', link)
+                    if m:
+                        return f"1.0.{m.group(1)}"
+        except Exception:
+            pass
+        try:
+            url = f"https://raw.githubusercontent.com/{GITHUB_REPO}/main/VERSION"
+            req = Request(url, headers={"User-Agent": "FlowKit-Updater"})
+            with urlopen(req, timeout=10) as resp:
+                return resp.read().decode("utf-8").strip()
+        except Exception:
+            return ""
+
+    def _on_check_update(self):
+        self._update_btn.config(text="Checking...", state="disabled", fg='#FFA500')
+        threading.Thread(target=self._check_update_thread, daemon=True).start()
+
+    def _check_update_thread(self):
+        try:
+            local = self._version
+            remote = self._get_remote_version()
+            if not remote:
+                self.after(0, lambda: self._update_btn.config(
+                    text="Loi ket noi", state="normal", bg=RED, fg='#fff'))
+                self.after(5000, lambda: self._update_btn.config(
+                    text="Check Update", bg='#0984e3', fg='#fff'))
+                return
+
+            has_update = False
+            try:
+                local_n = int(local.rsplit(".", 1)[-1])
+                remote_n = int(remote.rsplit(".", 1)[-1])
+                has_update = remote_n > local_n
+            except (ValueError, IndexError):
+                has_update = remote != local
+
+            if has_update:
+                self.after(0, lambda: self._update_btn.config(
+                    text=f"Update v{remote}", state="normal",
+                    bg='#2E7D32', fg='#fff',
+                    command=self._run_update))
+                self.after(0, lambda: self._version_label.config(
+                    text=f"v{local}  >>  v{remote}", fg='#FFA500'))
+            else:
+                self.after(0, lambda: self._update_btn.config(
+                    text="Da moi nhat", state="normal", bg=GREEN, fg='#fff'))
+                self.after(5000, lambda: self._update_btn.config(
+                    text="Check Update", bg='#0984e3', fg='#fff'))
+        except Exception as e:
+            self.after(0, lambda: self._update_btn.config(
+                text="Loi", state="normal", bg=RED, fg='#fff'))
+            print(f"Check update error: {e}")
+            self.after(5000, lambda: self._update_btn.config(
+                text="Check Update", bg='#0984e3', fg='#fff'))
+
     def _run_update(self):
         import urllib.request
         import zipfile
 
         def do_update():
-            self._update_btn.config(state="disabled", text="DANG CAP NHAT...", bg='#666')
+            self._update_btn.config(state="disabled", text="Dang cap nhat...", bg='#666', fg='#fff')
 
             try:
                 git_available = False
@@ -939,16 +1007,24 @@ class FlowKitGUI(tk.Tk):
                     if extract_dir.exists():
                         shutil.rmtree(str(extract_dir))
 
-                self._update_btn.config(text="XONG - KHOI DONG LAI...", bg='#00ff88')
-                self.after(1000, lambda: os.execv(sys.executable, [sys.executable] + sys.argv))
+                new_ver = _get_auto_version()
+                self._version = new_ver
+                self.after(0, lambda: self._version_label.config(
+                    text=f"v{new_ver}", fg=GREEN))
+                self.after(0, lambda: self._update_btn.config(
+                    text=f"v{new_ver} OK! Restart...", bg='#00ff88', fg='#000'))
+                self.after(0, lambda: self.title(f"FlowKit Server v{new_ver}"))
+                self.after(2000, lambda: os.execv(sys.executable, [sys.executable] + sys.argv))
 
             except Exception as e:
-                self._update_btn.config(text="LOI", bg=RED)
+                self._update_btn.config(text="LOI", bg=RED, fg='#fff')
                 print(f"Update error: {e}")
                 from tkinter import messagebox
                 messagebox.showerror("Loi cap nhat", f"Loi: {e}\n\nThu tai thu cong:\n{GITHUB_ZIP_URL}")
             finally:
-                self.after(3000, lambda: self._update_btn.config(state="normal", text="UPDATE", bg='#0984e3'))
+                self.after(5000, lambda: self._update_btn.config(
+                    state="normal", text="Check Update", bg='#0984e3', fg='#fff',
+                    command=self._on_check_update))
 
         threading.Thread(target=do_update, daemon=True).start()
 
