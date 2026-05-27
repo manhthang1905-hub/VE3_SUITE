@@ -1,5 +1,6 @@
 """
 FlowKit Launcher — starts Chrome instances, agents, and gateway.
+Supports fingerprint injection and Chrome restart for 403 recovery.
 
 Usage:
     python launcher.py              # Start all enabled instances + gateway
@@ -12,6 +13,7 @@ import subprocess
 import sys
 import time
 from pathlib import Path
+from typing import Dict, Optional
 
 import yaml
 
@@ -30,24 +32,60 @@ def resolve_path(rel_path: str) -> Path:
     return (BASE_DIR / rel_path).resolve()
 
 
-def start_chrome(instance: dict) -> subprocess.Popen:
+# ─── Fingerprint ─────────────────────────────────────────────
+
+def generate_fingerprint(ext_dir: str | Path, instance_name: str = "") -> int:
+    """Generate unique fingerprint JS and write to extension directory.
+
+    Returns the seed used.
+    """
+    from fingerprint_data import build_fingerprint_js, get_unique_seed
+
+    ext_dir = Path(ext_dir)
+    seed = get_unique_seed()
+    js_code = build_fingerprint_js(seed)
+
+    fp_path = ext_dir / "fp_inject.js"
+    fp_path.write_text(js_code, encoding="utf-8")
+
+    seed_path = BASE_DIR / "config" / f".fingerprint_seed_{seed}"
+    seed_path.parent.mkdir(parents=True, exist_ok=True)
+    seed_path.write_text(
+        f"{instance_name}|{seed}|{int(time.time())}",
+        encoding="utf-8",
+    )
+
+    print(f"  Fingerprint: seed={seed} -> {fp_path.name}")
+    return seed
+
+
+# ─── Chrome Process Management ───────────────────────────────
+
+_chrome_processes: Dict[str, subprocess.Popen] = {}
+_chrome_seeds: Dict[str, int] = {}
+
+
+def start_chrome(instance: dict, new_fingerprint: bool = True) -> Optional[subprocess.Popen]:
     """Start Chrome Portable with extension loaded.
 
     Uses GoogleChromePortable.exe wrapper (not chrome.exe directly)
     because the wrapper correctly handles profile setup and MV3
     service worker activation.
     """
-    # Use the Portable wrapper, not chrome.exe directly
     chrome_dir = resolve_path(instance["chrome_path"]).parent.parent.parent
     portable_exe = chrome_dir / "GoogleChromePortable.exe"
     ext_dir = resolve_path(instance["extension_dir"])
     ipv6 = instance.get("ipv6", "")
+    name = instance["name"]
 
     if not portable_exe.exists():
         print(f"[ERROR] ChromePortable not found: {portable_exe}")
         return None
 
-    # GoogleChromePortable.exe passes extra args to chrome.exe
+    if new_fingerprint:
+        seed = generate_fingerprint(ext_dir, name)
+        _chrome_seeds[name] = seed
+
     args = [
         str(portable_exe),
         f"--load-extension={ext_dir}",
@@ -56,11 +94,10 @@ def start_chrome(instance: dict) -> subprocess.Popen:
         "--disable-backgrounding-occluded-windows",
     ]
 
-    # IPv6 proxy support
     if ipv6:
         args.append(f"--proxy-server=socks5://[{ipv6}]:1080")
 
-    print(f"[{instance['name']}] Starting Chrome: {portable_exe.name}")
+    print(f"[{name}] Starting Chrome: {portable_exe.name}")
     print(f"  Dir: {chrome_dir}")
     print(f"  Extension: {ext_dir}")
     if ipv6:
@@ -73,8 +110,133 @@ def start_chrome(instance: dict) -> subprocess.Popen:
         creationflags=subprocess.CREATE_NEW_PROCESS_GROUP if sys.platform == "win32" else 0,
     )
     print(f"  PID: {proc.pid}")
+
+    _chrome_processes[name] = proc
     return proc
 
+
+def kill_chrome(instance_name: str) -> bool:
+    """Kill Chrome process for a specific instance.
+
+    GoogleChromePortable.exe is a wrapper that exits after launching chrome.exe.
+    So we kill by finding chrome.exe processes whose command line includes
+    this instance's extension directory (unique per instance).
+    """
+    killed_any = False
+
+    # Method 1: Kill tracked Popen if still running
+    proc = _chrome_processes.get(instance_name)
+    if proc and proc.poll() is None:
+        print(f"[{instance_name}] Killing wrapper PID {proc.pid}...")
+        try:
+            if sys.platform == "win32":
+                subprocess.run(
+                    ["taskkill", "/F", "/T", "/PID", str(proc.pid)],
+                    capture_output=True, timeout=10,
+                )
+            else:
+                proc.terminate()
+                proc.wait(timeout=5)
+            killed_any = True
+        except Exception:
+            pass
+
+    # Method 2: Find chrome.exe by extension dir in command line (Windows)
+    if sys.platform == "win32":
+        # Get the extension dir for this instance from config
+        cfg = CONFIG.get("instances", [])
+        ext_marker = ""
+        for inst_cfg in cfg:
+            if inst_cfg.get("name") == instance_name:
+                ext_marker = inst_cfg.get("extension_dir", "")
+                break
+
+        if ext_marker:
+            try:
+                result = subprocess.run(
+                    ["wmic", "process", "where",
+                     f"name='chrome.exe' and commandline like '%{ext_marker}%'",
+                     "get", "processid"],
+                    capture_output=True, text=True, timeout=10,
+                )
+                for line in result.stdout.strip().split("\n"):
+                    line = line.strip()
+                    if line.isdigit():
+                        pid = int(line)
+                        subprocess.run(
+                            ["taskkill", "/F", "/T", "/PID", str(pid)],
+                            capture_output=True, timeout=10,
+                        )
+                        killed_any = True
+                        print(f"[{instance_name}] Killed chrome.exe PID {pid}")
+            except Exception as e:
+                print(f"[{instance_name}] WMIC kill error: {e}")
+
+        if not killed_any:
+            # Method 3: Kill by Chrome profile directory
+            chrome_path = ""
+            for inst_cfg in cfg:
+                if inst_cfg.get("name") == instance_name:
+                    chrome_path = inst_cfg.get("chrome_path", "")
+                    break
+            if chrome_path:
+                chrome_dir = str(resolve_path(chrome_path).parent.parent.parent)
+                profile_marker = chrome_dir.replace("\\", "/").split("/")[-1]
+                try:
+                    result = subprocess.run(
+                        ["wmic", "process", "where",
+                         f"name='chrome.exe' and commandline like '%{profile_marker}%'",
+                         "get", "processid"],
+                        capture_output=True, text=True, timeout=10,
+                    )
+                    for line in result.stdout.strip().split("\n"):
+                        line = line.strip()
+                        if line.isdigit():
+                            pid = int(line)
+                            subprocess.run(
+                                ["taskkill", "/F", "/T", "/PID", str(pid)],
+                                capture_output=True, timeout=10,
+                            )
+                            killed_any = True
+                            print(f"[{instance_name}] Killed chrome.exe PID {pid} (by profile)")
+                except Exception as e:
+                    print(f"[{instance_name}] Profile kill error: {e}")
+
+    _chrome_processes.pop(instance_name, None)
+    return killed_any
+
+
+def restart_chrome(instance: dict, new_ipv6: str = "") -> Optional[subprocess.Popen]:
+    """Kill Chrome and restart with new fingerprint.
+
+    If new_ipv6 is provided, Chrome starts with that IPv6 proxy.
+    """
+    name = instance["name"]
+    print(f"[{name}] === RESTART CHROME (recovery) ===")
+
+    kill_chrome(name)
+    time.sleep(3)
+
+    if new_ipv6:
+        instance = {**instance, "ipv6": new_ipv6}
+
+    return start_chrome(instance, new_fingerprint=True)
+
+
+def get_chrome_pid(instance_name: str) -> Optional[int]:
+    """Get Chrome PID for an instance (None if not running)."""
+    proc = _chrome_processes.get(instance_name)
+    if proc and proc.poll() is None:
+        return proc.pid
+    return None
+
+
+def get_instance_seed(instance_name: str) -> int:
+    """Get current fingerprint seed for an instance."""
+    return _chrome_seeds.get(instance_name, 0)
+
+
+# ─── Agent ───────────────────────────────────────────────────
 
 def start_agent(instance: dict) -> subprocess.Popen:
     """Start FlowKit agent for an instance."""
@@ -88,8 +250,6 @@ def start_agent(instance: dict) -> subprocess.Popen:
     env["API_HOST"] = "127.0.0.1"
     env["WS_HOST"] = "127.0.0.1"
     env["INSTANCE_NAME"] = name
-
-    agent_script = BASE_DIR / "agent" / "main.py"
 
     print(f"[{name}] Starting agent: API={api_port}, WS={ws_port}")
 
@@ -106,6 +266,8 @@ def start_agent(instance: dict) -> subprocess.Popen:
     print(f"  PID: {proc.pid}")
     return proc
 
+
+# ─── Gateway ─────────────────────────────────────────────────
 
 def start_gateway() -> subprocess.Popen:
     """Start the gateway."""
@@ -124,6 +286,8 @@ def start_gateway() -> subprocess.Popen:
     print(f"  PID: {proc.pid}")
     return proc
 
+
+# ─── Main ────────────────────────────────────────────────────
 
 def main():
     import argparse
@@ -199,7 +363,8 @@ def main():
         print("  FlowKit Server READY")
         print(f"  Gateway: http://0.0.0.0:{CONFIG.get('gateway_port', 5100)}")
         for inst in instances_cfg:
-            print(f"  {inst['name']}: API={inst['api_port']} WS={inst['ws_port']}")
+            seed = _chrome_seeds.get(inst["name"], 0)
+            print(f"  {inst['name']}: API={inst['api_port']} WS={inst['ws_port']} FP={seed}")
         print("=" * 60)
         print("\n  Press Ctrl+C to stop all.\n")
 

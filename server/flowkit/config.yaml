@@ -38,6 +38,13 @@ rotation:
   cooldown_seconds: 300
   max_consecutive_403: 3
   max_retries_per_request: 3
+recovery:
+  level1_max_attempts: 2
+  level2_max_attempts: 2
+  level3_max_attempts: 3
+  min_recovery_interval: 30
+  extension_reconnect_timeout: 30
+  chrome_restart_delay: 5
 timeouts:
   health_check: 5
   image_generation: 120

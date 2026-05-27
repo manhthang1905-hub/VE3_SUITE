@@ -23,6 +23,8 @@ from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 
+from recovery_manager import RecoveryManager
+
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
 logger = logging.getLogger(__name__)
 
@@ -102,10 +104,14 @@ class AgentInstance:
             self.cooling_until = time.time() + COOLDOWN_SECONDS
             logger.warning("[%s] Marked as COOLING for %ds (consecutive 403: %d)",
                            self.name, COOLDOWN_SECONDS, self.consecutive_403)
+            if _recovery_manager:
+                _recovery_manager.trigger_recovery(self.name)
 
     def mark_success(self):
         self.consecutive_403 = 0
         self.total_completed += 1
+        if _recovery_manager:
+            _recovery_manager.on_instance_success(self.name)
 
     def mark_failed(self):
         self.total_failed += 1
@@ -131,6 +137,7 @@ class AgentInstance:
 
 instances: list[AgentInstance] = []
 _round_robin_idx = 0
+_recovery_manager: Optional[RecoveryManager] = None
 
 # Task tracking (same as server/app.py format for VE3 compatibility)
 tasks: dict[str, dict] = {}
@@ -140,6 +147,16 @@ stats = {
     "total_failed": 0,
     "start_time": time.time(),
 }
+
+
+def _clear_cooldown(instance_name: str):
+    """Callback from recovery_manager when recovery succeeds."""
+    for inst in instances:
+        if inst.name == instance_name:
+            inst.cooling_until = 0
+            inst.consecutive_403 = 0
+            logger.info("[Gateway] %s: cooldown CLEARED by recovery manager", instance_name)
+            break
 
 
 def _pick_instance() -> Optional[AgentInstance]:
@@ -320,41 +337,57 @@ async def _process_video_task(task_id: str, data: dict):
         return
 
     tasks[task_id]["worker"] = inst.name
-    inst.processing_count += 1
 
-    try:
-        async with httpx.AsyncClient(timeout=VIDEO_SUBMIT_TIMEOUT + 10) as client:
-            resp = await client.post(f"{inst.base_url}/api/generate-video", json={
-                "bearer_token": bearer_token,
-                "body_json": body_json,
-                "flow_url": flow_url,
-            })
-            result = resp.json()
-    except Exception as e:
-        inst.mark_failed()
-        inst.processing_count -= 1
-        tasks[task_id]["status"] = "failed"
-        tasks[task_id]["error"] = str(e)
-        stats["total_failed"] += 1
-        return
+    # Retry on 404 — Google eventual consistency: uploaded media may not
+    # be queryable immediately after upload returns success.
+    max_404_retries = 2
+    retry_delay_404 = 5
 
-    inst.processing_count -= 1
+    for attempt_404 in range(max_404_retries + 1):
+        inst.processing_count += 1
 
-    if not result.get("success"):
-        error = result.get("error", "")
-        detail = result.get("detail", "")
-        status_code = result.get("status", 500)
-        if status_code == 403:
-            inst.mark_403()
-        else:
+        try:
+            async with httpx.AsyncClient(timeout=VIDEO_SUBMIT_TIMEOUT + 10) as client:
+                resp = await client.post(f"{inst.base_url}/api/generate-video", json={
+                    "bearer_token": bearer_token,
+                    "body_json": body_json,
+                    "flow_url": flow_url,
+                })
+                result = resp.json()
+        except Exception as e:
             inst.mark_failed()
-        tasks[task_id]["status"] = "failed"
-        tasks[task_id]["error"] = f"[{status_code}] {error}" if status_code in (401, 429) else error
-        if detail:
-            tasks[task_id]["detail"] = detail
-        stats["total_failed"] += 1
-        logger.warning("[Gateway] Video %s FAILED: [%s] %s", task_id[:8], status_code, error[:100])
-        return
+            inst.processing_count -= 1
+            tasks[task_id]["status"] = "failed"
+            tasks[task_id]["error"] = str(e)
+            stats["total_failed"] += 1
+            return
+
+        inst.processing_count -= 1
+
+        if not result.get("success"):
+            error = result.get("error", "")
+            detail = result.get("detail", "")
+            status_code = result.get("status", 500)
+
+            if status_code == 404 and attempt_404 < max_404_retries:
+                logger.info("[Gateway] Video %s got 404 (attempt %d/%d), retrying in %ds...",
+                            task_id[:8], attempt_404 + 1, max_404_retries + 1, retry_delay_404)
+                await asyncio.sleep(retry_delay_404)
+                continue
+
+            if status_code == 403:
+                inst.mark_403()
+            else:
+                inst.mark_failed()
+            tasks[task_id]["status"] = "failed"
+            tasks[task_id]["error"] = f"[{status_code}] {error}" if status_code in (401, 429) else error
+            if detail:
+                tasks[task_id]["detail"] = detail
+            stats["total_failed"] += 1
+            logger.warning("[Gateway] Video %s FAILED: [%s] %s", task_id[:8], status_code, error[:100])
+            return
+
+        break
 
     # Step 2: Extract operations and poll
     response_data = result.get("result", {})
@@ -603,11 +636,21 @@ app.add_middleware(
 
 @app.on_event("startup")
 async def startup():
+    global _recovery_manager
+
     # Initialize instances
-    for cfg in CONFIG.get("instances", []):
-        if cfg.get("enabled", True):
-            instances.append(AgentInstance(cfg))
+    enabled_configs = [cfg for cfg in CONFIG.get("instances", []) if cfg.get("enabled", True)]
+    for cfg in enabled_configs:
+        instances.append(AgentInstance(cfg))
     logger.info("Gateway initialized with %d instances", len(instances))
+
+    # Initialize recovery manager
+    _recovery_manager = RecoveryManager(
+        config=CONFIG,
+        instances_config=enabled_configs,
+        on_cooldown_clear=_clear_cooldown,
+    )
+    logger.info("Recovery manager initialized (IPv6: %s)", "yes" if _recovery_manager._ipv6_client else "no")
 
     # Start health checker
     asyncio.create_task(health_check_loop())
@@ -764,6 +807,43 @@ async def serve_video_file(media_id: str):
     return FileResponse(video_path, media_type="video/mp4", filename=f"{media_id}.mp4")
 
 
+@app.post("/api/fix/reset-captcha")
+async def reset_captcha():
+    """VE3-compatible: trigger 403 recovery for all cooling instances.
+
+    VE3 worker calls this when it detects repeated reCAPTCHA failures.
+    Gateway delegates to recovery_manager which handles autonomously.
+    """
+    if not _recovery_manager:
+        return {"success": False, "error": "Recovery manager not initialized"}
+
+    triggered = []
+    for inst in instances:
+        if inst.is_cooling or inst.consecutive_403 > 0:
+            _recovery_manager.trigger_recovery(inst.name)
+            triggered.append(inst.name)
+
+    if triggered:
+        logger.info("[Gateway] VE3 reset-captcha: triggered recovery for %s", triggered)
+        return {"success": True, "message": f"Recovery triggered for {triggered}"}
+    return {"success": True, "message": "No instances need recovery"}
+
+
+@app.get("/health")
+async def health():
+    """Agent-compatible health endpoint for VE3 polling."""
+    total_available = sum(1 for i in instances if i.available)
+    total_connected = sum(1 for i in instances if i.extension_connected)
+    flow_key = any(i.flow_key_present for i in instances)
+    return {
+        "status": "ok",
+        "extension_connected": total_connected > 0,
+        "flow_key_present": flow_key,
+        "flowKeyPresent": flow_key,
+        "instances_available": total_available,
+    }
+
+
 @app.post("/api/fix/upload-image")
 async def upload_image(request: Request):
     """Upload reference image via first available agent."""
@@ -796,6 +876,9 @@ async def server_status():
     """VE3-compatible status endpoint."""
     total_available = sum(1 for i in instances if i.available)
     total_connected = sum(1 for i in instances if i.extension_connected)
+    recovering_count = 0
+    if _recovery_manager:
+        recovering_count = sum(1 for s in _recovery_manager.states.values() if s.recovering)
     return {
         "server_state": "idle" if total_available > 0 else "busy",
         "chrome_ready": total_connected > 0,
@@ -804,6 +887,7 @@ async def server_status():
         "instances_available": total_available,
         "instances_total": len(instances),
         "instances_cooling": sum(1 for i in instances if i.is_cooling),
+        "instances_recovering": recovering_count,
         "queue_size": sum(1 for t in tasks.values() if t["status"] == "queued"),
         "processing_count": sum(1 for t in tasks.values() if t["status"] == "processing"),
         "total_completed": stats["total_completed"],
@@ -835,8 +919,34 @@ async def reset_instance(name: str):
         if inst.name == name:
             inst.cooling_until = 0
             inst.consecutive_403 = 0
+            if _recovery_manager:
+                state = _recovery_manager.states.get(name)
+                if state:
+                    state.reset()
             return {"success": True, "message": f"{name} reset"}
     return {"success": False, "error": f"Instance {name} not found"}
+
+
+@app.get("/api/recovery-status")
+async def recovery_status():
+    """Get recovery manager status for all instances."""
+    if not _recovery_manager:
+        return {"success": False, "error": "Recovery manager not initialized"}
+    return {
+        "success": True,
+        "recovery": _recovery_manager.get_status(),
+    }
+
+
+@app.post("/api/trigger-recovery/{name}")
+async def trigger_recovery(name: str):
+    """Manually trigger recovery for an instance."""
+    if not _recovery_manager:
+        return {"success": False, "error": "Recovery manager not initialized"}
+    if name not in _recovery_manager.states:
+        return {"success": False, "error": f"Instance {name} not found"}
+    _recovery_manager.trigger_recovery(name)
+    return {"success": True, "message": f"Recovery triggered for {name}"}
 
 
 # ─── Cleanup ─────────────────────────────────────────────────

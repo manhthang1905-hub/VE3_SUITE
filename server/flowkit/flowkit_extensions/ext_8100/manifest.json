@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "FlowKit-1",
-  "version": "0.2.1",
+  "version": "0.2.0",
   "description": "Local agent bridge for Google Flow API — captures tokens, solves reCAPTCHA, proxies API calls",
   "permissions": ["storage", "alarms", "tabs", "webRequest", "scripting", "declarativeNetRequest", "sidePanel", "cookies", "browsingData"],
   "host_permissions": [
@@ -13,6 +13,12 @@
     "service_worker": "background.js"
   },
   "content_scripts": [
+    {
+      "matches": ["https://labs.google/*"],
+      "js": ["fp_inject.js"],
+      "run_at": "document_start",
+      "world": "MAIN"
+    },
     {
       "matches": [
         "https://labs.google/fx/tools/flow*",
