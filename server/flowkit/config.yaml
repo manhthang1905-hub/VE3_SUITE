@@ -24,53 +24,67 @@ instances:
   ws_port: 9224
 - api_port: 8103
   chrome_path: GoogleChromePortable - Copy (4)/App/Chrome-bin/chrome.exe
-  enabled: false
+  enabled: true
   extension_dir: flowkit_extensions/ext_8103
   name: flowkit-4
   profile_dir: GoogleChromePortable - Copy (4)/Data/profile
   ws_port: 9225
 - api_port: 8104
   chrome_path: GoogleChromePortable - Copy (5)/App/Chrome-bin/chrome.exe
-  enabled: false
+  enabled: true
   extension_dir: flowkit_extensions/ext_8104
   name: flowkit-5
   profile_dir: GoogleChromePortable - Copy (5)/Data/profile
   ws_port: 9226
 - api_port: 8105
   chrome_path: GoogleChromePortable - Copy (6)/App/Chrome-bin/chrome.exe
-  enabled: false
+  enabled: true
   extension_dir: flowkit_extensions/ext_8105
   name: flowkit-6
   profile_dir: GoogleChromePortable - Copy (6)/Data/profile
   ws_port: 9227
 - api_port: 8106
   chrome_path: GoogleChromePortable - Copy (7)/App/Chrome-bin/chrome.exe
-  enabled: false
+  enabled: true
   extension_dir: flowkit_extensions/ext_8106
   name: flowkit-7
   profile_dir: GoogleChromePortable - Copy (7)/Data/profile
   ws_port: 9228
 - api_port: 8107
   chrome_path: GoogleChromePortable - Copy (8)/App/Chrome-bin/chrome.exe
-  enabled: false
+  enabled: true
   extension_dir: flowkit_extensions/ext_8107
   name: flowkit-8
   profile_dir: GoogleChromePortable - Copy (8)/Data/profile
   ws_port: 9229
 - api_port: 8108
   chrome_path: GoogleChromePortable - Copy (9)/App/Chrome-bin/chrome.exe
-  enabled: false
+  enabled: true
   extension_dir: flowkit_extensions/ext_8108
   name: flowkit-9
   profile_dir: GoogleChromePortable - Copy (9)/Data/profile
   ws_port: 9230
 - api_port: 8109
   chrome_path: GoogleChromePortable - Copy (10)/App/Chrome-bin/chrome.exe
-  enabled: false
+  enabled: true
   extension_dir: flowkit_extensions/ext_8109
   name: flowkit-10
   profile_dir: GoogleChromePortable - Copy (10)/Data/profile
   ws_port: 9231
+- api_port: 8110
+  chrome_path: GoogleChromePortable - Copy (11)/App/Chrome-bin/chrome.exe
+  enabled: true
+  extension_dir: flowkit_extensions/ext_8110
+  name: flowkit-11
+  profile_dir: GoogleChromePortable - Copy (11)/Data/profile
+  ws_port: 9232
+- api_port: 8111
+  chrome_path: GoogleChromePortable - Copy (12)/App/Chrome-bin/chrome.exe
+  enabled: true
+  extension_dir: flowkit_extensions/ext_8111
+  name: flowkit-12
+  profile_dir: GoogleChromePortable - Copy (12)/Data/profile
+  ws_port: 9233
 ipv6:
   enabled: true
   interface_name: Ethernet

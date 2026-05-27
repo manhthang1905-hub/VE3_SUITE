@@ -94,8 +94,8 @@ if errorlevel 1 (
     echo   [OK] Rule already exists
 )
 
-echo   Adding agent ports 8100-8106...
-for /L %%P in (8100,1,8106) do (
+echo   Adding agent ports 8100-8111...
+for /L %%P in (8100,1,8111) do (
     netsh advfirewall firewall show rule name="FlowKit Agent %%P" >nul 2>&1
     if errorlevel 1 (
         netsh advfirewall firewall add rule name="FlowKit Agent %%P" dir=in action=allow protocol=tcp localport=%%P
@@ -121,7 +121,7 @@ echo     - Extension will auto-connect to FlowKit agent
 echo.
 echo   Firewall ports opened:
 echo     - 5100 (Gateway — VE3 connects here)
-echo     - 8100-8106 (Agents — internal only)
+echo     - 8100-8111 (Agents — internal only)
 echo     - ICMP ping (for VM connectivity check)
 echo.
 pause
