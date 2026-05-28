@@ -1,12 +1,8 @@
 """
-FlowKit Chrome Setup — DrissionPage-based login check + project creation.
+FlowKit Chrome Setup — ported from server/chrome_session.py setup().
 
-Ported from server/chrome_session.py setup flow.
-DrissionPage opens Chrome itself (like old server), NOT connecting to existing.
-
-Usage:
-    from chrome_setup import setup_chrome
-    page = setup_chrome(chrome_dir, ext_dir, port, account, proxy_arg)
+DrissionPage opens Chrome, check account, login if needed, navigate Flow,
+create project, wait textarea. Then kill Chrome for agent to restart.
 """
 import os
 import sys
@@ -27,10 +23,10 @@ LOGIN_INDICATORS = [
 ]
 
 
-# ─── CDP helpers (ported from old server chrome_session.py) ───────────
+# ─── CDP helpers (y nguyen tu server cu chrome_session.py) ──────────
 
 def _enforce_window_layout(page, window_args, log):
-    """Enforce window position/size via CDP — same as old server _enforce_window_layout."""
+    """Ep vi tri/size bang CDP — y nguyen _enforce_window_layout server cu."""
     try:
         bounds = {'windowState': 'normal'}
         for arg in (window_args or []):
@@ -57,7 +53,7 @@ def _enforce_window_layout(page, window_args, log):
 
 
 def _apply_zoom(page, log):
-    """Apply 50% zoom via CDP + JS — same as old server apply_page_zoom."""
+    """Apply zoom — y nguyen apply_page_zoom server cu."""
     zoom_val = int(os.getenv("CHROME_PAGE_ZOOM", "50"))
     zoom_val = max(25, min(200, zoom_val))
     target = f"{zoom_val}%"
@@ -84,15 +80,11 @@ def _apply_zoom(page, log):
     """ % target
 
     try:
-        # CDP: register zoom for ALL future page loads (before scripts run)
         page.run_cdp('Page.addScriptToEvaluateOnNewDocument', source=zoom_bootstrap_js)
-        # CDP: set page scale factor (like old server)
         page.run_cdp('Emulation.setPageScaleFactor', pageScaleFactor=scale)
-        # JS: apply to current page
         page.run_js(zoom_js)
         log("Zoom %s applied (CDP + JS)" % target)
     except Exception as e:
-        # Fallback: JS only
         try:
             page.run_js(zoom_js)
             log("Zoom %s applied (JS only, CDP failed: %s)" % (target, e))
@@ -101,25 +93,93 @@ def _apply_zoom(page, log):
 
 
 def _inject_fingerprint(page, ext_dir, instance_name, log):
-    """Inject fingerprint via CDP Page.addScriptToEvaluateOnNewDocument — like old server."""
+    """Inject fingerprint — y nguyen inject_fingerprint_spoof server cu."""
     try:
         fp_path = Path(ext_dir) / "fp_inject.js"
         if not fp_path.exists():
             return
         js = fp_path.read_text(encoding="utf-8")
-        # CDP: inject for ALL future page loads (before page scripts run)
         page.run_cdp('Page.addScriptToEvaluateOnNewDocument', source=js)
-        # JS: apply to current page too
         page.run_js(js)
         log("Fingerprint injected via CDP")
     except Exception as e:
         log("Fingerprint CDP inject skip: %s" % e)
 
 
-# ─── Login / Account Check ───────────────────────────────────────────
+JS_BLOCK_NEW_TAB = """
+(function() {
+    try {
+        window.open = function() { return null; };
+    } catch (e) {}
+    try {
+        var fix = function(root) {
+            var scope = root || document;
+            var links = scope.querySelectorAll ? scope.querySelectorAll('a[target="_blank"]') : [];
+            for (var i = 0; i < links.length; i++) {
+                links[i].setAttribute('target', '_self');
+                links[i].removeAttribute('rel');
+            }
+        };
+        fix(document);
+        document.addEventListener('click', function(ev) {
+            var el = ev.target;
+            var a = el && el.closest ? el.closest('a[target="_blank"]') : null;
+            if (a) {
+                a.setAttribute('target', '_self');
+                a.removeAttribute('rel');
+            }
+        }, true);
+        document.addEventListener('DOMContentLoaded', function() { fix(document); }, true);
+    } catch (e) {}
+    return 'TAB_GUARD_OK';
+})();
+"""
 
-def _check_logged_in(page) -> str:
-    """Check which Google account is logged in. Returns email or ''."""
+
+def _inject_tab_guard(page, log):
+    """Chan mo tab moi — y nguyen inject_tab_guard server cu."""
+    try:
+        page.run_cdp('Page.addScriptToEvaluateOnNewDocument', source=JS_BLOCK_NEW_TAB)
+        page.run_js(JS_BLOCK_NEW_TAB)
+        log("Tab guard injected")
+    except Exception as e:
+        log("Tab guard skip: %s" % e)
+
+
+JS_CLEANUP = """
+(function() {
+    try { localStorage.clear(); } catch(e) {}
+    try { sessionStorage.clear(); } catch(e) {}
+    try { indexedDB.databases().then(function(dbs) { dbs.forEach(function(db) { indexedDB.deleteDatabase(db.name); }); }); } catch(e) {}
+    try { document.cookie.split(";").forEach(function(c) { document.cookie = c.replace(/^ +/, "").replace(/=.*/, "=;expires=" + new Date().toUTCString() + ";path=/"); }); } catch(e) {}
+    try { caches.keys().then(function(names) { names.forEach(function(name) { caches.delete(name); }); }); } catch(e) {}
+    try { navigator.serviceWorker.getRegistrations().then(function(regs) { regs.forEach(function(r) { r.unregister(); }); }); } catch(e) {}
+    return 'CLEANED';
+})();
+"""
+
+
+JS_VERIFY_FINGERPRINT = """
+(function() {
+    var c = navigator.hardwareConcurrency;
+    var m = navigator.deviceMemory || 'N/A';
+    var w = screen.width;
+    var h = screen.height;
+    var gl = null;
+    try {
+        var canvas = document.createElement('canvas');
+        var ctx = canvas.getContext('webgl') || canvas.getContext('experimental-webgl');
+        if (ctx) gl = ctx.getParameter(37446);
+    } catch(e) {}
+    return 'cores=' + c + ' mem=' + m + ' screen=' + w + 'x' + h + ' gpu=' + (gl || 'N/A').substring(0, 40);
+})();
+"""
+
+
+# ─── Account Check — y nguyen _check_current_account server cu ──────
+
+def _check_current_account(page, log) -> str:
+    """Check email dang login — y nguyen _check_current_account server cu."""
     try:
         page.get("https://myaccount.google.com")
         time.sleep(3)
@@ -134,16 +194,24 @@ def _check_logged_in(page) -> str:
                 var t = all[i].textContent.trim();
                 if (t.indexOf('@') > 0 && t.indexOf('.') > 0 && t.length < 60) return t;
             }
+            var btns = document.querySelectorAll('[aria-label*="@"]');
+            if (btns.length > 0) {
+                var label = btns[0].getAttribute('aria-label');
+                var match = label.match(/[\\w.-]+@[\\w.-]+/);
+                if (match) return match[0];
+            }
             return '';
         """)
         return str(email or "").strip().lower()
     except Exception as e:
-        logger.warning("[Setup] Check login error: %s", e)
+        log("Check account error: %s" % e)
         return ""
 
 
+# ─── UI helpers ─────────────────────────────────────────────────────
+
 def _dismiss_popups(page):
-    """Dismiss Flow popups (Bắt đầu / Get started / Got it)."""
+    """Dismiss Flow popups — y nguyen server cu."""
     try:
         page.run_js("""
             (function() {
@@ -173,7 +241,7 @@ def _dismiss_popups(page):
 
 
 def _click_new_project(page) -> bool:
-    """Click 'Dự án mới' or 'Create with Flow' button."""
+    """Click 'Du an moi' — y nguyen server cu."""
     try:
         result = page.run_js("""
             (function() {
@@ -207,7 +275,7 @@ def _click_new_project(page) -> bool:
 
 
 def _create_new_project(page, log) -> bool:
-    """Create new project — retry loop like old server _create_new_project."""
+    """Tao project moi — y nguyen _create_new_project server cu."""
     for attempt in range(20):
         try:
             url = page.url or ""
@@ -248,7 +316,7 @@ def _create_new_project(page, log) -> bool:
 
 
 def _wait_for_textarea(page, timeout: int = 30) -> bool:
-    """Wait for textarea/contenteditable to appear."""
+    """Doi textarea — y nguyen server cu."""
     for _ in range(timeout):
         try:
             result = page.run_js("""
@@ -267,7 +335,7 @@ def _wait_for_textarea(page, timeout: int = 30) -> bool:
 
 
 def _do_login(chrome_dir: Path, account: dict, proxy_arg: str = "", worker_id: int = 0) -> bool:
-    """Login Google account using google_login.py (same as old server _auto_login)."""
+    """Login Google — goi google_login.py y nguyen server cu _auto_login."""
     try:
         sys.path.insert(0, str(BASE_DIR))
         from google_login import login_google_chrome
@@ -284,7 +352,7 @@ def _do_login(chrome_dir: Path, account: dict, proxy_arg: str = "", worker_id: i
 
 
 def _kill_chrome_for_dir(chrome_dir: Path):
-    """Kill any Chrome processes using this chrome_dir. Ensures clean state before login."""
+    """Kill Chrome processes — y nguyen server cu."""
     if sys.platform != "win32":
         return
     import subprocess
@@ -302,11 +370,18 @@ def _kill_chrome_for_dir(chrome_dir: Path):
     time.sleep(2)
 
 
+def _clear_chrome_data(chrome_dir: Path, log):
+    """Clear Chrome data — y nguyen _clear_chrome_data server cu."""
+    from launcher import clean_chrome_profile
+    clean_chrome_profile(chrome_dir)
+    log("Cleared Chrome data")
+
+
 # ─── ChromiumOptions Builder ─────────────────────────────────────────
 
 def _build_options(chrome_dir: Path, ext_dir: Path, port: int, proxy_arg: str = "",
                    window_args: list = None):
-    """Build ChromiumOptions — same pattern as old server setup()."""
+    """Build ChromiumOptions — y nguyen server cu setup()."""
     from DrissionPage import ChromiumOptions
 
     portable_exe = chrome_dir / "GoogleChromePortable.exe"
@@ -333,7 +408,7 @@ def _build_options(chrome_dir: Path, ext_dir: Path, port: int, proxy_arg: str = 
     return co
 
 
-# ─── Main Setup ──────────────────────────────────────────────────────
+# ─── Main Setup — be nguyen tu server cu chrome_session.py setup() ──
 
 def setup_chrome(
     chrome_dir: Path,
@@ -346,22 +421,21 @@ def setup_chrome(
     instance_name: str = "",
 ) -> bool:
     """
-    Full Chrome setup — ported from old server chrome_session.py setup().
+    Full Chrome setup — be nguyen tu server cu chrome_session.py setup().
 
-    Flow:
-    1. Generate fingerprint + open Chrome via DrissionPage
-    2. Enforce window layout via CDP + inject fingerprint
-    3. Navigate to Flow — if redirected to login → login → reopen
-    4. Apply zoom 50% via CDP + JS
-    5. Create project + wait for textarea
-    6. Kill Chrome (agent will restart via subprocess)
+    1. Mo Chrome -> check account hien tai
+    2. Neu sai account -> clear data + login dung account
+    3. Vao labs.google/fx/tools/flow
+    4. Tao project moi
+    5. Doi textarea san sang
+    6. Kill Chrome (agent se restart bang subprocess)
     """
     log = log_func or (lambda msg: logger.info("[Setup] %s", msg))
 
     from DrissionPage import ChromiumPage
-    from launcher import _write_chrome_prefs, clean_chrome_profile
+    from launcher import _write_chrome_prefs
 
-    # Generate fingerprint before launch (includes CSS zoom 50%)
+    # Generate fingerprint before launch
     if instance_name:
         try:
             from launcher import generate_fingerprint
@@ -369,115 +443,197 @@ def setup_chrome(
         except Exception as e:
             log("Fingerprint generation error: %s" % e)
 
-    # Write Preferences before launch
     _write_chrome_prefs(chrome_dir)
-
-    # worker_id for google_login port assignment
     _worker_id = port - 19200 if port >= 19200 else 0
 
-    # 1. Open Chrome
+    # ── 1. Mo Chrome de check account ──
+    log("Mo Chrome: %s (port %d)" % (chrome_dir.name, port))
     co = _build_options(chrome_dir, ext_dir, port, proxy_arg, window_args)
-    log("Opening Chrome: %s (port %d)" % (chrome_dir.name, port))
 
     try:
         page = ChromiumPage(co)
         log("Chrome opened: %s" % (page.title or "(no title)"))
+        _enforce_window_layout(page, window_args, log)
     except Exception as e:
         log("Chrome failed: %s" % e)
         return False
 
-    # 2. Enforce window layout via CDP (like old server _enforce_window_layout)
-    _enforce_window_layout(page, window_args, log)
+    # Chan mo tab moi truoc khi thao tac UI
+    _inject_tab_guard(page, log)
 
-    # 3. Inject fingerprint via CDP (like old server inject_fingerprint_spoof)
+    # Inject fingerprint ngay sau khi mo Chrome
     _inject_fingerprint(page, ext_dir, instance_name, log)
 
-    # 4. Navigate to Flow — check if logged in by whether we get redirected
-    log("Navigating to Flow...")
+    # Verify fingerprint
+    try:
+        verify = page.run_js(JS_VERIFY_FINGERPRINT)
+        log("Fingerprint verify: %s" % verify)
+    except Exception:
+        pass
+
+    # ── 2. Check account hien tai ──
+    need_login = False
+    if account:
+        target_email = account['id'].strip().lower()
+        current_email = _check_current_account(page, log)
+        log("Account hien tai: %s" % (current_email or '(chua login)'))
+        log("Account can dung: %s" % target_email)
+
+        if current_email == target_email:
+            log("Account DUNG -> khong can login lai")
+        else:
+            log("Account SAI hoac chua login -> clear data + login")
+            need_login = True
+
+    # ── 3. Login neu can ──
+    if need_login:
+        try:
+            page.quit()
+        except Exception:
+            pass
+        page = None
+        _kill_chrome_for_dir(chrome_dir)
+
+        _clear_chrome_data(chrome_dir, log)
+        login_ok = _do_login(chrome_dir, account, proxy_arg, _worker_id)
+        if not login_ok:
+            log("Login FAILED: %s" % account['id'])
+            return False
+
+        # Re-generate fingerprint (profile was cleaned)
+        if instance_name:
+            try:
+                from launcher import generate_fingerprint
+                generate_fingerprint(ext_dir, instance_name)
+            except Exception:
+                pass
+        _write_chrome_prefs(chrome_dir)
+
+        co2 = _build_options(chrome_dir, ext_dir, port, proxy_arg, window_args)
+        try:
+            page = ChromiumPage(co2)
+            log("Chrome mo lai: %s" % (page.title or "(no title)"))
+            _enforce_window_layout(page, window_args, log)
+        except Exception as e:
+            log("Chrome restart failed: %s" % e)
+            return False
+
+        _inject_tab_guard(page, log)
+        _inject_fingerprint(page, ext_dir, instance_name, log)
+
+    # ── 4. Vao Flow page ──
+    log("Vao: %s" % FLOW_URL)
     page.get(FLOW_URL)
     time.sleep(5)
     _apply_zoom(page, log)
+    _inject_fingerprint(page, ext_dir, instance_name, log)
 
-    # 5. If redirected to login page → need login
-    url = page.url or ""
-    if any(ind in url for ind in LOGIN_INDICATORS):
-        log("Not logged in — redirected to login page")
-        if account:
+    current_url = page.url or ''
+    log("URL: %s" % current_url)
+
+    # Check login fallback (redirect ve accounts.google.com)
+    if 'accounts.google.com' in current_url:
+        log("Chua dang nhap! Clear data truoc khi login...")
+
+        try:
+            page.quit()
+        except Exception:
+            pass
+        page = None
+        _kill_chrome_for_dir(chrome_dir)
+
+        _clear_chrome_data(chrome_dir, log)
+        login_ok = _do_login(chrome_dir, account, proxy_arg, _worker_id) if account else False
+        if not login_ok:
+            log("Login FAILED!")
+            return False
+
+        if instance_name:
             try:
-                page.quit()
+                from launcher import generate_fingerprint
+                generate_fingerprint(ext_dir, instance_name)
             except Exception:
                 pass
-            _kill_chrome_for_dir(chrome_dir)
-            clean_chrome_profile(chrome_dir)
+        _write_chrome_prefs(chrome_dir)
 
-            login_ok = _do_login(chrome_dir, account, proxy_arg, _worker_id)
-            if not login_ok:
-                log("Login FAILED!")
-                return False
-
-            log("Login OK — reopening Chrome...")
-            if instance_name:
-                try:
-                    from launcher import generate_fingerprint
-                    generate_fingerprint(ext_dir, instance_name)
-                except Exception:
-                    pass
-            _write_chrome_prefs(chrome_dir)
-            co2 = _build_options(chrome_dir, ext_dir, port, proxy_arg, window_args)
-            try:
-                page = ChromiumPage(co2)
-                log("Chrome reopened: %s" % (page.title or "(no title)"))
-            except Exception as e:
-                log("Chrome reopen failed: %s" % e)
-                return False
-
+        co3 = _build_options(chrome_dir, ext_dir, port, proxy_arg, window_args)
+        try:
+            page = ChromiumPage(co3)
+            log("Chrome mo lai sau login: %s" % (page.title or "(no title)"))
             _enforce_window_layout(page, window_args, log)
-            _inject_fingerprint(page, ext_dir, instance_name, log)
-            page.get(FLOW_URL)
-            time.sleep(5)
-            _apply_zoom(page, log)
-        else:
-            log("No account provided — cannot login!")
+        except Exception as e:
+            log("Chrome restart failed sau login fallback: %s" % e)
+            return False
+
+        _inject_tab_guard(page, log)
+        _inject_fingerprint(page, ext_dir, instance_name, log)
+
+        page.get(FLOW_URL)
+        time.sleep(5)
+        _apply_zoom(page, log)
+        _inject_fingerprint(page, ext_dir, instance_name, log)
+        current_url = page.url or ''
+
+    # ── 5. Tao project moi hoac vao project cu ──
+    if '/project/' in current_url:
+        log("Da vao project: %s" % current_url)
+    else:
+        success = _create_new_project(page, log)
+        if not success:
+            log("Khong tao duoc project moi!")
             try:
                 page.quit()
             except Exception:
                 pass
             return False
 
-    # 6. Create project
-    url = page.url or ""
-    if "/project/" in url:
-        log("Already in project: %s" % url)
-    else:
-        log("Creating new project...")
-        if not _create_new_project(page, log):
-            log("Failed to create project!")
-            try:
-                page.disconnect()
-            except Exception:
-                pass
-            return False
-
-    # Re-apply zoom after project page loads
     _apply_zoom(page, log)
 
-    # 9. Wait for textarea
+    # ── 6. Doi textarea ──
     if _wait_for_textarea(page):
-        log("Chrome ready — textarea visible")
+        log("READY! Project: %s" % (page.url or ''))
     else:
-        log("Textarea not found (may still work)")
+        # Retry: reload project + dismiss popup
+        log("Textarea khong xuat hien - thu reload...")
+        current_project = page.url or ''
+        if '/project/' in current_project:
+            for retry in range(3):
+                log("Retry %d/3: reload project..." % (retry + 1))
+                try:
+                    page.get(current_project)
+                    time.sleep(3)
+                    _inject_fingerprint(page, ext_dir, instance_name, log)
+                    _dismiss_popups(page)
+                    time.sleep(1)
+                    if _wait_for_textarea(page, timeout=15):
+                        log("READY sau retry %d!" % (retry + 1))
+                        break
+                except Exception as e:
+                    log("Retry %d error: %s" % (retry + 1, e))
+            else:
+                # Fallback: tao project moi
+                log("Project cu khong phuc hoi -> tao project moi")
+                try:
+                    page.get(FLOW_URL)
+                    time.sleep(3)
+                    _inject_fingerprint(page, ext_dir, instance_name, log)
+                except Exception:
+                    pass
+                _create_new_project(page, log)
+                _wait_for_textarea(page)
 
-    # 10. Kill Chrome — DrissionPage's job is done (login + project).
-    # Agent will start Chrome fresh via subprocess, extension connects to agent WS.
+    # ── 7. Kill Chrome — DrissionPage xong viec, agent se restart ──
     try:
         page.quit()
     except Exception:
         pass
     _kill_chrome_for_dir(chrome_dir)
 
-    log("Setup complete — Chrome killed, ready for agent to restart")
+    log("Setup xong — Chrome killed, agent se restart")
     return True
 
+
+# ─── apply_chrome_cdp — apply CDP settings sau khi subprocess start ──
 
 def apply_chrome_cdp(
     debug_port: int,
@@ -488,12 +644,8 @@ def apply_chrome_cdp(
     timeout: int = 30,
 ) -> bool:
     """
-    Connect to already-running Chrome and apply CDP settings:
-    - Window layout (Browser.setWindowBounds)
-    - Zoom 50% (Emulation.setPageScaleFactor + JS)
-    - Fingerprint injection (Page.addScriptToEvaluateOnNewDocument)
-
-    Called after subprocess starts Chrome. DrissionPage connects, applies, disconnects.
+    Connect to running Chrome, apply CDP settings (layout + zoom + fingerprint + tab guard).
+    Called after subprocess starts Chrome.
     """
     log = log_func or (lambda msg: logger.info("[CDP] %s", msg))
 
@@ -502,7 +654,6 @@ def apply_chrome_cdp(
     co = ChromiumOptions()
     co.set_address(f"127.0.0.1:{debug_port}")
 
-    # Wait for Chrome to be ready
     page = None
     deadline = time.time() + timeout
     while time.time() < deadline:
@@ -519,6 +670,7 @@ def apply_chrome_cdp(
     try:
         _enforce_window_layout(page, window_args, log)
         _apply_zoom(page, log)
+        _inject_tab_guard(page, log)
         if ext_dir:
             _inject_fingerprint(page, ext_dir, instance_name, log)
         log("CDP settings applied")
@@ -533,6 +685,8 @@ def apply_chrome_cdp(
     return True
 
 
+# ─── ensure_chrome_ready — dung cho recovery_manager ────────────────
+
 def ensure_chrome_ready(
     debug_port: int,
     chrome_dir: Path = None,
@@ -541,10 +695,8 @@ def ensure_chrome_ready(
     log_func=None,
 ) -> bool:
     """
-    Connect to already-running Chrome via debug port, navigate to Flow, create project.
-
-    Used by recovery_manager after Chrome restart (subprocess).
-    DrissionPage connects to existing Chrome — does NOT open a new one.
+    Connect to already-running Chrome, navigate Flow, create project.
+    Used by recovery_manager after Chrome restart.
     """
     log = log_func or (lambda msg: logger.info("[Setup] %s", msg))
 
@@ -564,25 +716,25 @@ def ensure_chrome_ready(
 
     # Check login
     if account:
-        current_email = _check_logged_in(page)
+        current_email = _check_current_account(page, log)
         target_email = account.get("id", "").strip().lower()
-        log("Current: %s | Target: %s" % (current_email or "(none)", target_email))
+        log("Account hien tai: %s | Can: %s" % (current_email or "(chua login)", target_email))
 
         if current_email != target_email:
-            log("Wrong account — need login")
+            log("Account SAI -> login lai")
             if chrome_dir:
                 try:
                     page.quit()
                 except Exception:
                     pass
                 _kill_chrome_for_dir(chrome_dir)
-                from launcher import clean_chrome_profile, _write_chrome_prefs
-                clean_chrome_profile(chrome_dir)
+                _clear_chrome_data(chrome_dir, log)
                 login_ok = _do_login(chrome_dir, account, proxy_arg, _worker_id)
                 if not login_ok:
                     log("Login FAILED!")
                     return False
                 log("Login OK — reconnecting...")
+                from launcher import _write_chrome_prefs
                 _write_chrome_prefs(chrome_dir)
                 try:
                     page = ChromiumPage(co)
@@ -597,16 +749,14 @@ def ensure_chrome_ready(
                 return False
 
     # Navigate to Flow
-    log("Navigating to Flow...")
+    log("Vao Flow...")
     page.get(FLOW_URL)
     time.sleep(5)
-
-    # Apply zoom
     _apply_zoom(page, log)
 
     url = page.url or ""
-    if any(ind in url for ind in LOGIN_INDICATORS):
-        log("Redirected to login — needs re-login")
+    if 'accounts.google.com' in url:
+        log("Redirect ve login — can login lai")
         try:
             page.disconnect()
         except Exception:
@@ -615,11 +765,11 @@ def ensure_chrome_ready(
 
     # Create project
     if "/project/" in (page.url or ""):
-        log("Already in project: %s" % page.url)
+        log("Da vao project: %s" % page.url)
     else:
-        log("Creating new project...")
+        log("Tao project moi...")
         if not _create_new_project(page, log):
-            log("Failed to create project!")
+            log("Khong tao duoc project!")
             try:
                 page.disconnect()
             except Exception:
@@ -629,7 +779,7 @@ def ensure_chrome_ready(
     _apply_zoom(page, log)
 
     if _wait_for_textarea(page):
-        log("Chrome ready — textarea visible")
+        log("Chrome READY — textarea visible")
     else:
         log("Textarea not found (may still work)")
 
@@ -638,5 +788,5 @@ def ensure_chrome_ready(
     except Exception:
         pass
 
-    log("Setup complete")
+    log("Setup xong")
     return True
