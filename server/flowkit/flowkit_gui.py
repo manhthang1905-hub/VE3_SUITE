@@ -603,31 +603,12 @@ class FlowKitGUI(tk.Tk):
             except Exception:
                 pass
 
-        # Clear "crashed" state, prevent session restore, set 50% zoom for Flow
-        import math, time as _time
-        zoom_50 = math.log(0.5) / math.log(1.2)
-        chrome_ts = str(int((_time.time() + 11644473600) * 1_000_000))
-        prefs_file = profile_dir / "Default" / "Preferences"
-        if prefs_file.exists():
-            try:
-                prefs = json.loads(prefs_file.read_text(encoding="utf-8"))
-                prefs.setdefault("profile", {})["exit_type"] = "Normal"
-                prefs["profile"]["exited_cleanly"] = True
-                prefs.setdefault("session", {})["restore_on_startup"] = 5
-                host_zoom = prefs.setdefault("partition", {}).setdefault("per_host_zoom_levels", {}).setdefault("x", {})
-                host_zoom["labs.google"] = {"last_modified": chrome_ts, "zoom_level": zoom_50}
-                prefs_file.write_text(json.dumps(prefs, ensure_ascii=False), encoding="utf-8")
-            except Exception:
-                pass
-
-        # Clear session restore data (prevents Chrome restoring old tabs)
-        for sess_dir in ("Sessions", "Session Storage"):
-            sess_path = profile_dir / "Default" / sess_dir
-            if sess_path.exists():
-                try:
-                    shutil.rmtree(sess_path)
-                except Exception:
-                    pass
+        # Write fresh Preferences (zoom 50%, session restore prevention)
+        try:
+            from launcher import _write_chrome_prefs
+            _write_chrome_prefs(chrome_dir)
+        except Exception:
+            pass
 
         # Regenerate fingerprint (includes zoom CSS) before launch
         try:

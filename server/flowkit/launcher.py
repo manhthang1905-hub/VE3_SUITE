@@ -124,12 +124,76 @@ _chrome_processes: Dict[str, subprocess.Popen] = {}
 _chrome_seeds: Dict[str, int] = {}
 
 
-def start_chrome(instance: dict, new_fingerprint: bool = True) -> Optional[subprocess.Popen]:
+def clean_chrome_profile(chrome_dir: Path):
+    """Deep clean Chrome profile — delete everything except Secure Preferences.
+
+    Secure Preferences contains extension registration (location:4).
+    Everything else is recreated by Chrome on startup.
+    """
+    import json as _json
+    import shutil as _shutil
+    import math as _math
+
+    default_dir = chrome_dir / "Data" / "profile" / "Default"
+    if not default_dir.exists():
+        return
+
+    sec_prefs_file = default_dir / "Secure Preferences"
+    sec_prefs_data = None
+    if sec_prefs_file.exists():
+        try:
+            sec_prefs_data = sec_prefs_file.read_text(encoding="utf-8")
+        except Exception:
+            pass
+
+    for item in default_dir.iterdir():
+        try:
+            if item.is_dir():
+                _shutil.rmtree(item)
+            else:
+                item.unlink()
+        except Exception:
+            pass
+
+    if sec_prefs_data:
+        sec_prefs_file.write_text(sec_prefs_data, encoding="utf-8")
+
+    print(f"  Profile cleaned: kept only Secure Preferences")
+
+
+def _write_chrome_prefs(chrome_dir: Path):
+    """Write fresh Preferences with zoom 50% and session restore prevention."""
+    import json as _json
+    import math as _math
+
+    _zoom_50 = _math.log(0.5) / _math.log(1.2)
+    _chrome_ts = str(int((time.time() + 11644473600) * 1_000_000))
+    prefs_file = chrome_dir / "Data" / "profile" / "Default" / "Preferences"
+    prefs_file.parent.mkdir(parents=True, exist_ok=True)
+
+    prefs = {}
+    if prefs_file.exists():
+        try:
+            prefs = _json.loads(prefs_file.read_text(encoding="utf-8"))
+        except Exception:
+            pass
+
+    prefs.setdefault("profile", {})["exit_type"] = "Normal"
+    prefs["profile"]["exited_cleanly"] = True
+    prefs.setdefault("session", {})["restore_on_startup"] = 5
+    _host_zoom = prefs.setdefault("partition", {}).setdefault("per_host_zoom_levels", {}).setdefault("x", {})
+    _host_zoom["labs.google"] = {"last_modified": _chrome_ts, "zoom_level": _zoom_50}
+    prefs_file.write_text(_json.dumps(prefs, ensure_ascii=False), encoding="utf-8")
+
+
+def start_chrome(instance: dict, new_fingerprint: bool = True, clean: bool = False) -> Optional[subprocess.Popen]:
     """Start Chrome Portable with extension loaded.
 
     Uses GoogleChromePortable.exe wrapper (not chrome.exe directly)
     because the wrapper correctly handles profile setup and MV3
     service worker activation.
+
+    clean=True: deep clean profile (delete all except Secure Preferences)
     """
     chrome_dir = resolve_path(instance["chrome_path"]).parent.parent.parent
     portable_exe = chrome_dir / "GoogleChromePortable.exe"
@@ -141,31 +205,10 @@ def start_chrome(instance: dict, new_fingerprint: bool = True) -> Optional[subpr
         print(f"[ERROR] ChromePortable not found: {portable_exe}")
         return None
 
-    # Clear "crashed" state, prevent session restore, set 50% zoom for Flow
-    import json as _json
-    import shutil as _shutil
-    import math as _math
-    _zoom_50 = _math.log(0.5) / _math.log(1.2)
-    _chrome_ts = str(int((time.time() + 11644473600) * 1_000_000))
-    prefs_file = chrome_dir / "Data" / "profile" / "Default" / "Preferences"
-    if prefs_file.exists():
-        try:
-            prefs = _json.loads(prefs_file.read_text(encoding="utf-8"))
-            prefs.setdefault("profile", {})["exit_type"] = "Normal"
-            prefs["profile"]["exited_cleanly"] = True
-            prefs.setdefault("session", {})["restore_on_startup"] = 5
-            _host_zoom = prefs.setdefault("partition", {}).setdefault("per_host_zoom_levels", {}).setdefault("x", {})
-            _host_zoom["labs.google"] = {"last_modified": _chrome_ts, "zoom_level": _zoom_50}
-            prefs_file.write_text(_json.dumps(prefs, ensure_ascii=False), encoding="utf-8")
-        except Exception:
-            pass
-    for _sess_dir in ("Sessions", "Session Storage"):
-        _sess_path = chrome_dir / "Data" / "profile" / "Default" / _sess_dir
-        if _sess_path.exists():
-            try:
-                _shutil.rmtree(_sess_path)
-            except Exception:
-                pass
+    if clean:
+        clean_chrome_profile(chrome_dir)
+
+    _write_chrome_prefs(chrome_dir)
 
     if new_fingerprint:
         seed = generate_fingerprint(ext_dir, name)
@@ -409,13 +452,14 @@ def kill_chrome(instance_name: str) -> bool:
     return killed_any
 
 
-def restart_chrome(instance: dict, new_ipv6: str = "") -> Optional[subprocess.Popen]:
-    """Kill Chrome and restart with new fingerprint.
+def restart_chrome(instance: dict, new_ipv6: str = "", clean: bool = True) -> Optional[subprocess.Popen]:
+    """Kill Chrome and restart with new fingerprint + clean profile.
 
     If new_ipv6 is provided, Chrome starts with that IPv6 proxy.
+    clean=True: deep clean profile (keeps only Secure Preferences for extension).
     """
     name = instance["name"]
-    print(f"[{name}] === RESTART CHROME (recovery) ===")
+    print(f"[{name}] === RESTART CHROME (recovery, clean={clean}) ===")
 
     kill_chrome(name)
     time.sleep(3)
@@ -423,7 +467,7 @@ def restart_chrome(instance: dict, new_ipv6: str = "") -> Optional[subprocess.Po
     if new_ipv6:
         instance = {**instance, "ipv6": new_ipv6}
 
-    return start_chrome(instance, new_fingerprint=True)
+    return start_chrome(instance, new_fingerprint=True, clean=clean)
 
 
 def get_chrome_pid(instance_name: str) -> Optional[int]:
