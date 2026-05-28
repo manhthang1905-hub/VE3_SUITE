@@ -498,20 +498,9 @@ class FlowKitGUI(tk.Tk):
             except Exception:
                 pass
 
-        # Phase 1: Start agents first (so extension can connect when Chrome opens)
-        self._log("Phase 1: Starting FlowKit agents...", "INFO")
-        for i, inst in enumerate(instances):
-            if not inst.get('enabled', True) or i >= len(self._chrome_dirs):
-                continue
-            self._start_agent(inst)
-            time.sleep(1)
-
-        time.sleep(3)
-
-        # Phase 2: Open Chrome via DrissionPage (login + navigate + create project)
-        # Same as old server: DrissionPage opens Chrome, checks account, auto-login,
-        # navigates to Flow, clicks "Dự án mới", then disconnects — extension takes over.
-        self._log("Phase 2: Setting up Chrome (DrissionPage)...", "INFO")
+        # Phase 1: DrissionPage setup (login + navigate + create project)
+        # BEFORE agents — google_login uses port 9222+i which conflicts with agent ws_port
+        self._log("Phase 1: Setting up Chrome (DrissionPage)...", "INFO")
         for i, inst in enumerate(instances):
             if not inst.get('enabled', True) or i >= len(self._chrome_dirs):
                 continue
@@ -531,7 +520,6 @@ class FlowKitGUI(tk.Tk):
 
             proxy_arg = f"socks5://127.0.0.1:{proxy_port_map[i]}" if i in proxy_port_map else ""
 
-            # Window layout
             win_args = []
             try:
                 from launcher import _calc_chrome_layout, _resolve_chrome_slot, CONFIG as _lcfg
@@ -556,15 +544,25 @@ class FlowKitGUI(tk.Tk):
                     instance_name=inst['name'],
                 )
                 if ok:
-                    self._log(f"[{inst['name']}] Chrome ready (login + project OK)", "OK")
+                    self._log(f"[{inst['name']}] Chrome ready", "OK")
                 else:
-                    self._log(f"[{inst['name']}] Chrome setup failed — trying subprocess fallback", "WARN")
+                    self._log(f"[{inst['name']}] DrissionPage failed — subprocess fallback", "WARN")
                     self._start_chrome(chrome_dir, inst, proxy_arg)
             except Exception as e:
-                self._log(f"[{inst['name']}] DrissionPage error: {e} — subprocess fallback", "WARN")
+                self._log(f"[{inst['name']}] DrissionPage error: {e}", "WARN")
                 self._start_chrome(chrome_dir, inst, proxy_arg)
 
             time.sleep(2)
+
+        # Phase 2: Start agents (extension reconnects automatically)
+        self._log("Phase 2: Starting FlowKit agents...", "INFO")
+        for i, inst in enumerate(instances):
+            if not inst.get('enabled', True) or i >= len(self._chrome_dirs):
+                continue
+            self._start_agent(inst)
+            time.sleep(1)
+
+        time.sleep(3)
 
         # Phase 3: Start gateway
         self._log("Phase 3: Starting Gateway...", "INFO")
