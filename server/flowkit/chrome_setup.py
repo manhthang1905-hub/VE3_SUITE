@@ -841,7 +841,7 @@ def apply_chrome_cdp(
 ) -> bool:
     """
     Connect to running Chrome, apply CDP settings (layout + zoom + fingerprint + tab guard).
-    Called after subprocess starts Chrome.
+    Then create project — giong server cu, giu page object song de zoom khong mat.
     """
     log = log_func or (lambda msg: logger.info("[CDP] %s", msg))
 
@@ -891,15 +891,35 @@ def apply_chrome_cdp(
         if ext_dir:
             _inject_fingerprint(page, ext_dir, instance_name, log)
         log("CDP settings applied")
+
+        # Tao project ngay tren cung connection (giong server cu)
+        # Server cu giu self.page song suot -> zoom khong mat
+        # Neu disconnect o day thi zoom mat vi CDP session-scoped
+        current_url = page.url or ''
+        if '/project/' not in current_url:
+            log("Chua co project — tao moi...")
+            _create_new_project(page, log)
+
+        # Doi textarea (giong server cu _wait_for_textarea)
+        if '/project/' in (page.url or ''):
+            _wait_for_textarea(page, timeout=15)
+            log("READY — project: %s" % page.url)
+
     except Exception as e:
         log("CDP apply error: %s" % e)
     finally:
-        try:
-            page.disconnect()
-        except Exception:
-            pass
+        # Giu connection song — chi disconnect khi thuc su can
+        # Zoom + setPageScaleFactor la CDP session-scoped,
+        # disconnect = mat het settings
+        # Tuy nhien page object se bi GC khi function return,
+        # nen luu vao global dict de giu song
+        _keep_alive_pages[debug_port] = page
 
     return True
+
+
+# Giu page objects song de CDP session (zoom) khong mat
+_keep_alive_pages = {}
 
 
 # ─── ensure_chrome_ready — dung cho recovery_manager ────────────────
@@ -1003,10 +1023,8 @@ def ensure_chrome_ready(
                 pass
             return False
 
-    try:
-        page.disconnect()
-    except Exception:
-        pass
+    # Giu page song de zoom khong mat (CDP session-scoped)
+    _keep_alive_pages[debug_port] = page
 
     log("Setup xong")
     return True
