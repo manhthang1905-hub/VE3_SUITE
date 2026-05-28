@@ -158,6 +158,56 @@ class RecoveryManager:
         task = asyncio.create_task(self._run_recovery(instance_name))
         self._recovery_tasks[instance_name] = task
 
+    def trigger_self_heal(self, instance_name: str, rotate_ipv6: bool = False):
+        """Self-heal: instance is down (not healthy/extension dead).
+
+        Skips L1 captcha reset (useless when Chrome is dead) and goes
+        straight to full Chrome restart — y het startup.
+        """
+        if instance_name not in self.states:
+            return
+
+        state = self.states[instance_name]
+        if state.recovering:
+            return
+
+        now = time.time()
+        if now - state.last_recovery_time < self.min_interval:
+            return
+
+        task = asyncio.create_task(self._run_self_heal(instance_name, rotate_ipv6))
+        self._recovery_tasks[instance_name] = task
+
+    async def _run_self_heal(self, instance_name: str, rotate_ipv6: bool = False):
+        """Self-heal: full Chrome restart (skip L1 captcha reset)."""
+        state = self.states[instance_name]
+        state.recovering = True
+        state.last_recovery_time = time.time()
+        state.recovery_count += 1
+
+        logger.info("[SelfHeal] %s: full restart (rotate_ipv6=%s, attempt #%d)",
+                    instance_name, rotate_ipv6, state.recovery_count)
+
+        try:
+            new_ip = ""
+            if rotate_ipv6:
+                new_ip = self._rotate_ipv6(instance_name, "self_heal")
+
+            success = await self._restart_chrome_instance(instance_name, new_ipv6=new_ip)
+
+            if success:
+                logger.info("[SelfHeal] %s: restart OK", instance_name)
+                state.reset()
+                if self.on_cooldown_clear:
+                    self.on_cooldown_clear(instance_name)
+            else:
+                logger.warning("[SelfHeal] %s: restart FAILED", instance_name)
+
+        except Exception as e:
+            logger.exception("[SelfHeal] %s error: %s", instance_name, e)
+        finally:
+            state.recovering = False
+
     async def _run_recovery(self, instance_name: str):
         """Execute recovery escalation for an instance."""
         state = self.states[instance_name]

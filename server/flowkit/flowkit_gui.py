@@ -542,7 +542,7 @@ class FlowKitGUI(tk.Tk):
 
             # ── Step 1: DrissionPage setup (login + navigate + project) ──
             setup_ok = False
-            max_retries = 3
+            max_retries = 100
             with setup_sem:
                 for attempt in range(max_retries):
                     if attempt > 0:

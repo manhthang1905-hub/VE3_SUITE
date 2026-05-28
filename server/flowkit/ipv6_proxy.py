@@ -66,6 +66,7 @@ class IPv6SocksProxy:
         # v1.0.635: Track connect failures de detect IPv6 chet
         self._connect_failures = 0
         self._connect_successes = 0
+        self._health_file = Path(__file__).parent / f".proxy_health_{listen_port}"
 
     def start(self) -> bool:
         """Start the proxy server in background thread."""
@@ -102,6 +103,13 @@ class IPv6SocksProxy:
                 pass
         self.log("[IPv6-Proxy] Stopped")
 
+    def _write_health(self):
+        """Write connect_failures to file so gateway can read proxy health."""
+        try:
+            self._health_file.write_text(str(self._connect_failures))
+        except Exception:
+            pass
+
     def set_ipv6(self, ipv6_address: str):
         """Update IPv6 address for outgoing connections."""
         self.ipv6_address = ipv6_address
@@ -109,6 +117,7 @@ class IPv6SocksProxy:
         self._connect_failures = 0
         self._connect_successes = 0
         self._connect_fail_logged = 0
+        self._write_health()
         self.log(f"[IPv6-Proxy] → Now using: {ipv6_address}")
 
     def _accept_loop(self):
@@ -276,12 +285,16 @@ class IPv6SocksProxy:
                 pass
             # v1.0.635: Track success
             self._connect_successes += 1
-            self._connect_failures = 0  # Reset failures on success
+            if self._connect_failures > 0:
+                self._connect_failures = 0
+                self._write_health()
             return sock
 
         except Exception as e:
             # v1.0.635: Track failures
             self._connect_failures += 1
+            if self._connect_failures >= 5:
+                self._write_health()
             # v1.0.611: Log target de debug connectivity
             if not getattr(self, '_connect_fail_logged', 0) or getattr(self, '_connect_fail_logged', 0) < 3:
                 self.log(f"[IPv6-Proxy] IPv6 connect failed to {host}:{port}: {e}")

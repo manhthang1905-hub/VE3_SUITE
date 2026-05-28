@@ -74,6 +74,7 @@ IMAGE_TIMEOUT = TIMEOUTS.get("image_generation", 120)
 VIDEO_SUBMIT_TIMEOUT = TIMEOUTS.get("video_submit", 60)
 VIDEO_POLL_TIMEOUT = TIMEOUTS.get("video_poll", 420)
 VIDEO_POLL_INTERVAL = TIMEOUTS.get("video_poll_interval", 10)
+TASK_WATCHDOG_TIMEOUT = TIMEOUTS.get("task_watchdog", 1800)
 
 
 # ─── Instance State ──────────────────────────────────────────
@@ -101,6 +102,10 @@ class AgentInstance:
         self.total_failed = 0
         self.last_request_time: float = 0
         self.last_health_check: float = 0
+
+        # Self-heal tracking (y het chrome_pool.py self-heal logic)
+        self.self_heal_failures = 0
+        self.next_self_heal_at: float = 0
 
     @property
     def available(self) -> bool:
@@ -233,7 +238,7 @@ def _pick_instance_for_retry(exclude: list[str]) -> Optional[AgentInstance]:
 # ─── Health Checker ──────────────────────────────────────────
 
 async def health_check_loop():
-    """Periodically check agent health."""
+    """Periodically check agent health + self-heal unhealthy instances."""
     async with httpx.AsyncClient(timeout=5.0) as client:
         while True:
             for inst in instances:
@@ -246,7 +251,6 @@ async def health_check_loop():
                         inst.healthy = True
                         inst.extension_connected = data.get("extension_connected", False)
                         inst.flow_key_present = data.get("flow_key_present", False)
-                        # Sync 403 count from agent
                         agent_403 = data.get("consecutive_403", 0)
                         if agent_403 > inst.consecutive_403:
                             inst.consecutive_403 = agent_403
@@ -255,6 +259,95 @@ async def health_check_loop():
                 except Exception:
                     inst.healthy = False
                 inst.last_health_check = time.time()
+
+            # Self-heal: auto-restart instances that are down
+            # Y het chrome_pool.py self-heal loop (lines 843-883)
+            if _recovery_manager:
+                now = time.time()
+                for inst in instances:
+                    if not inst.enabled:
+                        continue
+                    # Instance is working fine — reset self-heal counter
+                    if inst.healthy and inst.extension_connected and inst.flow_key_present:
+                        if inst.self_heal_failures > 0:
+                            inst.self_heal_failures = 0
+                            inst.next_self_heal_at = 0
+                        continue
+                    # Skip if cooling (403 recovery handles that) or quota exhausted
+                    if inst.is_cooling or inst.is_quota_exhausted:
+                        continue
+                    # Skip if already recovering
+                    rec_state = _recovery_manager.states.get(inst.name)
+                    if rec_state and rec_state.recovering:
+                        continue
+                    # Backoff check
+                    if now < inst.next_self_heal_at:
+                        continue
+                    # Trigger self-heal
+                    inst.self_heal_failures += 1
+                    rotate_ipv6 = (inst.self_heal_failures > 1
+                                   and inst.self_heal_failures % 3 == 0)
+                    logger.warning(
+                        "[SelfHeal] %s not ready (healthy=%s, ext=%s, flowKey=%s), "
+                        "attempt #%d%s",
+                        inst.name, inst.healthy, inst.extension_connected,
+                        inst.flow_key_present, inst.self_heal_failures,
+                        " + IPv6 rotate" if rotate_ipv6 else "",
+                    )
+                    _recovery_manager.trigger_self_heal(inst.name, rotate_ipv6=rotate_ipv6)
+                    delay = min(30 * inst.self_heal_failures, 120)
+                    inst.next_self_heal_at = now + delay
+
+            # Proxy health check: detect dead IPv6 (y het chrome_pool.py lines 1017-1025)
+            if _recovery_manager:
+                for inst in instances:
+                    if not inst.enabled:
+                        continue
+                    cfg = CONFIG.get("instances", [])
+                    inst_cfg = next((c for c in cfg if c.get("name") == inst.name), None)
+                    if not inst_cfg or not inst_cfg.get("ipv6"):
+                        continue
+                    proxy_port = 1081 + (inst.api_port - 8100)
+                    health_file = Path(__file__).parent / f".proxy_health_{proxy_port}"
+                    try:
+                        if health_file.exists():
+                            cf = int(health_file.read_text().strip())
+                            if cf >= 5:
+                                rec_state = _recovery_manager.states.get(inst.name)
+                                if rec_state and not rec_state.recovering:
+                                    logger.warning(
+                                        "[ProxyHealth] %s: proxy has %d connect failures → IPv6 DEAD → rotate + restart",
+                                        inst.name, cf,
+                                    )
+                                    _recovery_manager.trigger_self_heal(inst.name, rotate_ipv6=True)
+                    except Exception:
+                        pass
+
+            # Task watchdog: kill stuck tasks (y het chrome_pool.py lines 906-927)
+            now = time.time()
+            for task_id, task in list(tasks.items()):
+                if task["status"] != "processing":
+                    continue
+                started_at = task.get("started_at", 0)
+                if not started_at:
+                    continue
+                elapsed = now - started_at
+                if elapsed > TASK_WATCHDOG_TIMEOUT:
+                    worker_name = task.get("worker", "?")
+                    task["status"] = "failed"
+                    task["error"] = f"Task watchdog timeout after {int(elapsed)}s"
+                    stats["total_failed"] += 1
+                    logger.warning(
+                        "[Watchdog] %s: task %s timeout (%.0fs > %ds) → mark failed, trigger self-heal",
+                        worker_name, task_id[:8], elapsed, TASK_WATCHDOG_TIMEOUT,
+                    )
+                    for inst in instances:
+                        if inst.name == worker_name:
+                            inst.total_failed += 1
+                            if _recovery_manager:
+                                _recovery_manager.trigger_self_heal(inst.name)
+                            break
+
             await asyncio.sleep(10)
 
 
@@ -263,6 +356,7 @@ async def health_check_loop():
 async def _process_image_task(task_id: str, data: dict):
     """Process image generation with retry + rotation."""
     tasks[task_id]["status"] = "processing"
+    tasks[task_id]["started_at"] = time.time()
 
     bearer_token = data["bearer_token"]
     project_id = data["project_id"]
@@ -445,6 +539,7 @@ def _deep_find_video_url(obj):
 async def _process_video_task(task_id: str, data: dict):
     """Process video generation: submit + poll."""
     tasks[task_id]["status"] = "processing"
+    tasks[task_id]["started_at"] = time.time()
 
     bearer_token = data["bearer_token"]
     body_json = data["body_json"]

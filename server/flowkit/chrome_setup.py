@@ -146,6 +146,35 @@ def _inject_tab_guard(page, log):
         log("Tab guard skip: %s" % e)
 
 
+def _close_extra_tabs(page, log):
+    """Close all tabs except the Flow tab — keep only 1 tab."""
+    try:
+        tab_ids = page.tab_ids
+        if len(tab_ids) <= 1:
+            return
+        log("Found %d tabs, closing extras" % len(tab_ids))
+        flow_tab = None
+        for tid in tab_ids:
+            try:
+                tab = page.get_tab(tid)
+                url = tab.url or ""
+                if "labs.google" in url or "fx/tools/flow" in url:
+                    flow_tab = tid
+                    break
+            except Exception:
+                continue
+        keep = flow_tab or tab_ids[0]
+        for tid in tab_ids:
+            if tid != keep:
+                try:
+                    page.close_tabs(tid)
+                except Exception:
+                    pass
+        log("Closed %d extra tabs" % (len(tab_ids) - 1))
+    except Exception as e:
+        log("Close extra tabs skip: %s" % e)
+
+
 JS_CLEANUP = """
 (function() {
     try { localStorage.clear(); } catch(e) {}
@@ -671,6 +700,7 @@ def apply_chrome_cdp(
         return False
 
     try:
+        _close_extra_tabs(page, log)
         _enforce_window_layout(page, window_args, log)
         _apply_zoom(page, log)
         _inject_tab_guard(page, log)
