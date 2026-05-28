@@ -1686,47 +1686,35 @@ def login_google_chrome(account_info: dict, chrome_portable: str = None, profile
 
         # v1.0.158: Tá»'i Æ°u tá»'c Ä'á»™ warm-up
         log("Warm-up Flow...")
-        flow_url = "https://labs.google/fx/vi/tools/flow"
+        flow_url = "https://labs.google/fx/tools/flow?hl=en"
         try:
             driver.get(flow_url)
-            time.sleep(2)  # v1.0.158: Giáº£m tá»« 3s
+            time.sleep(3)
 
-            click_success = False
-
-            for attempt in range(20):  # v1.0.158: Giáº£m tá»« 30
-                # TÃ¬m button "add_2" - timeout ngáº¯n
+            page_ready = False
+            for attempt in range(20):
                 try:
-                    btn = driver.ele('tag:button@@text():add_2', timeout=1)
-                    if btn:
-                        log("[v] Page ready!")
-                        click_success = True
-                        break
+                    url = driver.url or ""
+                    if "/project/" in url or "/flow" in url:
+                        btn = driver.ele('tag:button@@text():add_2', timeout=1)
+                        if btn:
+                            log("[v] Page ready!")
+                            page_ready = True
+                            break
                 except:
                     pass
 
-                # Thá»­ click "Create" button
-                try:
-                    create_btn = driver.ele('tag:button@@text():Create', timeout=1)
-                    if create_btn:
-                        log("Click 'Create'...")
-                        create_btn.click()
-                        time.sleep(1)
-                        continue
-                except:
-                    pass
-
-                # Reload page má»—i 5 láº§n
                 if attempt > 0 and attempt % 5 == 0:
                     log(f"Reload Flow ({attempt}/20)...")
                     driver.get(flow_url)
-                    time.sleep(2)
+                    time.sleep(3)
 
-                time.sleep(0.5)  # v1.0.158: Giáº£m tá»« 1s
+                time.sleep(1)
 
-            if click_success:
+            if page_ready:
                 log("Session warmed up!")
             else:
-                log("Button not found", "WARN")
+                log("Warm-up timeout — page did not load, skipping", "WARN")
 
         except Exception as e:
             log(f"Warm up error: {e}", "WARN")
