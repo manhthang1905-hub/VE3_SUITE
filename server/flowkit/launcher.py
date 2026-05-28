@@ -30,13 +30,20 @@ with open(CONFIG_PATH) as f:
 # ─── Screen / Window Layout ────────────────────────────────
 
 def _get_screen_size() -> tuple[int, int]:
-    """Get primary screen resolution."""
+    """Get usable screen area (excluding taskbar)."""
     try:
         import ctypes
+        import ctypes.wintypes
+        rect = ctypes.wintypes.RECT()
+        ctypes.windll.user32.SystemParametersInfoW(0x0030, 0, ctypes.byref(rect), 0)
+        w = rect.right - rect.left
+        h = rect.bottom - rect.top
+        if w > 0 and h > 0:
+            return w, h
         user32 = ctypes.windll.user32
         return user32.GetSystemMetrics(0), user32.GetSystemMetrics(1)
     except Exception:
-        return 1920, 1080
+        return 1920, 1040
 
 
 def _calc_chrome_layout(slot: int, total_slots: int) -> tuple[int, int, int, int]:

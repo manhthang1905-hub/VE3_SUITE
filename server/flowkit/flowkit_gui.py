@@ -86,7 +86,11 @@ class FlowKitGUI(tk.Tk):
         self._version = _get_auto_version()
         self._remote_version = ""
         self.title(f"FlowKit Server v{self._version}")
-        gui_w, gui_h = 700, 1040
+        gui_w = 700
+        try:
+            gui_h = self.winfo_screenheight() - 40
+        except Exception:
+            gui_h = 1040
         self.geometry(f"{gui_w}x{gui_h}+0+0")
         self.configure(bg=BG)
         self.resizable(True, True)
