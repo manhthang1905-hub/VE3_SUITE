@@ -99,6 +99,7 @@ class FlowKitGUI(tk.Tk):
         self._started = False
         self._processes = []
         self._log_handles = []
+        self._proc_lock = threading.Lock()
         self._logs = []
         self._workers = []
         self._stats = {}
@@ -498,21 +499,27 @@ class FlowKitGUI(tk.Tk):
             except Exception:
                 pass
 
-        # Phase 1: DrissionPage setup (login + navigate + create project)
-        # BEFORE agents — google_login uses port 9222+i which conflicts with agent ws_port
-        # Parallel setup with semaphore — same as old server chrome_pool.py
+        # Per-instance pipeline: each instance independently does
+        # setup_chrome → start_agent → wait_ready → start_chrome → apply_cdp
         setup_concurrency = max(1, int(os.getenv("CHROME_SETUP_CONCURRENCY", "6")))
         setup_stagger = max(0.0, float(os.getenv("CHROME_SETUP_STAGGER_SEC", "3.0")))
-        self._log(f"Phase 1: Setting up Chrome (concurrency={setup_concurrency})...", "INFO")
 
         setup_sem = threading.Semaphore(setup_concurrency)
-        setup_threads = []
+        ready_count = [0]
+        ready_lock = threading.Lock()
+        ready_event = threading.Event()
 
-        def _setup_one(idx, inst_cfg):
+        enabled = [(i, inst) for i, inst in enumerate(instances)
+                   if inst.get('enabled', True) and i < len(self._chrome_dirs)]
+
+        self._log(f"Starting {len(enabled)} instance pipelines (concurrency={setup_concurrency})...", "INFO")
+
+        def _instance_pipeline(idx, inst_cfg):
+            name = inst_cfg['name']
             chrome_dir = self._chrome_dirs[idx]
             ext_dir = BASE_DIR / inst_cfg['extension_dir']
             debug_port = 19200 + (inst_cfg['api_port'] - 8100)
-            name = inst_cfg['name']
+            proxy_arg = f"socks5://127.0.0.1:{proxy_port_map[idx]}" if idx in proxy_port_map else ""
 
             account_info = None
             if accounts:
@@ -522,8 +529,6 @@ class FlowKitGUI(tk.Tk):
                     'password': acc['password'],
                     'totp_secret': acc.get('totp_secret', ''),
                 }
-
-            proxy_arg = f"socks5://127.0.0.1:{proxy_port_map[idx]}" if idx in proxy_port_map else ""
 
             win_args = []
             try:
@@ -535,6 +540,8 @@ class FlowKitGUI(tk.Tk):
             except Exception:
                 pass
 
+            # ── Step 1: DrissionPage setup (login + navigate + project) ──
+            setup_ok = False
             max_retries = 3
             with setup_sem:
                 for attempt in range(max_retries):
@@ -554,94 +561,65 @@ class FlowKitGUI(tk.Tk):
                             instance_name=name,
                         )
                         if ok:
-                            self._log(f"[{name}] Chrome ready", "OK")
-                            return
+                            self._log(f"[{name}] Chrome setup OK", "OK")
+                            setup_ok = True
+                            break
                     except Exception as e:
                         self._log(f"[{name}] Setup error: {e}", "ERROR")
 
-                self._log(f"[{name}] All retries failed — subprocess fallback", "WARN")
-                self._start_chrome(chrome_dir, inst_cfg, proxy_arg)
+            if not setup_ok:
+                self._log(f"[{name}] All retries failed — continuing with subprocess only", "WARN")
 
-        for i, inst in enumerate(instances):
-            if not inst.get('enabled', True) or i >= len(self._chrome_dirs):
-                continue
-            t = threading.Thread(target=_setup_one, args=(i, inst), daemon=True)
+            # ── Step 2: Start agent (port 9222+i now free) ──
+            self._start_agent(inst_cfg)
+            if self._wait_agent_ready(inst_cfg['api_port'], timeout=20):
+                self._log(f"[{name}] Agent ready", "OK")
+            else:
+                self._log(f"[{name}] Agent not ready after 20s", "WARN")
+
+            # ── Step 3: Start Chrome subprocess + apply CDP ──
+            self._start_chrome(chrome_dir, inst_cfg, proxy_arg)
+            time.sleep(5)
+            try:
+                from chrome_setup import apply_chrome_cdp
+                apply_chrome_cdp(
+                    debug_port=debug_port,
+                    ext_dir=ext_dir,
+                    instance_name=name,
+                    window_args=win_args,
+                    log_func=lambda msg, n=name: self._log(f"[{n}] {msg}", "INFO"),
+                )
+            except Exception as e:
+                self._log(f"[{name}] CDP apply error: {e}", "WARN")
+
+            self._log(f"[{name}] Instance READY", "OK")
+            with ready_lock:
+                ready_count[0] += 1
+            ready_event.set()
+
+        # Launch all pipelines with stagger
+        pipeline_threads = []
+        for i, inst in enabled:
+            t = threading.Thread(target=_instance_pipeline, args=(i, inst), daemon=True)
             t.start()
-            setup_threads.append(t)
+            pipeline_threads.append(t)
             if setup_stagger > 0:
                 time.sleep(setup_stagger)
 
-        for t in setup_threads:
-            t.join(timeout=180)
-
-        # Phase 2: Start agents (WS servers ready before Chrome opens)
-        self._log("Phase 2: Starting FlowKit agents...", "INFO")
-        for i, inst in enumerate(instances):
-            if not inst.get('enabled', True) or i >= len(self._chrome_dirs):
-                continue
-            self._start_agent(inst)
-            time.sleep(1)
-
-        time.sleep(3)
-
-        # Phase 3: Start Chrome via subprocess (extension connects to agent WS)
-        # Then apply CDP settings (window layout + zoom + fingerprint) like DrissionPage did
-        self._log("Phase 3: Starting Chrome instances...", "INFO")
-        chrome_cdp_tasks = []
-        for i, inst in enumerate(instances):
-            if not inst.get('enabled', True) or i >= len(self._chrome_dirs):
-                continue
-            proxy_arg = f"socks5://127.0.0.1:{proxy_port_map[i]}" if i in proxy_port_map else ""
-            self._start_chrome(self._chrome_dirs[i], inst, proxy_arg)
-            chrome_cdp_tasks.append((i, inst))
-            time.sleep(0.5)
-
-        # Apply CDP settings (layout + zoom + fingerprint) to each Chrome
-        if chrome_cdp_tasks:
-            self._log("Applying CDP settings (layout + zoom + fingerprint)...", "INFO")
-            time.sleep(5)  # wait for Chrome to fully start
-
-            def _apply_cdp(idx, inst_cfg):
-                debug_port = 19200 + (inst_cfg['api_port'] - 8100)
-                ext_dir = BASE_DIR / inst_cfg['extension_dir']
-                name = inst_cfg['name']
-                win_args = []
-                try:
-                    from launcher import _calc_chrome_layout, _resolve_chrome_slot, CONFIG as _lcfg
-                    instances_cfg = [ii for ii in _lcfg.get("instances", []) if ii.get("enabled", True)]
-                    slot = _resolve_chrome_slot(name)
-                    x, y, w, h = _calc_chrome_layout(slot, len(instances_cfg))
-                    win_args = [f"--window-position={x},{y}", f"--window-size={w},{h}"]
-                except Exception:
-                    pass
-                try:
-                    from chrome_setup import apply_chrome_cdp
-                    apply_chrome_cdp(
-                        debug_port=debug_port,
-                        ext_dir=ext_dir,
-                        instance_name=name,
-                        window_args=win_args,
-                        log_func=lambda msg, n=name: self._log(f"[{n}] {msg}", "INFO"),
-                    )
-                except Exception as e:
-                    self._log(f"[{name}] CDP apply error: {e}", "WARN")
-
-            cdp_threads = []
-            for idx, inst_cfg in chrome_cdp_tasks:
-                t = threading.Thread(target=_apply_cdp, args=(idx, inst_cfg), daemon=True)
-                t.start()
-                cdp_threads.append(t)
-            for t in cdp_threads:
-                t.join(timeout=45)
-
-        time.sleep(3)
-
-        # Phase 4: Start gateway
-        self._log("Phase 4: Starting Gateway...", "INFO")
+        # Gateway starts when first instance is ready (or 120s timeout)
+        if ready_event.wait(timeout=120):
+            self._log("Starting Gateway (instance ready)...", "OK")
+        else:
+            self._log("Starting Gateway (timeout — no instances ready yet)...", "WARN")
         self._start_gateway(gateway_port)
 
-        time.sleep(3)
-        self._log(f"FlowKit Server READY on port {gateway_port}", "OK")
+        # Wait for remaining pipelines
+        for t in pipeline_threads:
+            t.join(timeout=180)
+
+        with ready_lock:
+            total_ready = ready_count[0]
+        self._log(f"FlowKit Server READY — {total_ready}/{len(enabled)} instances, gateway on port {gateway_port}", "OK")
 
         # Start monitoring
         self._poll_thread = threading.Thread(target=self._poll_loop, daemon=True)
@@ -763,7 +741,8 @@ class FlowKitGUI(tk.Tk):
 
         proc = subprocess.Popen(args, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
                                 creationflags=subprocess.CREATE_NEW_PROCESS_GROUP)
-        self._processes.append(proc)
+        with self._proc_lock:
+            self._processes.append(proc)
         log_extra = f" proxy={proxy_arg}" if proxy_arg else ""
         self._log(f"[{inst['name']}] Chrome started (PID {proc.pid}){log_extra}", "INFO")
 
@@ -871,7 +850,8 @@ class FlowKitGUI(tk.Tk):
 
         log_file = LOG_DIR / f"{inst['name']}.log"
         fh = open(log_file, 'a', encoding='utf-8')
-        self._log_handles.append(fh)
+        with self._proc_lock:
+            self._log_handles.append(fh)
 
         proc = subprocess.Popen(
             [sys.executable, "-m", "uvicorn", "agent.main:app",
@@ -881,14 +861,31 @@ class FlowKitGUI(tk.Tk):
             stdout=fh, stderr=fh,
             creationflags=subprocess.CREATE_NEW_PROCESS_GROUP,
         )
-        self._processes.append(proc)
+        with self._proc_lock:
+            self._processes.append(proc)
         self._log(f"[{inst['name']}] Agent started: port {inst['api_port']} (PID {proc.pid})", "INFO")
+
+    def _wait_agent_ready(self, api_port: int, timeout: float = 20.0) -> bool:
+        """Poll agent /health endpoint until it responds."""
+        import urllib.request
+        url = f"http://127.0.0.1:{api_port}/health"
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            try:
+                with urllib.request.urlopen(url, timeout=2) as resp:
+                    if resp.status == 200:
+                        return True
+            except Exception:
+                pass
+            time.sleep(1.0)
+        return False
 
     def _start_gateway(self, port: int):
         """Start the gateway."""
         log_file = LOG_DIR / "gateway.log"
         fh = open(log_file, 'a', encoding='utf-8')
-        self._log_handles.append(fh)
+        with self._proc_lock:
+            self._log_handles.append(fh)
 
         proc = subprocess.Popen(
             [sys.executable, "-m", "uvicorn", "gateway:app",
@@ -898,7 +895,8 @@ class FlowKitGUI(tk.Tk):
             stdout=fh, stderr=fh,
             creationflags=subprocess.CREATE_NEW_PROCESS_GROUP,
         )
-        self._processes.append(proc)
+        with self._proc_lock:
+            self._processes.append(proc)
         self._log(f"Gateway started: port {port} (PID {proc.pid})", "INFO")
 
     def _on_stop(self):
