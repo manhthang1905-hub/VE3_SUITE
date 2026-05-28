@@ -4958,9 +4958,7 @@ Get-CimInstance Win32_Process |
             self._refresh_server_status_sync()
             online_count = sum(1 for s in self.server_status_cache if s.get("available"))
         if self.server_status_cache and online_count == 0:
-            messagebox.showwarning("Server offline", "Khong co server nao online. Test server hoac mo lai server truoc khi chay queue.")
-            self._log("[QUEUE] Khong start vi 0 server online.", "ERROR", "ve3")
-            return
+            self._log("[QUEUE] Chua co server nao online — se tu dong chay khi server san sang.", "WARN", "ve3")
         configured_pairs = self._get_server_pairs(only_available=False)
         available_pairs = self._get_server_pairs(only_available=True)
         if configured_pairs and not available_pairs:
