@@ -100,6 +100,34 @@ class RecoveryManager:
                 logger.warning("[Recovery] IPv6 client init failed: %s", e)
 
         self._recovery_tasks: Dict[str, asyncio.Task] = {}
+        self._accounts: Dict[str, dict] = {}
+
+    def set_accounts(self, accounts: List[dict], instances: List[dict]):
+        """Map accounts to instances for auto-login during recovery."""
+        for i, inst in enumerate(instances):
+            if not inst.get("enabled", True):
+                continue
+            if accounts:
+                acc = accounts[i % len(accounts)]
+                self._accounts[inst["name"]] = {
+                    "id": acc.get("email", acc.get("id", "")),
+                    "password": acc.get("password", ""),
+                    "totp_secret": acc.get("totp_secret", ""),
+                }
+
+    def _get_account(self, instance_name: str) -> Optional[dict]:
+        if instance_name in self._accounts:
+            return self._accounts[instance_name]
+        # Fallback: read from file saved by GUI
+        try:
+            import json as _json
+            accounts_file = BASE_DIR / "config" / ".flow_accounts.json"
+            if accounts_file.exists():
+                data = _json.loads(accounts_file.read_text(encoding="utf-8"))
+                return data.get(instance_name)
+        except Exception:
+            pass
+        return None
 
     def on_instance_success(self, instance_name: str):
         """Called when an instance completes a request successfully."""
@@ -303,16 +331,40 @@ class RecoveryManager:
             connected = await self._wait_extension_connect(api_port, timeout=self.reconnect_timeout)
 
             if connected:
-                from launcher import get_instance_seed
+                from launcher import get_instance_seed, resolve_path
                 seed = get_instance_seed(instance_name)
                 self.states[instance_name].current_seed = seed
                 logger.info("[Recovery] %s: extension reconnected, new seed=%d", instance_name, seed)
 
-                project_ok = await self._ensure_project(api_port)
-                if project_ok:
-                    logger.info("[Recovery] %s: project ready", instance_name)
-                else:
-                    logger.warning("[Recovery] %s: ensure_project failed (may need login)", instance_name)
+                # Use DrissionPage to check login + create project (like old server)
+                debug_port = 19200 + (api_port - 8100)
+                chrome_dir = resolve_path(cfg["chrome_path"]).parent.parent.parent
+                account = self._get_account(instance_name)
+                proxy_arg = ""
+                if cfg.get("ipv6"):
+                    proxy_port = 1081 + (api_port - 8100)
+                    proxy_arg = f"socks5://127.0.0.1:{proxy_port}"
+
+                try:
+                    from chrome_setup import ensure_chrome_ready
+                    loop = asyncio.get_running_loop()
+                    ready = await loop.run_in_executor(
+                        None,
+                        lambda: ensure_chrome_ready(
+                            debug_port=debug_port,
+                            chrome_dir=chrome_dir,
+                            account=account,
+                            proxy_arg=proxy_arg,
+                            log_func=lambda msg: logger.info("[Recovery] %s: %s", instance_name, msg),
+                        ),
+                    )
+                    if ready:
+                        logger.info("[Recovery] %s: Chrome ready (login + project OK)", instance_name)
+                    else:
+                        logger.warning("[Recovery] %s: Chrome setup failed", instance_name)
+                except Exception as e:
+                    logger.warning("[Recovery] %s: chrome_setup error: %s", instance_name, e)
+
                 return True
             else:
                 logger.warning("[Recovery] %s: extension did not reconnect within %ds",

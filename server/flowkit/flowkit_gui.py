@@ -479,6 +479,25 @@ class FlowKitGUI(tk.Tk):
                 self._log("Setting up SOCKS5 proxies for each IPv6...", "INFO")
                 self._setup_ipv6_proxies(ipv6_map, instances, PROXY_BASE_PORT, proxy_port_map)
 
+        # Save accounts mapping for recovery auto-login
+        if accounts:
+            account_map = {}
+            for i, inst in enumerate(instances):
+                if not inst.get('enabled', True):
+                    continue
+                acc = accounts[i % len(accounts)]
+                account_map[inst["name"]] = {
+                    "id": acc["email"],
+                    "password": acc["password"],
+                    "totp_secret": acc.get("totp_secret", ""),
+                }
+            try:
+                accounts_file = BASE_DIR / "config" / ".flow_accounts.json"
+                accounts_file.parent.mkdir(exist_ok=True)
+                accounts_file.write_text(json.dumps(account_map), encoding="utf-8")
+            except Exception:
+                pass
+
         # Phase 1: Login accounts (skip if no accounts entered)
         if accounts:
             self._log(f"Phase 1: Login {len(accounts)} accounts into {len(instances)} Chrome copies...", "INFO")
@@ -617,9 +636,11 @@ class FlowKitGUI(tk.Tk):
         except Exception:
             pass
 
+        debug_port = 19200 + (inst["api_port"] - 8100)
         args = [
             str(portable),
             f"--load-extension={ext_dir}",
+            f"--remote-debugging-port={debug_port}",
             "--disable-background-timer-throttling",
             "--disable-renderer-backgrounding",
             "--disable-backgrounding-occluded-windows",

@@ -162,7 +162,7 @@ def clean_chrome_profile(chrome_dir: Path):
 
 
 def _write_chrome_prefs(chrome_dir: Path):
-    """Write fresh Preferences with session restore prevention."""
+    """Write fresh Preferences with session restore prevention. Remove any zoom data."""
     import json as _json
 
     prefs_file = chrome_dir / "Data" / "profile" / "Default" / "Preferences"
@@ -178,6 +178,8 @@ def _write_chrome_prefs(chrome_dir: Path):
     prefs.setdefault("profile", {})["exit_type"] = "Normal"
     prefs["profile"]["exited_cleanly"] = True
     prefs.setdefault("session", {})["restore_on_startup"] = 5
+    # Remove Chrome-level zoom — zoom is handled by CSS in fp_inject.js
+    prefs.pop("partition", None)
     prefs_file.write_text(_json.dumps(prefs, ensure_ascii=False), encoding="utf-8")
 
 
@@ -209,9 +211,11 @@ def start_chrome(instance: dict, new_fingerprint: bool = True, clean: bool = Fal
         seed = generate_fingerprint(ext_dir, name)
         _chrome_seeds[name] = seed
 
+    debug_port = 19200 + (instance["api_port"] - 8100)
     args = [
         str(portable_exe),
         f"--load-extension={ext_dir}",
+        f"--remote-debugging-port={debug_port}",
         "--disable-background-timer-throttling",
         "--disable-renderer-backgrounding",
         "--disable-backgrounding-occluded-windows",
