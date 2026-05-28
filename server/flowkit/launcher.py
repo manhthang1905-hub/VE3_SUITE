@@ -141,16 +141,20 @@ def start_chrome(instance: dict, new_fingerprint: bool = True) -> Optional[subpr
         print(f"[ERROR] ChromePortable not found: {portable_exe}")
         return None
 
-    # Clear "crashed" state and prevent session restore
+    # Clear "crashed" state, prevent session restore, set 50% zoom
     import json as _json
     import shutil as _shutil
+    import math as _math
+    _zoom_50 = _math.log(0.5) / _math.log(1.2)
     prefs_file = chrome_dir / "Data" / "profile" / "Default" / "Preferences"
     if prefs_file.exists():
         try:
             prefs = _json.loads(prefs_file.read_text(encoding="utf-8"))
             prefs.setdefault("profile", {})["exit_type"] = "Normal"
             prefs["profile"]["exited_cleanly"] = True
+            prefs["profile"]["default_zoom_level"] = _zoom_50
             prefs.setdefault("session", {})["restore_on_startup"] = 5
+            prefs.setdefault("partition", {}).setdefault("default_zoom_level", {})["x"] = _zoom_50
             prefs_file.write_text(_json.dumps(prefs, ensure_ascii=False), encoding="utf-8")
         except Exception:
             pass

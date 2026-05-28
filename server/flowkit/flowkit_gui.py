@@ -603,14 +603,18 @@ class FlowKitGUI(tk.Tk):
             except Exception:
                 pass
 
-        # Clear "crashed" state and prevent session restore (extra tabs)
+        # Clear "crashed" state, prevent session restore, set 50% zoom
+        import math
+        zoom_50 = math.log(0.5) / math.log(1.2)
         prefs_file = profile_dir / "Default" / "Preferences"
         if prefs_file.exists():
             try:
                 prefs = json.loads(prefs_file.read_text(encoding="utf-8"))
                 prefs.setdefault("profile", {})["exit_type"] = "Normal"
                 prefs["profile"]["exited_cleanly"] = True
+                prefs["profile"]["default_zoom_level"] = zoom_50
                 prefs.setdefault("session", {})["restore_on_startup"] = 5
+                prefs.setdefault("partition", {}).setdefault("default_zoom_level", {})["x"] = zoom_50
                 prefs_file.write_text(json.dumps(prefs, ensure_ascii=False), encoding="utf-8")
             except Exception:
                 pass
