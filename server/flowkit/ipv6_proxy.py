@@ -34,6 +34,7 @@ import threading
 import select
 import struct
 import time
+from pathlib import Path
 from typing import Optional, Tuple, Callable
 
 
@@ -214,8 +215,21 @@ class IPv6SocksProxy:
         except:
             return None
 
+    def _check_ipv6_override(self):
+        """Check if recovery wrote a new IPv6 to override file."""
+        try:
+            override = Path(f".ipv6_override_{self.listen_port}")
+            if override.exists():
+                new_ip = override.read_text().strip()
+                if new_ip and new_ip != self.ipv6_address:
+                    self.set_ipv6(new_ip)
+                override.unlink(missing_ok=True)
+        except Exception:
+            pass
+
     def _connect_via_ipv6(self, host: str, port: int) -> Optional[socket.socket]:
         """Connect to target - CHỈ dùng IPv6 và BIND vào source IPv6 cụ thể."""
+        self._check_ipv6_override()
         try:
             # Thử resolve IPv6 trước (AF_INET6)
             addrinfo = None

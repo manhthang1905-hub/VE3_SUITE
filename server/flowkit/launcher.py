@@ -187,7 +187,8 @@ def start_chrome(instance: dict, new_fingerprint: bool = True) -> Optional[subpr
     args.append(f"--window-size={w},{h}")
 
     if ipv6:
-        args.append(f"--proxy-server=socks5://[{ipv6}]:1080")
+        proxy_port = 1081 + (instance["api_port"] - 8100)
+        args.append(f"--proxy-server=socks5://127.0.0.1:{proxy_port}")
 
     args.append("https://labs.google/fx/tools/flow")
 
@@ -196,7 +197,7 @@ def start_chrome(instance: dict, new_fingerprint: bool = True) -> Optional[subpr
     print(f"  Extension: {ext_dir}")
     print(f"  Window: slot={slot} pos=({x},{y}) size={w}x{h}")
     if ipv6:
-        print(f"  IPv6 proxy: {ipv6}")
+        print(f"  IPv6 via local proxy: 127.0.0.1:{proxy_port}")
 
     proc = subprocess.Popen(
         args,

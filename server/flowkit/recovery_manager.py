@@ -219,7 +219,7 @@ class RecoveryManager:
             return False
 
     async def _level2_rotate_ipv6(self, instance_name: str) -> bool:
-        """Level 2: Rotate IPv6 and restart Chrome with new proxy."""
+        """Level 2: Rotate IPv6, update SOCKS proxy, restart Chrome."""
         logger.info("[Recovery] %s Level 2: rotating IPv6", instance_name)
 
         if not self._ipv6_client:
@@ -227,6 +227,7 @@ class RecoveryManager:
             return False
 
         state = self.states[instance_name]
+        cfg = self.instances_config.get(instance_name)
         old_ip = state.current_ipv6
 
         try:
@@ -242,6 +243,24 @@ class RecoveryManager:
             new_ip = result["ip"]
             state.current_ipv6 = new_ip
             logger.info("[Recovery] %s Level 2: got new IPv6 %s", instance_name, new_ip)
+
+            import subprocess
+            try:
+                subprocess.run(
+                    f'netsh interface ipv6 add address "Ethernet" {new_ip}',
+                    shell=True, capture_output=True, timeout=10,
+                )
+                logger.info("[Recovery] %s: added %s to Ethernet", instance_name, new_ip)
+            except Exception as e:
+                logger.warning("[Recovery] %s: netsh add address failed: %s", instance_name, e)
+
+            proxy_port = 1081 + (cfg["api_port"] - 8100) if cfg else 0
+            if proxy_port:
+                try:
+                    Path(f".ipv6_override_{proxy_port}").write_text(new_ip)
+                    logger.info("[Recovery] %s: wrote IPv6 override for proxy port %d", instance_name, proxy_port)
+                except Exception as e:
+                    logger.warning("[Recovery] %s: write override failed: %s", instance_name, e)
 
             return await self._restart_chrome_instance(instance_name, new_ipv6=new_ip)
         except Exception as e:
