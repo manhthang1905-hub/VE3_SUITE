@@ -174,7 +174,7 @@ def _wait_for_textarea(page, timeout: int = 30) -> bool:
     return False
 
 
-def _do_login(chrome_dir: Path, account: dict, proxy_arg: str = "") -> bool:
+def _do_login(chrome_dir: Path, account: dict, proxy_arg: str = "", worker_id: int = 0) -> bool:
     """Login Google account using google_login.py (same as old server _auto_login)."""
     try:
         sys.path.insert(0, str(BASE_DIR))
@@ -183,6 +183,7 @@ def _do_login(chrome_dir: Path, account: dict, proxy_arg: str = "") -> bool:
         return login_google_chrome(
             account_info=account,
             chrome_portable=str(portable_exe),
+            worker_id=worker_id,
             proxy_arg=proxy_arg,
         )
     except Exception as e:
@@ -281,6 +282,9 @@ def setup_chrome(
             log("Wrong account — need login")
             need_login = True
 
+    # worker_id for google_login port assignment
+    _worker_id = port - 19200 if port >= 19200 else 0
+
     # 3. Login if needed
     if need_login:
         try:
@@ -289,7 +293,7 @@ def setup_chrome(
             pass
 
         clean_chrome_profile(chrome_dir)
-        login_ok = _do_login(chrome_dir, account, proxy_arg)
+        login_ok = _do_login(chrome_dir, account, proxy_arg, _worker_id)
         if not login_ok:
             log("Login FAILED!")
             return False
@@ -319,7 +323,7 @@ def setup_chrome(
             except Exception:
                 pass
             clean_chrome_profile(chrome_dir)
-            login_ok = _do_login(chrome_dir, account, proxy_arg)
+            login_ok = _do_login(chrome_dir, account, proxy_arg, _worker_id)
             if not login_ok:
                 log("Login FAILED after redirect!")
                 return False
@@ -390,6 +394,8 @@ def ensure_chrome_ready(
         log("Cannot connect to Chrome on port %d: %s" % (debug_port, e))
         return False
 
+    _worker_id = debug_port - 19200 if debug_port >= 19200 else 0
+
     # Check login
     if account:
         current_email = _check_logged_in(page)
@@ -405,7 +411,7 @@ def ensure_chrome_ready(
                     pass
                 from launcher import clean_chrome_profile, _write_chrome_prefs
                 clean_chrome_profile(chrome_dir)
-                login_ok = _do_login(chrome_dir, account, proxy_arg)
+                login_ok = _do_login(chrome_dir, account, proxy_arg, _worker_id)
                 if not login_ok:
                     log("Login FAILED!")
                     return False
