@@ -52,16 +52,130 @@ def _enforce_window_layout(page, window_args, log):
         log("CDP layout skip: %s" % e)
 
 
-def _apply_zoom(page, log):
-    """Apply browser-level zoom via CDP (like Ctrl+-)."""
+def _apply_zoom(page, log, retries=3, force_register_script=True):
+    """Apply page zoom — copy y nguyen apply_page_zoom server cu."""
     zoom_val = int(os.getenv("CHROME_PAGE_ZOOM", "50"))
     zoom_val = max(25, min(200, zoom_val))
+    target = "%d%%" % zoom_val
     scale = max(0.25, min(2.0, zoom_val / 100.0))
+
+    zoom_reset_js = """
+        (function() {
+            try {
+                try { document.documentElement.style.zoom = '100%'; } catch(e) {}
+                try { if (document.body) document.body.style.zoom = '100%'; } catch(e) {}
+                return '100%';
+            } catch(e) {
+                return 'ERR:' + e;
+            }
+        })();
+    """
+
+    zoom_apply_js = """
+        (function() {
+            try {
+                var z = '%s';
+                try { document.documentElement.style.zoom = z; } catch(e) {}
+                try { if (document.body) document.body.style.zoom = '100%%'; } catch(e) {}
+                return (document.documentElement && document.documentElement.style.zoom) || '';
+            } catch(e) {
+                return 'ERR:' + e;
+            }
+        })();
+    """ % target
+
+    zoom_verify_js = """
+        (function() {
+            try {
+                var dz = '';
+                try { dz = (document.documentElement && document.documentElement.style.zoom) || ''; } catch(e) {}
+                var vv = '';
+                try {
+                    if (window.visualViewport && window.visualViewport.scale != null) {
+                        vv = String(window.visualViewport.scale);
+                    }
+                } catch(e) {}
+                return JSON.stringify({dz: dz, vv: vv});
+            } catch(e) {
+                return JSON.stringify({dz: '', vv: '', err: String(e)});
+            }
+        })();
+    """
+
+    zoom_bootstrap_js = """
+        (function() {
+            try {
+                var z = '%s';
+                var applyZoom = function() {
+                    try { document.documentElement.style.zoom = z; } catch(e) {}
+                    try { if (document.body) document.body.style.zoom = '100%%'; } catch(e) {}
+                };
+                try { applyZoom(); } catch(e) {}
+                try { document.addEventListener('DOMContentLoaded', applyZoom, true); } catch(e) {}
+                try { window.addEventListener('load', applyZoom, true); } catch(e) {}
+            } catch(e) {}
+        })();
+    """ % target
+
     try:
-        page.run_cdp('Emulation.setPageScaleFactor', pageScaleFactor=scale)
-        log("Zoom %d%% applied (setPageScaleFactor)" % zoom_val)
+        if force_register_script:
+            try:
+                page.run_cdp('Page.addScriptToEvaluateOnNewDocument', source=zoom_bootstrap_js)
+            except Exception as e:
+                log("[ZOOM] CDP pre-load inject failed: %s" % e)
+
+        cdp_scale_ok = False
+        for i in range(max(1, retries)):
+            try:
+                page.run_cdp('Runtime.evaluate', expression=zoom_reset_js)
+            except Exception:
+                pass
+
+            try:
+                page.run_cdp('Emulation.setPageScaleFactor', pageScaleFactor=1.0)
+                page.run_cdp('Emulation.setPageScaleFactor', pageScaleFactor=scale)
+                cdp_scale_ok = True
+            except Exception:
+                pass
+
+            actual = ''
+            vv = ''
+            try:
+                page.run_cdp('Runtime.evaluate', expression=zoom_apply_js)
+                raw_result = page.run_cdp('Runtime.evaluate', expression=zoom_verify_js,
+                                          returnByValue=True)
+                raw = raw_result.get('result', {}).get('value', '')
+                if isinstance(raw, str) and raw:
+                    import json as _json
+                    parsed = _json.loads(raw)
+                    actual = str(parsed.get('dz') or '').strip()
+                    vv = str(parsed.get('vv') or '').strip()
+            except Exception:
+                pass
+
+            if actual == target:
+                log("[ZOOM] Verified: %s" % actual)
+                return True
+
+            try:
+                if vv:
+                    vv_val = float(vv)
+                    if abs(vv_val - scale) <= 0.05:
+                        log("[ZOOM] Verified via viewport scale: %.2f" % vv_val)
+                        return True
+            except Exception:
+                pass
+
+            if cdp_scale_ok and not actual:
+                log("[ZOOM] Applied (verify-unavailable), target=%s" % target)
+                return True
+            time.sleep(0.2)
+
+        log("[ZOOM] MISMATCH target=%s, actual=%s, vv=%s" % (target, actual, vv))
+        return False
     except Exception as e:
-        log("Zoom failed: %s" % e)
+        log("[ZOOM] Set zoom failed: %s" % e)
+        return False
 
 
 def _inject_fingerprint(page, ext_dir, instance_name, log):
@@ -290,13 +404,53 @@ def _click_new_project(page, log=None) -> bool:
     return False
 
 
+def _click_create_with_flow_js(page, log) -> bool:
+    """Click 'Create with Flow' via JS — y nguyen server cu."""
+    try:
+        click_result = page.run_cdp('Runtime.evaluate', expression="""
+            (function() {
+                var btns = document.querySelectorAll('button');
+                for (var b of btns) {
+                    var text = (b.textContent || '').trim();
+                    if (text.includes('Create with Flow') || text.includes('Tạo với Flow')
+                        || text.includes('Create with Google Flow')) {
+                        b.click();
+                        return 'CLICKED';
+                    }
+                }
+                var spans = document.querySelectorAll('span');
+                for (var s of spans) {
+                    var text = (s.textContent || '').trim();
+                    if (text.includes('Create with Flow') || text.includes('Tạo với Flow')
+                        || text.includes('Create with Google Flow')) {
+                        var btn = s.closest('button');
+                        if (btn) { btn.click(); return 'CLICKED_VIA_SPAN'; }
+                    }
+                }
+                return 'NOT_FOUND';
+            })();
+        """, returnByValue=True)
+        val = click_result.get('result', {}).get('value', '')
+        if val and 'CLICKED' in str(val):
+            log("Clicked 'Create with Flow' (JS)")
+            return True
+    except Exception:
+        pass
+    return False
+
+
 def _create_new_project(page, log) -> bool:
-    """Tao project moi — y nguyen _create_new_project server cu."""
-    for attempt in range(30):
+    """Tao project moi — copy y nguyen _create_new_project server cu."""
+    log("Tao project moi...")
+    time.sleep(2)
+
+    for attempt in range(20):
+        _apply_zoom(page, log, retries=2, force_register_script=False)
+
         try:
             url = page.url or ""
             if "/project/" in url:
-                log("Already in project: %s" % url)
+                log("Da vao project: %s" % url)
                 return True
         except Exception:
             pass
@@ -314,20 +468,27 @@ def _create_new_project(page, log) -> bool:
                 except Exception:
                     pass
                 time.sleep(1)
+                if w % 10 == 9:
+                    log("  ... doi vao project %ds" % (w + 1))
             log("Click OK but project not loaded, retrying...")
             continue
 
-        if attempt > 0 and attempt % 10 == 0:
-            log("Reload Flow page (%d/30)..." % attempt)
+        if _click_create_with_flow_js(page, log):
+            time.sleep(1)
+            continue
+
+        if attempt > 0 and attempt % 5 == 0:
+            log("Reload Flow page (%d/20)..." % attempt)
             try:
                 page.get(FLOW_URL)
-                time.sleep(8)
+                time.sleep(3)
+                _apply_zoom(page, log, retries=3, force_register_script=False)
             except Exception:
                 pass
 
-        time.sleep(2)
+        time.sleep(0.5)
 
-    log("Failed to create project after 30 attempts!")
+    log("Khong tao duoc project sau 20 lan!")
     return False
 
 

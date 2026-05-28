@@ -167,14 +167,45 @@ def _enforce_window_layout(driver, chrome_exe: str, worker_id: int):
 
 
 def _apply_zoom_login(driver):
-    """Apply browser-level zoom via CDP (like Ctrl+-)."""
+    """Apply zoom cho login Chrome — copy y nguyen server cu."""
     import os as _os
     zoom_val = int(_os.getenv("CHROME_PAGE_ZOOM", "50"))
     zoom_val = max(25, min(200, zoom_val))
+    target = f"{zoom_val}%"
     scale = max(0.25, min(2.0, zoom_val / 100.0))
+
+    zoom_apply_js = "(function(){try{document.documentElement.style.zoom='%s';}catch(e){}try{if(document.body)document.body.style.zoom='100%%';}catch(e){}})()" % target
+    zoom_bootstrap_js = """
+        (function() {
+            var z = '%s';
+            var applyZoom = function() {
+                try { document.documentElement.style.zoom = z; } catch(e) {}
+                try { if (document.body) document.body.style.zoom = '100%%'; } catch(e) {}
+            };
+            try { applyZoom(); } catch(e) {}
+            try { document.addEventListener('DOMContentLoaded', applyZoom, true); } catch(e) {}
+            try { window.addEventListener('load', applyZoom, true); } catch(e) {}
+        })();
+    """ % target
+
     try:
-        driver.run_cdp('Emulation.setPageScaleFactor', pageScaleFactor=scale)
-        log(f"[ZOOM] {zoom_val}% applied (setPageScaleFactor)")
+        try:
+            driver.run_cdp('Page.addScriptToEvaluateOnNewDocument', source=zoom_bootstrap_js)
+        except Exception:
+            pass
+        try:
+            driver.run_cdp('Emulation.setPageScaleFactor', pageScaleFactor=1.0)
+            driver.run_cdp('Emulation.setPageScaleFactor', pageScaleFactor=scale)
+        except Exception:
+            pass
+        try:
+            driver.run_cdp('Runtime.evaluate', expression=zoom_apply_js)
+        except Exception:
+            try:
+                driver.run_js(zoom_apply_js)
+            except Exception:
+                pass
+        log(f"[ZOOM] {target} applied (CDP + JS)")
     except Exception as e:
         log(f"[ZOOM] failed: {e}", "WARN")
 
