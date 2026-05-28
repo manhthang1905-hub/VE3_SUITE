@@ -377,9 +377,9 @@ def _click_new_project(page, log=None) -> bool:
         except Exception:
             pass
 
-    # 3. Tim "Create with Flow" / "Tao voi Flow"
-    for text in ['Create with Flow', 'Tạo với Flow', 'Criar com o Flow',
-                 'Buat dengan Flow']:
+    # 3. Tim "Create with Flow" / "Create with Google Flow" / "Tao voi Flow"
+    for text in ['Create with Google Flow', 'Create with Flow',
+                 'Tạo với Flow', 'Criar com o Flow', 'Buat dengan Flow']:
         try:
             btn = page.ele('tag:button@@text():%s' % text, timeout=1)
             if btn:

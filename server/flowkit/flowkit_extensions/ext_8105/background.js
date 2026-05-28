@@ -471,7 +471,7 @@ async function handleEnsureProject(msg) {
         // Fallback: look for "Create with Flow" / "Tạo với Flow"
         for (const btn of buttons) {
           const t = (btn.textContent || '').trim().toLowerCase();
-          if (t.includes('create with flow') || t.includes('tạo với flow')) {
+          if (t.includes('create with google flow') || t.includes('create with flow') || t.includes('tạo với flow')) {
             btn.click();
             return 'clicked_create_flow';
           }

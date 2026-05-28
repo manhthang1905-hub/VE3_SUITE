@@ -569,7 +569,7 @@ def warmup_flow_home():
                     var btns = document.querySelectorAll('button,[role="button"]');
                     for (var i = 0; i < btns.length; i++) {{
                         var text = (btns[i].textContent || '').trim();
-                        if (text.includes('Create with Flow') || text.includes('Tạo với Flow')) {{
+                        if (text.includes('Create with Google Flow') || text.includes('Create with Flow') || text.includes('Tạo với Flow')) {{
                             btns[i].click();
                             return 'CLICKED_CREATE_WITH_FLOW';
                         }}

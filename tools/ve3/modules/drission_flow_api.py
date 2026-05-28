@@ -3734,7 +3734,7 @@ class DrissionFlowAPI:
                                         var btns = document.querySelectorAll('button');
                                         for (var b of btns) {
                                             var text = (b.textContent || '').trim();
-                                            if (text.includes('Create with Flow') || text.includes('Tạo với Flow')) {
+                                            if (text.includes('Create with Google Flow') || text.includes('Create with Flow') || text.includes('Tạo với Flow')) {
                                                 b.click();
                                                 return 'CLICKED_CREATE_WITH_FLOW';
                                             }
@@ -3802,7 +3802,7 @@ class DrissionFlowAPI:
                                     var btns = document.querySelectorAll('button');
                                     for (var b of btns) {
                                         var text = (b.textContent || '').trim();
-                                        if (text.includes('Create with Flow') || text.includes('Tạo với Flow')) {
+                                        if (text.includes('Create with Google Flow') || text.includes('Create with Flow') || text.includes('Tạo với Flow')) {
                                             b.click();
                                             return 'CLICKED';
                                         }
@@ -4014,7 +4014,7 @@ class DrissionFlowAPI:
                 var btns = document.querySelectorAll('button');
                 for (var b of btns) {
                     var text = (b.textContent || '').trim();
-                    if (text.includes('Create with Flow') || text.includes('Tạo với Flow')) {
+                    if (text.includes('Create with Google Flow') || text.includes('Create with Flow') || text.includes('Tạo với Flow')) {
                         return 'HAS_CREATE_BUTTON';
                     }
                 }
@@ -4062,7 +4062,7 @@ class DrissionFlowAPI:
                             var btns = document.querySelectorAll('button');
                             for (var b of btns) {
                                 var text = (b.textContent || '').trim();
-                                if (text.includes('Create with Flow') || text.includes('Tạo với Flow')) {
+                                if (text.includes('Create with Google Flow') || text.includes('Create with Flow') || text.includes('Tạo với Flow')) {
                                     b.click();
                                     return 'CLICKED';
                                 }
@@ -4070,7 +4070,7 @@ class DrissionFlowAPI:
                             var spans = document.querySelectorAll('span');
                             for (var s of spans) {
                                 var text = (s.textContent || '').trim();
-                                if (text.includes('Create with Flow') || text.includes('Tạo với Flow')) {
+                                if (text.includes('Create with Google Flow') || text.includes('Create with Flow') || text.includes('Tạo với Flow')) {
                                     var btn = s.closest('button');
                                     if (btn) { btn.click(); return 'CLICKED_VIA_SPAN'; }
                                 }
