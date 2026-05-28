@@ -103,10 +103,11 @@ class AgentInstance:
         self.last_request_time: float = 0
         self.last_health_check: float = 0
 
-        # Self-heal tracking (y het chrome_pool.py self-heal logic)
+        # Self-heal tracking
         self.self_heal_failures = 0
         self.next_self_heal_at: float = 0
         self.was_healthy_once = False
+        self.consecutive_unhealthy = 0
 
     @property
     def available(self) -> bool:
@@ -263,20 +264,27 @@ async def health_check_loop():
 
             # Self-heal: auto-restart instances that are down
             # Only for instances that WERE healthy before (not during initial startup)
+            # Require 3 consecutive unhealthy checks (~30s) before triggering
+            UNHEALTHY_THRESHOLD = 3
             if _recovery_manager:
                 now = time.time()
                 for inst in instances:
                     if not inst.enabled:
                         continue
-                    # Instance is working fine — mark as was_healthy and reset counter
+                    # Instance is working fine — reset everything
                     if inst.healthy and inst.extension_connected and inst.flow_key_present:
                         inst.was_healthy_once = True
+                        inst.consecutive_unhealthy = 0
                         if inst.self_heal_failures > 0:
                             inst.self_heal_failures = 0
                             inst.next_self_heal_at = 0
                         continue
-                    # Skip instances that never finished startup — GUI pipeline handles those
+                    # Skip instances that never finished startup
                     if not inst.was_healthy_once:
+                        continue
+                    # Count consecutive unhealthy — don't act on momentary blips
+                    inst.consecutive_unhealthy += 1
+                    if inst.consecutive_unhealthy < UNHEALTHY_THRESHOLD:
                         continue
                     # Skip if cooling (403 recovery handles that) or quota exhausted
                     if inst.is_cooling or inst.is_quota_exhausted:
@@ -293,9 +301,10 @@ async def health_check_loop():
                     rotate_ipv6 = (inst.self_heal_failures > 1
                                    and inst.self_heal_failures % 3 == 0)
                     logger.warning(
-                        "[SelfHeal] %s not ready (healthy=%s, ext=%s, flowKey=%s), "
+                        "[SelfHeal] %s down for %d checks (healthy=%s, ext=%s, flowKey=%s), "
                         "attempt #%d%s",
-                        inst.name, inst.healthy, inst.extension_connected,
+                        inst.name, inst.consecutive_unhealthy,
+                        inst.healthy, inst.extension_connected,
                         inst.flow_key_present, inst.self_heal_failures,
                         " + IPv6 rotate" if rotate_ipv6 else "",
                     )
