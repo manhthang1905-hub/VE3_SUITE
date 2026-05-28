@@ -652,7 +652,6 @@ class FlowKitGUI(tk.Tk):
 
         if proxy_arg:
             args.append(f"--proxy-server={proxy_arg}")
-            args.append("--proxy-bypass-list=<-loopback>")
         # Open directly to Flow page so extension can capture flow key
         args.append("https://labs.google/fx/tools/flow")
 

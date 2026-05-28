@@ -179,7 +179,6 @@ def start_chrome(instance: dict, new_fingerprint: bool = True) -> Optional[subpr
 
     if ipv6:
         args.append(f"--proxy-server=socks5://[{ipv6}]:1080")
-        args.append("--proxy-bypass-list=<-loopback>")
 
     print(f"[{name}] Starting Chrome: {portable_exe.name}")
     print(f"  Dir: {chrome_dir}")

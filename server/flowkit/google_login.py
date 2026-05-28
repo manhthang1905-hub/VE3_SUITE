@@ -1135,7 +1135,6 @@ def login_google_chrome(account_info: dict, chrome_portable: str = None, profile
         # v1.0.571: Proxy args - dam bao login dung cung proxy nhu tao anh
         if proxy_arg:
             options.set_argument(f'--proxy-server={proxy_arg}')
-            options.set_argument('--proxy-bypass-list=<-loopback>')
             log(f"[NET] Login qua proxy: {proxy_arg}")
             # v1.0.662: Xoa firewall block IPv4 cu (tu IPv6 mode) de proxy IPv4 hoat dong
             try:
