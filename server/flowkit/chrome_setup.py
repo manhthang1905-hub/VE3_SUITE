@@ -319,7 +319,7 @@ def _click_new_project(page, log=None) -> bool:
 
 def _create_new_project(page, log) -> bool:
     """Tao project moi — y nguyen _create_new_project server cu."""
-    for attempt in range(20):
+    for attempt in range(30):
         try:
             url = page.url or ""
             if "/project/" in url:
@@ -344,17 +344,17 @@ def _create_new_project(page, log) -> bool:
             log("Click OK but project not loaded, retrying...")
             continue
 
-        if attempt > 0 and attempt % 5 == 0:
-            log("Reload Flow page (%d/20)..." % attempt)
+        if attempt > 0 and attempt % 10 == 0:
+            log("Reload Flow page (%d/30)..." % attempt)
             try:
                 page.get(FLOW_URL)
-                time.sleep(3)
+                time.sleep(8)
             except Exception:
                 pass
 
-        time.sleep(0.5)
+        time.sleep(2)
 
-    log("Failed to create project after 20 attempts!")
+    log("Failed to create project after 30 attempts!")
     return False
 
 
