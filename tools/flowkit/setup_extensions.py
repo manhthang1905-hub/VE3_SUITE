@@ -1,156 +1,178 @@
 """
-Setup FlowKit Extensions — tạo bản extension riêng cho mỗi Chrome/server.
+Setup script — registers FlowKit extensions in Chrome Preferences.
 
-Mỗi bản extension có WS port và HTTP callback port khác nhau,
-đảm bảo các Chrome hoạt động độc lập.
+Run this ONCE before first use (or after clearing Chrome data).
+Must run with Chrome CLOSED.
 
 Usage:
-    python setup_extensions.py --chrome-dir "D:\\VE3_SUITE" --base-port 8100
-    python setup_extensions.py --count 7 --base-port 8100 --output-dir "D:\\VE3_SUITE\\flowkit_extensions"
-
-Output:
-    flowkit_extensions/
-    ├── ext_8100/    → Chrome Copy (1), WS=9222, HTTP=8100
-    ├── ext_8101/    → Chrome Copy (2), WS=9223, HTTP=8101
-    ├── ext_8102/    → Chrome Copy (3), WS=9224, HTTP=8102
-    └── ...
+    python setup_extensions.py
 """
-import argparse
-import glob
+import json
 import os
-import re
-import shutil
+import sys
+import time
 from pathlib import Path
 
-EXTENSION_SRC = Path(__file__).parent / "extension"
+import yaml
+
+BASE_DIR = Path(__file__).parent
+CONFIG_PATH = BASE_DIR / "config.yaml"
+
+if not CONFIG_PATH.exists():
+    print(f"[FATAL] config.yaml not found: {CONFIG_PATH}")
+    sys.exit(1)
+with open(CONFIG_PATH) as f:
+    CONFIG = yaml.safe_load(f)
 
 
-def create_extension_copy(api_port: int, ws_port: int, output_dir: Path, name: str = ""):
-    """Create a copy of the extension with custom ports."""
-    if output_dir.exists():
-        shutil.rmtree(output_dir)
-    shutil.copytree(EXTENSION_SRC, output_dir)
+def get_extension_id_from_path(ext_path: str) -> str:
+    """Generate deterministic extension ID from path (Chrome's algorithm).
 
-    bg_path = output_dir / "background.js"
-    bg_content = bg_path.read_text(encoding="utf-8")
-
-    # Replace WS port
-    bg_content = re.sub(
-        r"const AGENT_WS_URL\s*=\s*'ws://127\.0\.0\.1:\d+'",
-        f"const AGENT_WS_URL = 'ws://127.0.0.1:{ws_port}'",
-        bg_content,
-    )
-
-    # Replace HTTP callback URL
-    bg_content = re.sub(
-        r"http://127\.0\.0\.1:\d+/api/ext/callback",
-        f"http://127.0.0.1:{api_port}/api/ext/callback",
-        bg_content,
-    )
-
-    bg_path.write_text(bg_content, encoding="utf-8")
-
-    # Also update manifest name for identification
-    manifest_path = output_dir / "manifest.json"
-    manifest = manifest_path.read_text(encoding="utf-8")
-    display_name = name or f"FlowKit-{api_port}"
-    manifest = re.sub(
-        r'"name"\s*:\s*"[^"]*"',
-        f'"name": "{display_name}"',
-        manifest,
-    )
-    # Update host_permissions to include this port
-    manifest = re.sub(
-        r"http://127\.0\.0\.1:8100/\*",
-        f"http://127.0.0.1:{api_port}/*",
-        manifest,
-    )
-    manifest_path.write_text(manifest, encoding="utf-8")
-
-    return output_dir
+    Chrome converts path to lowercase, then maps first 32 chars of hex-encoded
+    path to a-p alphabet. For unpacked extensions, it uses the path hash.
+    We'll use a simpler approach: just register with a known ID pattern.
+    """
+    import hashlib
+    path_bytes = str(ext_path).lower().encode('utf-8')
+    digest = hashlib.sha256(path_bytes).hexdigest()[:32]
+    # Convert hex to Chrome's a-p encoding
+    ext_id = ""
+    for ch in digest:
+        ext_id += chr(ord('a') + int(ch, 16))
+    return ext_id
 
 
-def discover_chromes(chrome_dir: str):
-    """Find all Chrome Portable instances."""
-    pattern = os.path.join(chrome_dir, "GoogleChromePortable - Copy*", "GoogleChromePortable.exe")
-    paths = sorted(glob.glob(pattern))
-    return paths
+def register_extension(prefs_path: Path, ext_dir: Path, ext_name: str):
+    """Register extension in Chrome's Preferences file."""
+    if not prefs_path.exists():
+        print(f"  [WARN] Preferences not found: {prefs_path}")
+        print(f"  Creating minimal Preferences file...")
+        prefs_path.parent.mkdir(parents=True, exist_ok=True)
+        prefs = {}
+    else:
+        with open(prefs_path, 'r', encoding='utf-8') as f:
+            prefs = json.load(f)
+
+    # Ensure extensions.settings exists
+    if "extensions" not in prefs:
+        prefs["extensions"] = {}
+    if "settings" not in prefs["extensions"]:
+        prefs["extensions"]["settings"] = {}
+
+    ext_dir_str = str(ext_dir.resolve()).replace("\\", "/")
+    ext_id = get_extension_id_from_path(ext_dir_str)
+
+    # Check if already registered
+    if ext_id in prefs["extensions"]["settings"]:
+        existing = prefs["extensions"]["settings"][ext_id]
+        if existing.get("path") == ext_dir_str:
+            print(f"  Already registered: {ext_name} ({ext_id[:8]}...)")
+            return ext_id
+
+    # Read manifest for version
+    manifest_path = ext_dir / "manifest.json"
+    if manifest_path.exists():
+        with open(manifest_path) as f:
+            manifest = json.load(f)
+        version = manifest.get("version", "1.0.0")
+    else:
+        version = "1.0.0"
+
+    # Register extension entry
+    prefs["extensions"]["settings"][ext_id] = {
+        "active_permissions": {
+            "api": ["alarms", "browsingData", "cookies", "declarativeNetRequest",
+                    "management", "scripting", "sidePanel", "storage", "tabs", "webRequest"],
+            "explicit_host": [
+                "https://labs.google/*",
+                "https://aisandbox-pa.googleapis.com/*",
+                f"http://127.0.0.1:{ext_name.split('_')[-1] if '_' in ext_name else '8100'}/*",
+            ],
+        },
+        "commands": {},
+        "content_settings": [],
+        "creation_flags": 1,
+        "events": [],
+        "from_webstore": False,
+        "granted_permissions": {
+            "api": ["alarms", "browsingData", "cookies", "declarativeNetRequest",
+                    "management", "scripting", "sidePanel", "storage", "tabs", "webRequest"],
+            "explicit_host": [
+                "https://labs.google/*",
+                "https://aisandbox-pa.googleapis.com/*",
+                f"http://127.0.0.1:{ext_name.split('_')[-1] if '_' in ext_name else '8100'}/*",
+            ],
+        },
+        "incognito_content_settings": [],
+        "incognito_preferences": {},
+        "install_time": str(int(time.time() * 1000000)),  # microseconds since epoch
+        "location": 4,  # LOAD (unpacked)
+        "manifest": {
+            "manifest_version": 3,
+            "name": ext_name,
+            "version": version,
+        },
+        "path": ext_dir_str,
+        "state": 1,  # ENABLED
+        "was_installed_by_default": False,
+        "was_installed_by_oem": False,
+    }
+
+    with open(prefs_path, 'w', encoding='utf-8') as f:
+        json.dump(prefs, f, indent=2)
+
+    print(f"  Registered: {ext_name} -> {ext_id[:12]}...")
+    return ext_id
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Setup FlowKit Extensions for multi-Chrome")
-    parser.add_argument("--chrome-dir", type=str, default="D:\\VE3_SUITE",
-                        help="Directory with Chrome Portable instances")
-    parser.add_argument("--count", type=int, default=0,
-                        help="Number of extensions to create (auto-detect from chrome-dir if 0)")
-    parser.add_argument("--base-port", type=int, default=8100,
-                        help="Base API port (default: 8100)")
-    parser.add_argument("--output-dir", type=str, default="",
-                        help="Output directory (default: <chrome-dir>/flowkit_extensions)")
-    args = parser.parse_args()
+    print("=" * 50)
+    print("  FlowKit Extension Setup")
+    print("=" * 50)
 
-    if args.count > 0:
-        count = args.count
-        chromes = []
-    else:
-        chromes = discover_chromes(args.chrome_dir)
-        count = len(chromes)
+    instances = CONFIG.get("instances", [])
+    for inst in instances:
+        if not inst.get("enabled", True):
+            continue
 
-    if count == 0:
-        print("No Chrome instances found!")
-        return
+        name = inst["name"]
+        ext_dir = BASE_DIR / inst["extension_dir"]
+        profile_dir = BASE_DIR / inst["profile_dir"]
+        prefs_path = profile_dir / "Default" / "Preferences"
 
-    output_base = Path(args.output_dir) if args.output_dir else Path(args.chrome_dir) / "flowkit_extensions"
-    output_base.mkdir(parents=True, exist_ok=True)
+        print(f"\n[{name}]")
+        print(f"  Extension: {ext_dir}")
+        print(f"  Profile: {profile_dir}")
 
-    print(f"Creating {count} FlowKit extensions in {output_base}")
-    print(f"Source extension: {EXTENSION_SRC}")
-    print()
+        if not ext_dir.exists():
+            print(f"  [ERROR] Extension dir not found!")
+            continue
 
-    for i in range(count):
-        api_port = args.base_port + i
-        ws_port = 9222 + i
-        ext_dir = output_base / f"ext_{api_port}"
-        chrome_name = Path(chromes[i]).parent.name if i < len(chromes) else f"Chrome-{i+1}"
-        display_name = f"FlowKit-{i+1}"
+        # Also update Secure Preferences if it exists
+        secure_prefs_path = profile_dir / "Default" / "Secure Preferences"
 
-        create_extension_copy(api_port, ws_port, ext_dir, display_name)
+        ext_id = register_extension(prefs_path, ext_dir, name)
 
-        print(f"  [{display_name}] port={api_port} ws={ws_port}")
-        print(f"    Extension: {ext_dir}")
-        if i < len(chromes):
-            print(f"    Chrome:    {chrome_name}")
-        print()
+        # Disable extension verification (so Chrome doesn't reject our registration)
+        if prefs_path.exists():
+            with open(prefs_path, 'r', encoding='utf-8') as f:
+                prefs = json.load(f)
+            if "extensions" not in prefs:
+                prefs["extensions"] = {}
+            prefs["extensions"]["alerts"] = {"initialized": True}
+            # Disable install verification
+            if "profile" not in prefs:
+                prefs["profile"] = {}
+            prefs["profile"]["extensions_install_verification"] = False
+            with open(prefs_path, 'w', encoding='utf-8') as f:
+                json.dump(prefs, f, indent=2)
 
-    # Print installation instructions
-    print("=" * 60)
-    print("  INSTALLATION GUIDE")
-    print("=" * 60)
-    print()
-    for i in range(count):
-        api_port = args.base_port + i
-        ext_dir = output_base / f"ext_{api_port}"
-        chrome_name = Path(chromes[i]).parent.name if i < len(chromes) else f"Chrome-{i+1}"
-        print(f"  {chrome_name}:")
-        print(f"    1. Mở Chrome → chrome://extensions")
-        print(f"    2. Bật Developer mode")
-        print(f"    3. Load unpacked → {ext_dir}")
-        print()
-
-    # Print VE3 config
-    print("=" * 60)
-    print("  VE3 CONFIG (thêm vào settings)")
-    print("=" * 60)
-    print()
-    print("generation_backend: flowkit")
-    print("flowkit_server_list:")
-    for i in range(count):
-        api_port = args.base_port + i
-        chrome_name = Path(chromes[i]).parent.name if i < len(chromes) else f"Chrome-{i+1}"
-        print(f'  - url: "http://127.0.0.1:{api_port}"')
-        print(f'    name: "flowkit-{i+1}"')
-        print(f'    enabled: true')
-        print(f'    chrome_path: "{chromes[i] if i < len(chromes) else ""}"')
+    print("\n" + "=" * 50)
+    print("  Setup complete!")
+    print("  Now start Chrome to activate extensions.")
+    print("  NOTE: You may need to enable the extension in")
+    print("  chrome://extensions if it shows as 'disabled'")
+    print("=" * 50)
 
 
 if __name__ == "__main__":
