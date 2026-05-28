@@ -147,7 +147,20 @@ def get_unique_seed() -> int:
         return seed
 
 
-def build_fingerprint_js(seed: int) -> str:
+def _zoom_js_block(zoom_percent: int) -> str:
+    if not zoom_percent or zoom_percent == 100:
+        return ""
+    return f"""        // Page zoom
+        (function(){{
+            var z='{zoom_percent}%';
+            function applyZoom(){{ try{{ document.documentElement.style.zoom=z; }}catch(e){{}} }}
+            if(document.readyState==='loading'){{ document.addEventListener('DOMContentLoaded',applyZoom); }}
+            else{{ applyZoom(); }}
+            new MutationObserver(function(){{ if(document.documentElement && document.documentElement.style.zoom!==z) applyZoom(); }}).observe(document.documentElement||document,{{childList:true,subtree:false}});
+        }})();"""
+
+
+def build_fingerprint_js(seed: int, zoom_percent: int = 0) -> str:
     """Tao JS spoof WebGL/Canvas/Hardware fingerprint tu seed."""
     r = random.Random(seed)
     gpu = r.choice(FAKE_GPUS)
@@ -194,5 +207,6 @@ def build_fingerprint_js(seed: int) -> str:
         var ogf=AnalyserNode.prototype.getFloatFrequencyData;
         AnalyserNode.prototype.getFloatFrequencyData=function(a){{ogf.call(this,a);for(var i=0;i<Math.min(a.length,10);i++)a[i]+={audio_noise:.6f};}};
         console.log('[SPOOF] seed={seed} gpu={gpu["renderer"][:30]}...');
+{_zoom_js_block(zoom_percent)}
     }})();
     """

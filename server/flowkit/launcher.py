@@ -102,7 +102,8 @@ def generate_fingerprint(ext_dir: str | Path, instance_name: str = "") -> int:
 
     ext_dir = Path(ext_dir)
     seed = get_unique_seed()
-    js_code = build_fingerprint_js(seed)
+    zoom = CONFIG.get("chrome_layout", {}).get("zoom", 0)
+    js_code = build_fingerprint_js(seed, zoom_percent=zoom)
 
     fp_path = ext_dir / "fp_inject.js"
     fp_path.write_text(js_code, encoding="utf-8")
@@ -166,12 +167,8 @@ def start_chrome(instance: dict, new_fingerprint: bool = True) -> Optional[subpr
         "--disable-session-crashed-bubble",
         "--hide-crash-restore-bubble",
         "--no-first-run",
+        "--no-default-browser-check",
     ]
-
-    # Page zoom (e.g. 50 = 50%)
-    zoom = CONFIG.get("chrome_layout", {}).get("zoom", 0)
-    if zoom and zoom != 100:
-        args.append(f"--force-device-scale-factor={zoom / 100:.2f}")
 
     # Window layout
     enabled_instances = [i for i in CONFIG.get("instances", []) if i.get("enabled", True)]
@@ -183,6 +180,7 @@ def start_chrome(instance: dict, new_fingerprint: bool = True) -> Optional[subpr
 
     if ipv6:
         args.append(f"--proxy-server=socks5://[{ipv6}]:1080")
+        args.append("--proxy-bypass-list=<-loopback>")
 
     print(f"[{name}] Starting Chrome: {portable_exe.name}")
     print(f"  Dir: {chrome_dir}")

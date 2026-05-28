@@ -601,6 +601,13 @@ class FlowKitGUI(tk.Tk):
             except Exception:
                 pass
 
+        # Regenerate fingerprint (includes zoom CSS) before launch
+        try:
+            from launcher import generate_fingerprint
+            generate_fingerprint(ext_dir, inst["name"])
+        except Exception:
+            pass
+
         args = [
             str(portable),
             f"--load-extension={ext_dir}",
@@ -610,14 +617,12 @@ class FlowKitGUI(tk.Tk):
             "--disable-session-crashed-bubble",
             "--hide-crash-restore-bubble",
             "--no-first-run",
+            "--no-default-browser-check",
         ]
 
-        # Page zoom and window layout — same config as launcher
+        # Window layout — same config as launcher
         try:
             from launcher import _calc_chrome_layout, _resolve_chrome_slot, CONFIG as _lcfg
-            zoom = _lcfg.get("chrome_layout", {}).get("zoom", 0)
-            if zoom and zoom != 100:
-                args.append(f"--force-device-scale-factor={zoom / 100:.2f}")
             instances_cfg = [i for i in _lcfg.get("instances", []) if i.get("enabled", True)]
             slot = _resolve_chrome_slot(inst["name"])
             x, y, w, h = _calc_chrome_layout(slot, len(instances_cfg))
@@ -628,6 +633,7 @@ class FlowKitGUI(tk.Tk):
 
         if proxy_arg:
             args.append(f"--proxy-server={proxy_arg}")
+            args.append("--proxy-bypass-list=<-loopback>")
         # Open directly to Flow page so extension can capture flow key
         args.append("https://labs.google/fx/tools/flow")
 
@@ -910,26 +916,30 @@ class FlowKitGUI(tk.Tk):
 
     def _get_remote_version(self) -> str:
         """Get remote version from GitHub (commit count or VERSION file)."""
-        import json as _json
+        import ssl
         from urllib.request import urlopen, Request
+        ctx = ssl.create_default_context()
+        ctx.check_hostname = False
+        ctx.verify_mode = ssl.CERT_NONE
         api_url = f"https://api.github.com/repos/{GITHUB_REPO}/commits?sha=main&per_page=1"
         try:
             req = Request(api_url, headers={"User-Agent": "FlowKit-Updater"})
-            with urlopen(req, timeout=10) as resp:
+            with urlopen(req, timeout=15, context=ctx) as resp:
                 link = resp.headers.get("Link", "")
                 if 'rel="last"' in link:
                     import re
                     m = re.search(r'[&?]page=(\d+)>;\s*rel="last"', link)
                     if m:
                         return f"1.0.{m.group(1)}"
-        except Exception:
-            pass
+        except Exception as e:
+            print(f"[UPDATE] GitHub API error: {e}")
         try:
-            url = f"https://raw.githubusercontent.com/{GITHUB_REPO}/main/VERSION"
+            url = f"https://raw.githubusercontent.com/{GITHUB_REPO}/main/server/flowkit/VERSION.txt"
             req = Request(url, headers={"User-Agent": "FlowKit-Updater"})
-            with urlopen(req, timeout=10) as resp:
+            with urlopen(req, timeout=15, context=ctx) as resp:
                 return resp.read().decode("utf-8").strip()
-        except Exception:
+        except Exception as e:
+            print(f"[UPDATE] GitHub raw error: {e}")
             return ""
 
     def _on_check_update(self):
@@ -1040,6 +1050,10 @@ class FlowKitGUI(tk.Tk):
                             shutil.copy2(str(py_file), str(BASE_DIR / py_file.name))
                         for bat_file in src_flowkit.glob("*.bat"):
                             shutil.copy2(str(bat_file), str(BASE_DIR / bat_file.name))
+                        for txt_file in ("VERSION.txt",):
+                            src_txt = src_flowkit / txt_file
+                            if src_txt.exists():
+                                shutil.copy2(str(src_txt), str(BASE_DIR / txt_file))
 
                         src_agent = src_flowkit / "agent"
                         dst_agent = BASE_DIR / "agent"
