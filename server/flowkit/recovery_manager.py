@@ -307,6 +307,12 @@ class RecoveryManager:
                 seed = get_instance_seed(instance_name)
                 self.states[instance_name].current_seed = seed
                 logger.info("[Recovery] %s: extension reconnected, new seed=%d", instance_name, seed)
+
+                project_ok = await self._ensure_project(api_port)
+                if project_ok:
+                    logger.info("[Recovery] %s: project ready", instance_name)
+                else:
+                    logger.warning("[Recovery] %s: ensure_project failed (may need login)", instance_name)
                 return True
             else:
                 logger.warning("[Recovery] %s: extension did not reconnect within %ds",
@@ -315,6 +321,22 @@ class RecoveryManager:
 
         except Exception as e:
             logger.exception("[Recovery] %s Chrome restart error: %s", instance_name, e)
+            return False
+
+    async def _ensure_project(self, api_port: int) -> bool:
+        """Ask extension to click 'Dự án mới' if not already in a project."""
+        try:
+            async with httpx.AsyncClient(timeout=65) as client:
+                resp = await client.post(f"http://127.0.0.1:{api_port}/api/ensure-project")
+                result = resp.json()
+            if result.get("success"):
+                logger.info("[Recovery] ensure_project OK: %s", result.get("data", {}))
+                return True
+            error = result.get("error", "unknown")
+            logger.warning("[Recovery] ensure_project failed: %s", error)
+            return False
+        except Exception as e:
+            logger.warning("[Recovery] ensure_project error: %s", e)
             return False
 
     async def _check_extension_connected(self, api_port: int) -> bool:

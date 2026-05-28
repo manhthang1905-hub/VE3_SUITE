@@ -405,6 +405,20 @@ async def reset_captcha():
     return {"success": True, "needs_relogin": True}
 
 
+# ─── Ensure Project ─────────────────────────────────────────
+
+@app.post("/api/ensure-project")
+async def ensure_project():
+    if not _client.connected:
+        return {"success": False, "error": "EXTENSION_NOT_CONNECTED"}
+
+    result = await _client.ensure_project()
+    if result.get("error"):
+        return {"success": False, "error": result["error"]}
+
+    return {"success": True, "data": result.get("data", {})}
+
+
 # ─── Helpers ─────────────────────────────────────────────────
 
 import random

@@ -192,6 +192,8 @@ function connectToAgent() {
         await handleExtractProjectId(msg);
       } else if (msg.method === 'reset_captcha') {
         await handleResetCaptcha(msg);
+      } else if (msg.method === 'ensure_project') {
+        await handleEnsureProject(msg);
       } else if (msg.method === 'get_status') {
         sendToAgent({
           id: msg.id,
@@ -415,6 +417,79 @@ async function handleExtractProjectId(msg) {
     sendToAgent({ id, error: 'NO_PROJECT_IN_URL' });
   } catch (e) {
     sendToAgent({ id, error: e.message || 'EXTRACT_PROJECT_ID_FAILED' });
+  }
+}
+
+// ─── Ensure Project (click "Dự án mới" if needed) ──────────
+
+async function handleEnsureProject(msg) {
+  const { id } = msg;
+  try {
+    const tab = await ensureFlowTab();
+    await sleep(3000);
+
+    // Check if already in a project
+    const projectRegex = /\/project\/[0-9a-f-]{36}/i;
+    if (tab.url && projectRegex.test(tab.url)) {
+      sendToAgent({ id, data: { ok: true, action: 'already_in_project' } });
+      return;
+    }
+
+    // Reload to get fresh page state
+    const freshTab = await chrome.tabs.get(tab.id);
+    if (freshTab.url && projectRegex.test(freshTab.url)) {
+      sendToAgent({ id, data: { ok: true, action: 'already_in_project' } });
+      return;
+    }
+
+    // Check if on login page
+    if (freshTab.url && freshTab.url.includes('accounts.google.com')) {
+      sendToAgent({ id, error: 'NEEDS_LOGIN', url: freshTab.url });
+      return;
+    }
+
+    // Try to click "Dự án mới" button
+    const clickResult = await chrome.scripting.executeScript({
+      target: { tabId: tab.id },
+      func: () => {
+        const buttons = document.querySelectorAll('button');
+        for (const btn of buttons) {
+          const t = (btn.textContent || '').trim().toLowerCase();
+          if (t.includes('add_2') || t.includes('dự án mới') || t.includes('new project')) {
+            btn.click();
+            return 'clicked';
+          }
+        }
+        // Fallback: look for "Create with Flow" / "Tạo với Flow"
+        for (const btn of buttons) {
+          const t = (btn.textContent || '').trim().toLowerCase();
+          if (t.includes('create with flow') || t.includes('tạo với flow')) {
+            btn.click();
+            return 'clicked_create_flow';
+          }
+        }
+        return 'not_found';
+      },
+    });
+
+    const action = clickResult?.[0]?.result || 'not_found';
+    if (action === 'not_found') {
+      sendToAgent({ id, error: 'NO_NEW_PROJECT_BUTTON' });
+      return;
+    }
+
+    // Wait for navigation to project URL
+    for (let i = 0; i < 15; i++) {
+      await sleep(2000);
+      const check = await chrome.tabs.get(tab.id);
+      if (check.url && projectRegex.test(check.url)) {
+        sendToAgent({ id, data: { ok: true, action } });
+        return;
+      }
+    }
+    sendToAgent({ id, error: 'PROJECT_NAV_TIMEOUT' });
+  } catch (e) {
+    sendToAgent({ id, error: e.message || 'ENSURE_PROJECT_FAILED' });
   }
 }
 

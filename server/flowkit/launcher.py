@@ -162,12 +162,9 @@ def clean_chrome_profile(chrome_dir: Path):
 
 
 def _write_chrome_prefs(chrome_dir: Path):
-    """Write fresh Preferences with zoom 50% and session restore prevention."""
+    """Write fresh Preferences with session restore prevention."""
     import json as _json
-    import math as _math
 
-    _zoom_50 = _math.log(0.5) / _math.log(1.2)
-    _chrome_ts = str(int((time.time() + 11644473600) * 1_000_000))
     prefs_file = chrome_dir / "Data" / "profile" / "Default" / "Preferences"
     prefs_file.parent.mkdir(parents=True, exist_ok=True)
 
@@ -181,8 +178,6 @@ def _write_chrome_prefs(chrome_dir: Path):
     prefs.setdefault("profile", {})["exit_type"] = "Normal"
     prefs["profile"]["exited_cleanly"] = True
     prefs.setdefault("session", {})["restore_on_startup"] = 5
-    _host_zoom = prefs.setdefault("partition", {}).setdefault("per_host_zoom_levels", {}).setdefault("x", {})
-    _host_zoom["labs.google"] = {"last_modified": _chrome_ts, "zoom_level": _zoom_50}
     prefs_file.write_text(_json.dumps(prefs, ensure_ascii=False), encoding="utf-8")
 
 
