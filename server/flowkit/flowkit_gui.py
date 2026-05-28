@@ -501,8 +501,8 @@ class FlowKitGUI(tk.Tk):
         # Phase 1: DrissionPage setup (login + navigate + create project)
         # BEFORE agents — google_login uses port 9222+i which conflicts with agent ws_port
         # Parallel setup with semaphore — same as old server chrome_pool.py
-        setup_concurrency = max(1, int(os.getenv("CHROME_SETUP_CONCURRENCY", "3")))
-        setup_stagger = max(0.0, float(os.getenv("CHROME_SETUP_STAGGER_SEC", "1.0")))
+        setup_concurrency = max(1, int(os.getenv("CHROME_SETUP_CONCURRENCY", "6")))
+        setup_stagger = max(0.0, float(os.getenv("CHROME_SETUP_STAGGER_SEC", "3.0")))
         self._log(f"Phase 1: Setting up Chrome (concurrency={setup_concurrency})...", "INFO")
 
         setup_sem = threading.Semaphore(setup_concurrency)
