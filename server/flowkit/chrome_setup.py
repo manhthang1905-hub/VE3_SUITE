@@ -648,53 +648,28 @@ def setup_chrome(
         _inject_fingerprint(page, ext_dir, instance_name, log)
         current_url = page.url or ''
 
-    # ── 5. Tao project moi hoac vao project cu ──
+    # ── 5. Xac nhan Flow page da load (thay add_2 button = OK) ──
     if '/project/' in current_url:
-        log("Da vao project: %s" % current_url)
+        log("READY — da o trong project: %s" % current_url)
     else:
-        success = _create_new_project(page, log)
-        if not success:
-            log("Khong tao duoc project moi!")
+        page_ok = False
+        for wait_attempt in range(15):
+            try:
+                btn = page.ele('tag:button@@text():add_2', timeout=2)
+                if btn:
+                    log("READY — Flow page loaded (add_2 visible)")
+                    page_ok = True
+                    break
+            except Exception:
+                pass
+            time.sleep(1)
+        if not page_ok:
+            log("Flow page khong load duoc!")
             try:
                 page.quit()
             except Exception:
                 pass
             return False
-
-    _apply_zoom(page, log)
-
-    # ── 6. Doi textarea ──
-    if _wait_for_textarea(page):
-        log("READY! Project: %s" % (page.url or ''))
-    else:
-        # Retry: reload project + dismiss popup
-        log("Textarea khong xuat hien - thu reload...")
-        current_project = page.url or ''
-        if '/project/' in current_project:
-            for retry in range(3):
-                log("Retry %d/3: reload project..." % (retry + 1))
-                try:
-                    page.get(current_project)
-                    time.sleep(3)
-                    _inject_fingerprint(page, ext_dir, instance_name, log)
-                    _dismiss_popups(page)
-                    time.sleep(1)
-                    if _wait_for_textarea(page, timeout=15):
-                        log("READY sau retry %d!" % (retry + 1))
-                        break
-                except Exception as e:
-                    log("Retry %d error: %s" % (retry + 1, e))
-            else:
-                # Fallback: tao project moi
-                log("Project cu khong phuc hoi -> tao project moi")
-                try:
-                    page.get(FLOW_URL)
-                    time.sleep(3)
-                    _inject_fingerprint(page, ext_dir, instance_name, log)
-                except Exception:
-                    pass
-                _create_new_project(page, log)
-                _wait_for_textarea(page)
 
     # ── 7. Kill Chrome — DrissionPage xong viec, agent se restart ──
     try:
