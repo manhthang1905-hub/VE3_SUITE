@@ -53,50 +53,8 @@ def _enforce_window_layout(page, window_args, log):
 
 
 def _apply_zoom(page, log):
-    """Apply zoom — y nguyen apply_page_zoom server cu."""
-    zoom_val = int(os.getenv("CHROME_PAGE_ZOOM", "50"))
-    zoom_val = max(25, min(200, zoom_val))
-    target = f"{zoom_val}%"
-    scale = max(0.25, min(2.0, zoom_val / 100.0))
-
-    zoom_js = """
-        (function() {
-            try { document.documentElement.style.zoom = '%s'; } catch(e) {}
-            try { if (document.body) document.body.style.zoom = '100%%'; } catch(e) {}
-        })();
-    """ % target
-
-    zoom_bootstrap_js = """
-        (function() {
-            var z = '%s';
-            var applyZoom = function() {
-                try { document.documentElement.style.zoom = z; } catch(e) {}
-                try { if (document.body) document.body.style.zoom = '100%%'; } catch(e) {}
-            };
-            try { applyZoom(); } catch(e) {}
-            try { document.addEventListener('DOMContentLoaded', applyZoom, true); } catch(e) {}
-            try { window.addEventListener('load', applyZoom, true); } catch(e) {}
-        })();
-    """ % target
-
-    try:
-        page.run_cdp('Page.addScriptToEvaluateOnNewDocument', source=zoom_bootstrap_js)
-        page.run_cdp('Emulation.setPageScaleFactor', pageScaleFactor=scale)
-        try:
-            page.run_cdp('Runtime.evaluate', expression=zoom_js)
-        except Exception:
-            page.run_js(zoom_js)
-        log("Zoom %s applied (CDP + JS)" % target)
-    except Exception as e:
-        try:
-            page.run_cdp('Runtime.evaluate', expression=zoom_js)
-            log("Zoom %s applied (Runtime.evaluate, CDP partial fail: %s)" % (target, e))
-        except Exception:
-            try:
-                page.run_js(zoom_js)
-                log("Zoom %s applied (JS fallback)" % target)
-            except Exception:
-                log("Zoom failed: %s" % e)
+    """Zoom handled by --force-device-scale-factor=0.5 Chrome flag."""
+    return
 
 
 def _inject_fingerprint(page, ext_dir, instance_name, log):
