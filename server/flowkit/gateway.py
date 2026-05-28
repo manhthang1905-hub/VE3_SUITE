@@ -50,11 +50,31 @@ RATE_LIMIT = CONFIG.get("rate_limit", {})
 COOLDOWN_PER_INSTANCE = RATE_LIMIT.get("cooldown_per_instance", 5)
 MAX_CONCURRENT = RATE_LIMIT.get("max_concurrent_per_instance", 1)
 
+QUOTA = CONFIG.get("quota", {})
+QUOTA_RETRY_COUNT = QUOTA.get("retry_count", 2)
+QUOTA_RETRY_DELAY = QUOTA.get("retry_delay", 30)
+QUOTA_COOLDOWN_SECONDS = QUOTA.get("cooldown_seconds", 3600)
+
+IMAGE_MODEL_FALLBACK = {"GEM_PIX_2": "NARWHAL", "NARWHAL": "GEM_PIX_2"}
+
+
+def _switch_image_model(body_json: dict) -> str:
+    """Switch imageModelName in body_json to fallback. Returns new model name or empty."""
+    for req in body_json.get("requests", []):
+        if isinstance(req, dict):
+            model = req.get("imageModelName", "")
+            if model in IMAGE_MODEL_FALLBACK:
+                req["imageModelName"] = IMAGE_MODEL_FALLBACK[model]
+                return IMAGE_MODEL_FALLBACK[model]
+    return ""
+
+
 TIMEOUTS = CONFIG.get("timeouts", {})
 IMAGE_TIMEOUT = TIMEOUTS.get("image_generation", 120)
 VIDEO_SUBMIT_TIMEOUT = TIMEOUTS.get("video_submit", 60)
 VIDEO_POLL_TIMEOUT = TIMEOUTS.get("video_poll", 420)
 VIDEO_POLL_INTERVAL = TIMEOUTS.get("video_poll_interval", 10)
+TASK_WATCHDOG_TIMEOUT = TIMEOUTS.get("task_watchdog", 1800)
 
 
 # ─── Instance State ──────────────────────────────────────────
@@ -75,11 +95,19 @@ class AgentInstance:
         self.flow_key_present = False
         self.consecutive_403 = 0
         self.cooling_until: float = 0
+        self.quota_exhausted_until: float = 0
+        self.active_image_model: str = ""  # if set, override imageModelName (fallback from 429)
         self.processing_count = 0
         self.total_completed = 0
         self.total_failed = 0
         self.last_request_time: float = 0
         self.last_health_check: float = 0
+
+        # Self-heal tracking
+        self.self_heal_failures = 0
+        self.next_self_heal_at: float = 0
+        self.was_healthy_once = False
+        self.consecutive_unhealthy = 0
 
     @property
     def available(self) -> bool:
@@ -90,6 +118,8 @@ class AgentInstance:
             return False
         if self.cooling_until > time.time():
             return False
+        if self.quota_exhausted_until > time.time():
+            return False
         if self.processing_count >= MAX_CONCURRENT:
             return False
         return True
@@ -97,6 +127,25 @@ class AgentInstance:
     @property
     def is_cooling(self) -> bool:
         return self.cooling_until > time.time()
+
+    @property
+    def is_quota_exhausted(self) -> bool:
+        return self.quota_exhausted_until > time.time()
+
+    def mark_quota_exhausted(self):
+        self.quota_exhausted_until = time.time() + QUOTA_COOLDOWN_SECONDS
+        self.active_image_model = ""  # reset — all models exhausted
+        logger.warning("[%s] QUOTA EXHAUSTED — cooling for %ds (until %s)",
+                       self.name, QUOTA_COOLDOWN_SECONDS,
+                       time.strftime("%H:%M:%S", time.localtime(self.quota_exhausted_until)))
+
+    def apply_model_override(self, body_json: dict):
+        """If this instance has a fallback model active, apply it to the request."""
+        if not self.active_image_model:
+            return
+        for req in body_json.get("requests", []):
+            if isinstance(req, dict) and req.get("imageModelName"):
+                req["imageModelName"] = self.active_image_model
 
     def mark_403(self):
         self.consecutive_403 += 1
@@ -126,6 +175,8 @@ class AgentInstance:
             "available": self.available,
             "cooling": self.is_cooling,
             "cooling_remaining": max(0, int(self.cooling_until - time.time())) if self.is_cooling else 0,
+            "quota_exhausted": self.is_quota_exhausted,
+            "quota_remaining": max(0, int(self.quota_exhausted_until - time.time())) if self.is_quota_exhausted else 0,
             "consecutive_403": self.consecutive_403,
             "processing": self.processing_count,
             "total_completed": self.total_completed,
@@ -189,7 +240,7 @@ def _pick_instance_for_retry(exclude: list[str]) -> Optional[AgentInstance]:
 # ─── Health Checker ──────────────────────────────────────────
 
 async def health_check_loop():
-    """Periodically check agent health."""
+    """Periodically check agent health + self-heal unhealthy instances."""
     async with httpx.AsyncClient(timeout=5.0) as client:
         while True:
             for inst in instances:
@@ -202,15 +253,113 @@ async def health_check_loop():
                         inst.healthy = True
                         inst.extension_connected = data.get("extension_connected", False)
                         inst.flow_key_present = data.get("flow_key_present", False)
-                        # Sync 403 count from agent
-                        agent_403 = data.get("consecutive_403", 0)
-                        if agent_403 > inst.consecutive_403:
-                            inst.consecutive_403 = agent_403
+                        inst.consecutive_403 = data.get("consecutive_403", 0)
                     else:
                         inst.healthy = False
                 except Exception:
                     inst.healthy = False
                 inst.last_health_check = time.time()
+
+            # Self-heal: auto-restart instances that are down
+            # Only for instances that WERE healthy before (not during initial startup)
+            # Require 3 consecutive unhealthy checks (~30s) before triggering
+            UNHEALTHY_THRESHOLD = 3
+            if _recovery_manager:
+                now = time.time()
+                for inst in instances:
+                    if not inst.enabled:
+                        continue
+                    # Instance is working fine — reset everything
+                    if inst.healthy and inst.extension_connected and inst.flow_key_present:
+                        inst.was_healthy_once = True
+                        inst.consecutive_unhealthy = 0
+                        if inst.self_heal_failures > 0:
+                            inst.self_heal_failures = 0
+                            inst.next_self_heal_at = 0
+                        continue
+                    # Skip instances that never finished startup
+                    if not inst.was_healthy_once:
+                        continue
+                    # Count consecutive unhealthy — don't act on momentary blips
+                    inst.consecutive_unhealthy += 1
+                    if inst.consecutive_unhealthy < UNHEALTHY_THRESHOLD:
+                        continue
+                    # Skip if cooling (403 recovery handles that) or quota exhausted
+                    if inst.is_cooling or inst.is_quota_exhausted:
+                        continue
+                    # Skip if already recovering
+                    rec_state = _recovery_manager.states.get(inst.name)
+                    if rec_state and rec_state.recovering:
+                        continue
+                    # Backoff check
+                    if now < inst.next_self_heal_at:
+                        continue
+                    # Trigger self-heal
+                    inst.self_heal_failures += 1
+                    rotate_ipv6 = (inst.self_heal_failures > 1
+                                   and inst.self_heal_failures % 3 == 0)
+                    logger.warning(
+                        "[SelfHeal] %s down for %d checks (healthy=%s, ext=%s, flowKey=%s), "
+                        "attempt #%d%s",
+                        inst.name, inst.consecutive_unhealthy,
+                        inst.healthy, inst.extension_connected,
+                        inst.flow_key_present, inst.self_heal_failures,
+                        " + IPv6 rotate" if rotate_ipv6 else "",
+                    )
+                    _recovery_manager.trigger_self_heal(inst.name, rotate_ipv6=rotate_ipv6)
+                    delay = min(30 * inst.self_heal_failures, 120)
+                    inst.next_self_heal_at = now + delay
+
+            # Proxy health check: detect dead IPv6 (y het chrome_pool.py lines 1017-1025)
+            if _recovery_manager:
+                for inst in instances:
+                    if not inst.enabled:
+                        continue
+                    cfg = CONFIG.get("instances", [])
+                    inst_cfg = next((c for c in cfg if c.get("name") == inst.name), None)
+                    if not inst_cfg or not inst_cfg.get("ipv6"):
+                        continue
+                    proxy_port = 1081 + (inst.api_port - 8100)
+                    health_file = Path(__file__).parent / f".proxy_health_{proxy_port}"
+                    try:
+                        if health_file.exists():
+                            cf = int(health_file.read_text().strip())
+                            if cf >= 5:
+                                rec_state = _recovery_manager.states.get(inst.name)
+                                if rec_state and not rec_state.recovering:
+                                    logger.warning(
+                                        "[ProxyHealth] %s: proxy has %d connect failures → IPv6 DEAD → rotate + restart",
+                                        inst.name, cf,
+                                    )
+                                    _recovery_manager.trigger_self_heal(inst.name, rotate_ipv6=True)
+                    except Exception:
+                        pass
+
+            # Task watchdog: kill stuck tasks (y het chrome_pool.py lines 906-927)
+            now = time.time()
+            for task_id, task in list(tasks.items()):
+                if task["status"] != "processing":
+                    continue
+                started_at = task.get("started_at", 0)
+                if not started_at:
+                    continue
+                elapsed = now - started_at
+                if elapsed > TASK_WATCHDOG_TIMEOUT:
+                    worker_name = task.get("worker", "?")
+                    task["status"] = "failed"
+                    task["error"] = f"Task watchdog timeout after {int(elapsed)}s"
+                    stats["total_failed"] += 1
+                    logger.warning(
+                        "[Watchdog] %s: task %s timeout (%.0fs > %ds) → mark failed, trigger self-heal",
+                        worker_name, task_id[:8], elapsed, TASK_WATCHDOG_TIMEOUT,
+                    )
+                    for inst in instances:
+                        if inst.name == worker_name:
+                            inst.total_failed += 1
+                            if _recovery_manager:
+                                _recovery_manager.trigger_self_heal(inst.name)
+                            break
+
             await asyncio.sleep(10)
 
 
@@ -219,6 +368,7 @@ async def health_check_loop():
 async def _process_image_task(task_id: str, data: dict):
     """Process image generation with retry + rotation."""
     tasks[task_id]["status"] = "processing"
+    tasks[task_id]["started_at"] = time.time()
 
     bearer_token = data["bearer_token"]
     project_id = data["project_id"]
@@ -243,6 +393,7 @@ async def _process_image_task(task_id: str, data: dict):
         tried_instances.append(inst.name)
         tasks[task_id]["worker"] = inst.name
         inst.processing_count += 1
+        inst.apply_model_override(body_json)
 
         try:
             async with httpx.AsyncClient(timeout=IMAGE_TIMEOUT + 10) as client:
@@ -272,10 +423,88 @@ async def _process_image_task(task_id: str, data: dict):
                                task_id[:8], inst.name, attempt + 1, MAX_RETRIES)
                 continue  # Try next instance
 
-            # Non-403 failure → don't retry
+            # 429 quota — try fallback model first, then retry, then mark exhausted
+            if status_code == 429 or "QUOTA" in error.upper():
+                # Step 1: Try fallback model (e.g. GEM_PIX_2 -> NARWHAL)
+                import copy
+                fallback_body = copy.deepcopy(body_json)
+                new_model = _switch_image_model(fallback_body)
+                if new_model:
+                    logger.info("[Gateway] Image %s: 429 on %s, trying fallback model %s",
+                                task_id[:8], inst.name, new_model)
+                    try:
+                        async with httpx.AsyncClient(timeout=IMAGE_TIMEOUT + 10) as client_fb:
+                            resp_fb = await client_fb.post(f"{inst.base_url}/api/generate-image", json={
+                                "bearer_token": bearer_token,
+                                "project_id": project_id,
+                                "body_json": fallback_body,
+                                "flow_url": flow_url,
+                            })
+                            r_fb = resp_fb.json()
+                        if r_fb.get("success"):
+                            inst.active_image_model = new_model
+                            inst.mark_success()
+                            tasks[task_id]["status"] = "completed"
+                            tasks[task_id]["result"] = r_fb.get("result")
+                            stats["total_completed"] += 1
+                            logger.info("[Gateway] Image %s DONE via fallback model %s on %s (model persisted)",
+                                        task_id[:8], new_model, inst.name)
+                            return
+                        fb_status = r_fb.get("status", 500)
+                        fb_error = r_fb.get("error", "")
+                        if fb_status != 429 and "QUOTA" not in fb_error.upper():
+                            inst.mark_failed()
+                            tasks[task_id]["status"] = "failed"
+                            tasks[task_id]["error"] = fb_error
+                            stats["total_failed"] += 1
+                            return
+                        logger.info("[Gateway] Image %s: fallback model %s also 429", task_id[:8], new_model)
+                    except Exception:
+                        pass
+
+                # Step 2: Retry original model a few times
+                quota_confirmed = True
+                for q_retry in range(QUOTA_RETRY_COUNT):
+                    logger.info("[Gateway] Image %s: 429 from %s, retry %d/%d in %ds...",
+                                task_id[:8], inst.name, q_retry + 1, QUOTA_RETRY_COUNT, QUOTA_RETRY_DELAY)
+                    await asyncio.sleep(QUOTA_RETRY_DELAY)
+                    try:
+                        async with httpx.AsyncClient(timeout=IMAGE_TIMEOUT + 10) as client2:
+                            resp2 = await client2.post(f"{inst.base_url}/api/generate-image", json={
+                                "bearer_token": bearer_token,
+                                "project_id": project_id,
+                                "body_json": body_json,
+                                "flow_url": flow_url,
+                            })
+                            r2 = resp2.json()
+                        if r2.get("success"):
+                            inst.mark_success()
+                            tasks[task_id]["status"] = "completed"
+                            tasks[task_id]["result"] = r2.get("result")
+                            stats["total_completed"] += 1
+                            logger.info("[Gateway] Image %s DONE after 429 retry via %s", task_id[:8], inst.name)
+                            return
+                        s2 = r2.get("status", 500)
+                        if s2 != 429 and "QUOTA" not in r2.get("error", "").upper():
+                            quota_confirmed = False
+                            break
+                    except Exception:
+                        pass
+
+                # Step 3: All models + retries failed = confirmed quota exhausted
+                if quota_confirmed:
+                    inst.mark_quota_exhausted()
+                    tasks[task_id]["status"] = "failed"
+                    tasks[task_id]["error"] = f"[429_QUOTA] {error}"
+                    stats["total_failed"] += 1
+                    logger.warning("[Gateway] Image %s: QUOTA EXHAUSTED on %s (all models), cooldown %ds",
+                                   task_id[:8], inst.name, QUOTA_COOLDOWN_SECONDS)
+                    return
+
+            # Non-403/429 failure → don't retry
             inst.mark_failed()
             tasks[task_id]["status"] = "failed"
-            tasks[task_id]["error"] = f"[{status_code}] {error}" if status_code in (401, 429) else error
+            tasks[task_id]["error"] = f"[{status_code}] {error}" if status_code in (401,) else error
             stats["total_failed"] += 1
             logger.warning("[Gateway] Image %s FAILED via %s: [%s] %s", task_id[:8], inst.name, status_code, error[:100])
             return
@@ -283,7 +512,6 @@ async def _process_image_task(task_id: str, data: dict):
         except Exception as e:
             inst.mark_failed()
             logger.exception("[Gateway] Image %s exception via %s", task_id[:8], inst.name)
-            # Continue to retry with another instance
             continue
         finally:
             inst.processing_count -= 1
@@ -323,6 +551,7 @@ def _deep_find_video_url(obj):
 async def _process_video_task(task_id: str, data: dict):
     """Process video generation: submit + poll."""
     tasks[task_id]["status"] = "processing"
+    tasks[task_id]["started_at"] = time.time()
 
     bearer_token = data["bearer_token"]
     body_json = data["body_json"]
@@ -377,10 +606,46 @@ async def _process_video_task(task_id: str, data: dict):
 
             if status_code == 403:
                 inst.mark_403()
+            elif status_code == 429 or "QUOTA" in error.upper():
+                quota_confirmed = True
+                for q_retry in range(QUOTA_RETRY_COUNT):
+                    logger.info("[Gateway] Video %s: 429 from %s, retry %d/%d in %ds...",
+                                task_id[:8], inst.name, q_retry + 1, QUOTA_RETRY_COUNT, QUOTA_RETRY_DELAY)
+                    await asyncio.sleep(QUOTA_RETRY_DELAY)
+                    try:
+                        inst.processing_count += 1
+                        async with httpx.AsyncClient(timeout=VIDEO_SUBMIT_TIMEOUT + 10) as client2:
+                            resp2 = await client2.post(f"{inst.base_url}/api/generate-video", json={
+                                "bearer_token": bearer_token,
+                                "body_json": body_json,
+                                "flow_url": flow_url,
+                            })
+                            r2 = resp2.json()
+                        inst.processing_count -= 1
+                        if r2.get("success"):
+                            result = r2
+                            quota_confirmed = False
+                            break
+                        s2 = r2.get("status", 500)
+                        if s2 != 429 and "QUOTA" not in r2.get("error", "").upper():
+                            quota_confirmed = False
+                            break
+                    except Exception:
+                        inst.processing_count -= 1
+                if quota_confirmed:
+                    inst.mark_quota_exhausted()
+                    tasks[task_id]["status"] = "failed"
+                    tasks[task_id]["error"] = f"[429_QUOTA] {error}"
+                    stats["total_failed"] += 1
+                    logger.warning("[Gateway] Video %s: QUOTA EXHAUSTED on %s, cooldown %ds",
+                                   task_id[:8], inst.name, QUOTA_COOLDOWN_SECONDS)
+                    return
+                if not quota_confirmed and result.get("success"):
+                    break
             else:
                 inst.mark_failed()
             tasks[task_id]["status"] = "failed"
-            tasks[task_id]["error"] = f"[{status_code}] {error}" if status_code in (401, 429) else error
+            tasks[task_id]["error"] = f"[{status_code}] {error}" if status_code in (401,) else error
             if detail:
                 tasks[task_id]["detail"] = detail
             stats["total_failed"] += 1

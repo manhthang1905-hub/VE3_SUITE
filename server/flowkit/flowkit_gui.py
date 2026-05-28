@@ -18,11 +18,13 @@ from pathlib import Path
 sys.stdout.reconfigure(encoding='utf-8', errors='replace')
 
 BASE_DIR = Path(__file__).parent
-TOOL_DIR = BASE_DIR.parent  # server/
-SUITE_ROOT = TOOL_DIR.parent  # VE3_SUITE root
+TOOL_DIR = BASE_DIR.parent  # server/ (or Documents/ on standalone VM)
+SUITE_ROOT = TOOL_DIR.parent  # VE3_SUITE root (or user home on standalone VM)
+_IS_STANDALONE = not (TOOL_DIR / "google_login.py").exists() and (BASE_DIR / "google_login.py").exists()
 LOG_DIR = BASE_DIR / "logs"
-sys.path.insert(0, str(TOOL_DIR))
 sys.path.insert(0, str(BASE_DIR))
+if not _IS_STANDALONE:
+    sys.path.insert(0, str(TOOL_DIR))
 
 GITHUB_REPO = "manhthang1905-hub/VE3_SUITE"
 GITHUB_ZIP_URL = f"https://github.com/{GITHUB_REPO}/archive/refs/heads/main.zip"
@@ -52,19 +54,27 @@ PROTECTED_PATHS = {
 
 
 def _get_auto_version() -> str:
-    try:
-        result = subprocess.run(
-            ["git", "rev-list", "--count", "HEAD"],
-            cwd=str(SUITE_ROOT), capture_output=True, text=True, timeout=5,
-        )
-        if result.returncode == 0:
-            return f"1.0.{result.stdout.strip()}"
-    except Exception:
-        pass
-    for vf in (BASE_DIR / "VERSION.txt", SUITE_ROOT / "VERSION"):
+    if not _IS_STANDALONE:
+        try:
+            result = subprocess.run(
+                ["git", "rev-list", "--count", "HEAD"],
+                cwd=str(SUITE_ROOT), capture_output=True, text=True, timeout=5,
+            )
+            if result.returncode == 0:
+                ver = f"1.0.{result.stdout.strip()}"
+                try:
+                    (BASE_DIR / "VERSION.txt").write_text(ver + "\n", encoding="utf-8")
+                except Exception:
+                    pass
+                return ver
+        except Exception:
+            pass
+    for vf in (BASE_DIR / "VERSION.txt", BASE_DIR / "VERSION"):
         try:
             if vf.exists():
-                return vf.read_text(encoding="utf-8").split("\n")[0].strip()
+                txt = vf.read_text(encoding="utf-8-sig").split("\n")[0].strip()
+                if txt:
+                    return txt
         except Exception:
             pass
     return "?"
@@ -74,8 +84,14 @@ class FlowKitGUI(tk.Tk):
     def __init__(self):
         super().__init__()
         self._version = _get_auto_version()
+        self._remote_version = ""
         self.title(f"FlowKit Server v{self._version}")
-        self.geometry("680x620")
+        gui_w = 700
+        try:
+            gui_h = self.winfo_screenheight() - 40
+        except Exception:
+            gui_h = 1040
+        self.geometry(f"{gui_w}x{gui_h}+0+0")
         self.configure(bg=BG)
         self.resizable(True, True)
         self.minsize(600, 500)
@@ -83,6 +99,7 @@ class FlowKitGUI(tk.Tk):
         self._started = False
         self._processes = []
         self._log_handles = []
+        self._proc_lock = threading.Lock()
         self._logs = []
         self._workers = []
         self._stats = {}
@@ -123,11 +140,12 @@ class FlowKitGUI(tk.Tk):
         hdr.pack(fill='x', padx=10, pady=(8, 4))
         tk.Label(hdr, text="FlowKit Server", font=('Segoe UI', 14, 'bold'),
                  fg=BLUE, bg=BG).pack(side='left')
-        tk.Label(hdr, text=f"v{self._version}", font=('Consolas', 9),
-                 fg=FG2, bg=BG).pack(side='left', padx=(6, 0))
+        self._version_label = tk.Label(hdr, text=f"v{self._version}", font=('Consolas', 9),
+                 fg=FG2, bg=BG)
+        self._version_label.pack(side='left', padx=(6, 0))
 
         self._update_btn = tk.Button(
-            hdr, text="UPDATE", command=self._run_update,
+            hdr, text="Check Update", command=self._on_check_update,
             bg='#0984e3', fg='#fff', font=('Segoe UI', 9, 'bold'),
             relief='flat', cursor='hand2', padx=10)
         self._update_btn.pack(side='right')
@@ -462,61 +480,171 @@ class FlowKitGUI(tk.Tk):
                 self._log("Setting up SOCKS5 proxies for each IPv6...", "INFO")
                 self._setup_ipv6_proxies(ipv6_map, instances, PROXY_BASE_PORT, proxy_port_map)
 
-        # Phase 1: Login accounts (skip if no accounts entered)
+        # Save accounts mapping for recovery auto-login
         if accounts:
-            self._log(f"Phase 1: Login {len(accounts)} accounts into {len(instances)} Chrome copies...", "INFO")
+            account_map = {}
             for i, inst in enumerate(instances):
-                if not inst.get('enabled', True) or i >= len(self._chrome_dirs):
+                if not inst.get('enabled', True):
                     continue
-                chrome_dir = self._chrome_dirs[i]
-                account = accounts[i % len(accounts)]
-                proxy_arg = f"socks5://127.0.0.1:{proxy_port_map[i]}" if i in proxy_port_map else ""
-                self._log(f"[{inst['name']}] Login: {account['email']}...", "INFO")
-                self._do_chrome_login(chrome_dir, account, inst, proxy_arg)
+                acc = accounts[i % len(accounts)]
+                account_map[inst["name"]] = {
+                    "id": acc["email"],
+                    "password": acc["password"],
+                    "totp_secret": acc.get("totp_secret", ""),
+                }
+            try:
+                accounts_file = BASE_DIR / "config" / ".flow_accounts.json"
+                accounts_file.parent.mkdir(exist_ok=True)
+                accounts_file.write_text(json.dumps(account_map), encoding="utf-8")
+            except Exception:
+                pass
+
+        # Per-instance pipeline: each instance independently does
+        # setup_chrome → start_agent → wait_ready → start_chrome → apply_cdp
+        setup_concurrency = max(1, int(os.getenv("CHROME_SETUP_CONCURRENCY", "6")))
+        setup_stagger = max(0.0, float(os.getenv("CHROME_SETUP_STAGGER_SEC", "3.0")))
+
+        setup_sem = threading.Semaphore(setup_concurrency)
+        ready_count = [0]
+        ready_lock = threading.Lock()
+        ready_event = threading.Event()
+
+        enabled = [(i, inst) for i, inst in enumerate(instances)
+                   if inst.get('enabled', True) and i < len(self._chrome_dirs)]
+
+        self._log(f"Starting {len(enabled)} instance pipelines (concurrency={setup_concurrency})...", "INFO")
+
+        def _instance_pipeline(idx, inst_cfg):
+            name = inst_cfg['name']
+            chrome_dir = self._chrome_dirs[idx]
+            ext_dir = BASE_DIR / inst_cfg['extension_dir']
+            debug_port = 19200 + (inst_cfg['api_port'] - 8100)
+            proxy_arg = f"socks5://127.0.0.1:{proxy_port_map[idx]}" if idx in proxy_port_map else ""
+
+            account_info = None
+            if accounts:
+                acc = accounts[idx % len(accounts)]
+                account_info = {
+                    'id': acc['email'],
+                    'password': acc['password'],
+                    'totp_secret': acc.get('totp_secret', ''),
+                }
+
+            win_args = []
+            try:
+                from launcher import _calc_chrome_layout, _resolve_chrome_slot, CONFIG as _lcfg
+                instances_cfg = [ii for ii in _lcfg.get("instances", []) if ii.get("enabled", True)]
+                slot = _resolve_chrome_slot(name)
+                x, y, w, h = _calc_chrome_layout(slot, len(instances_cfg))
+                win_args = [f"--window-position={x},{y}", f"--window-size={w},{h}", "--start-maximized"]
+            except Exception:
+                pass
+
+            # ── Step 1: DrissionPage setup (login + navigate + project) ──
+            setup_ok = False
+            attempt = 0
+            with setup_sem:
+                while not setup_ok:
+                    attempt += 1
+                    if attempt > 1:
+                        # Kill zombie Chrome truoc khi retry
+                        from chrome_setup import _kill_chrome_for_dir
+                        _kill_chrome_for_dir(chrome_dir)
+                        delay = min(10 * attempt, 60)
+                        self._log(f"[{name}] Retry setup (lan {attempt}), cho {delay}s...", "WARN")
+                        time.sleep(delay)
+                    try:
+                        from chrome_setup import setup_chrome
+                        ok = setup_chrome(
+                            chrome_dir=chrome_dir,
+                            ext_dir=ext_dir,
+                            port=debug_port,
+                            account=account_info,
+                            proxy_arg=proxy_arg,
+                            window_args=win_args,
+                            log_func=lambda msg, n=name: self._log(f"[{n}] {msg}", "INFO"),
+                            instance_name=name,
+                        )
+                        if ok:
+                            self._log(f"[{name}] Chrome setup OK", "OK")
+                            setup_ok = True
+                    except Exception as e:
+                        self._log(f"[{name}] Setup error: {e}", "ERROR")
+
+            # ── Step 2: Start agent (port 9222+i now free) ──
+            self._start_agent(inst_cfg)
+            if self._wait_agent_ready(inst_cfg['api_port'], timeout=20):
+                self._log(f"[{name}] Agent ready", "OK")
+            else:
+                self._log(f"[{name}] Agent not ready after 20s", "WARN")
+
+            # ── Step 3: Start Chrome subprocess + apply CDP ──
+            self._start_chrome(chrome_dir, inst_cfg, proxy_arg)
+            time.sleep(5)
+            try:
+                from chrome_setup import apply_chrome_cdp
+                apply_chrome_cdp(
+                    debug_port=debug_port,
+                    ext_dir=ext_dir,
+                    instance_name=name,
+                    window_args=win_args,
+                    log_func=lambda msg, n=name: self._log(f"[{n}] {msg}", "INFO"),
+                )
+            except Exception as e:
+                self._log(f"[{name}] CDP apply error: {e}", "WARN")
+
+            self._log(f"[{name}] Instance READY", "OK")
+            with ready_lock:
+                ready_count[0] += 1
+            ready_event.set()
+
+        # Launch all pipelines with stagger
+        pipeline_threads = []
+        for i, inst in enabled:
+            t = threading.Thread(target=_instance_pipeline, args=(i, inst), daemon=True)
+            t.start()
+            pipeline_threads.append(t)
+            if setup_stagger > 0:
+                time.sleep(setup_stagger)
+
+        # Gateway starts when first instance is ready (or 120s timeout)
+        if ready_event.wait(timeout=120):
+            self._log("Starting Gateway (instance ready)...", "OK")
         else:
-            self._log("Phase 1: Skipped login (no accounts configured)", "INFO")
-
-        # Phase 2: Start agents
-        self._log("Phase 2: Starting FlowKit agents...", "INFO")
-        for i, inst in enumerate(instances):
-            if not inst.get('enabled', True) or i >= len(self._chrome_dirs):
-                continue
-            self._start_agent(inst)
-            time.sleep(1)
-
-        time.sleep(3)
-
-        # Phase 3: Start Chrome with extensions
-        self._log("Phase 3: Starting Chrome instances...", "INFO")
-        for i, inst in enumerate(instances):
-            if not inst.get('enabled', True) or i >= len(self._chrome_dirs):
-                continue
-            proxy_arg = f"socks5://127.0.0.1:{proxy_port_map[i]}" if i in proxy_port_map else ""
-            self._start_chrome(self._chrome_dirs[i], inst, proxy_arg)
-            time.sleep(2)
-
-        time.sleep(5)
-
-        # Phase 4: Start gateway
-        self._log("Phase 4: Starting Gateway...", "INFO")
+            self._log("Starting Gateway (timeout — no instances ready yet)...", "WARN")
         self._start_gateway(gateway_port)
 
-        time.sleep(3)
-        self._log(f"FlowKit Server READY on port {gateway_port}", "OK")
-
-        # Start monitoring
+        # Start monitoring immediately so GUI shows instance status during startup
         self._poll_thread = threading.Thread(target=self._poll_loop, daemon=True)
         self._poll_thread.start()
 
+        # Wait for remaining pipelines
+        for t in pipeline_threads:
+            t.join(timeout=180)
+
+        with ready_lock:
+            total_ready = ready_count[0]
+        self._log(f"FlowKit Server READY — {total_ready}/{len(enabled)} instances, gateway on port {gateway_port}", "OK")
+
+    def _clear_chrome_profile(self, chrome_dir: Path, inst_name: str):
+        """Xoa toan bo du lieu Chrome profile de login lai tu dau.
+        Extension khong bi anh huong vi load tu thu muc ngoai (--load-extension)."""
+        profile_default = chrome_dir / "Data" / "profile" / "Default"
+        if profile_default.exists():
+            shutil.rmtree(str(profile_default), ignore_errors=True)
+        self._log(f"[{inst_name}] Cleared Chrome profile data", "INFO")
+
     def _do_chrome_login(self, chrome_dir: Path, account: dict, inst: dict, proxy_arg: str = ""):
-        """Login Google account into Chrome profile using server's google_login.py."""
+        """Login Google account into Chrome profile using google_login.py."""
         try:
-            login_module = TOOL_DIR / "google_login.py"
+            login_module = BASE_DIR / "google_login.py"
+            if not login_module.exists():
+                login_module = TOOL_DIR / "google_login.py"
             if not login_module.exists():
                 self._log(f"[{inst['name']}] google_login.py not found, skip login", "WARN")
                 return
 
-            sys.path.insert(0, str(TOOL_DIR))
+            sys.path.insert(0, str(login_module.parent))
             from google_login import login_google_chrome
 
             portable = str(chrome_dir / "GoogleChromePortable.exe")
@@ -538,7 +666,18 @@ class FlowKitGUI(tk.Tk):
             if success:
                 self._log(f"[{inst['name']}] Login OK: {account['email']}", "OK")
             else:
-                self._log(f"[{inst['name']}] Login FAILED: {account['email']}", "ERROR")
+                self._log(f"[{inst['name']}] Login FAILED, clearing profile and retrying...", "WARN")
+                self._clear_chrome_profile(chrome_dir, inst['name'])
+                success = login_google_chrome(
+                    account_info=account_info,
+                    chrome_portable=portable,
+                    worker_id=worker_id,
+                    proxy_arg=proxy_arg,
+                )
+                if success:
+                    self._log(f"[{inst['name']}] Retry Login OK: {account['email']}", "OK")
+                else:
+                    self._log(f"[{inst['name']}] Retry Login FAILED: {account['email']}", "ERROR")
 
         except Exception as e:
             self._log(f"[{inst['name']}] Login error: {e}", "ERROR")
@@ -557,13 +696,46 @@ class FlowKitGUI(tk.Tk):
             except Exception:
                 pass
 
+        # Write fresh Preferences (zoom 50%, session restore prevention)
+        try:
+            from launcher import _write_chrome_prefs
+            _write_chrome_prefs(chrome_dir)
+        except Exception:
+            pass
+
+        # Regenerate fingerprint (includes zoom CSS) before launch
+        try:
+            from launcher import generate_fingerprint
+            generate_fingerprint(ext_dir, inst["name"])
+        except Exception:
+            pass
+
+        debug_port = 19200 + (inst["api_port"] - 8100)
         args = [
             str(portable),
             f"--load-extension={ext_dir}",
+            f"--remote-debugging-port={debug_port}",
             "--disable-background-timer-throttling",
             "--disable-renderer-backgrounding",
             "--disable-backgrounding-occluded-windows",
+            "--disable-session-crashed-bubble",
+            "--hide-crash-restore-bubble",
+            "--no-first-run",
+            "--no-default-browser-check",
         ]
+
+        # Window layout — same config as launcher
+        try:
+            from launcher import _calc_chrome_layout, _resolve_chrome_slot, CONFIG as _lcfg
+            instances_cfg = [i for i in _lcfg.get("instances", []) if i.get("enabled", True)]
+            slot = _resolve_chrome_slot(inst["name"])
+            x, y, w, h = _calc_chrome_layout(slot, len(instances_cfg))
+            args.append(f"--window-position={x},{y}")
+            args.append(f"--window-size={w},{h}")
+            args.append("--start-maximized")
+        except Exception:
+            pass
+
         if proxy_arg:
             args.append(f"--proxy-server={proxy_arg}")
         # Open directly to Flow page so extension can capture flow key
@@ -571,7 +743,8 @@ class FlowKitGUI(tk.Tk):
 
         proc = subprocess.Popen(args, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
                                 creationflags=subprocess.CREATE_NEW_PROCESS_GROUP)
-        self._processes.append(proc)
+        with self._proc_lock:
+            self._processes.append(proc)
         log_extra = f" proxy={proxy_arg}" if proxy_arg else ""
         self._log(f"[{inst['name']}] Chrome started (PID {proc.pid}){log_extra}", "INFO")
 
@@ -581,10 +754,13 @@ class FlowKitGUI(tk.Tk):
         ipv6_map: {index: {'ip': '2001:...', 'gateway': '2001:...:1'}}
         """
         try:
-            from ipv6_proxy import IPv6SocksProxy
+            from modules.ipv6_proxy import IPv6SocksProxy
         except ImportError:
-            self._log("ipv6_proxy not found, cannot start SOCKS5 proxies", "ERROR")
-            return
+            try:
+                from ipv6_proxy import IPv6SocksProxy
+            except ImportError:
+                self._log("ipv6_proxy module not found, cannot start SOCKS5 proxies", "ERROR")
+                return
 
         iface = "Ethernet"
         self._ipv6_proxies = []
@@ -676,7 +852,8 @@ class FlowKitGUI(tk.Tk):
 
         log_file = LOG_DIR / f"{inst['name']}.log"
         fh = open(log_file, 'a', encoding='utf-8')
-        self._log_handles.append(fh)
+        with self._proc_lock:
+            self._log_handles.append(fh)
 
         proc = subprocess.Popen(
             [sys.executable, "-m", "uvicorn", "agent.main:app",
@@ -686,14 +863,31 @@ class FlowKitGUI(tk.Tk):
             stdout=fh, stderr=fh,
             creationflags=subprocess.CREATE_NEW_PROCESS_GROUP,
         )
-        self._processes.append(proc)
+        with self._proc_lock:
+            self._processes.append(proc)
         self._log(f"[{inst['name']}] Agent started: port {inst['api_port']} (PID {proc.pid})", "INFO")
+
+    def _wait_agent_ready(self, api_port: int, timeout: float = 20.0) -> bool:
+        """Poll agent /health endpoint until it responds."""
+        import urllib.request
+        url = f"http://127.0.0.1:{api_port}/health"
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            try:
+                with urllib.request.urlopen(url, timeout=2) as resp:
+                    if resp.status == 200:
+                        return True
+            except Exception:
+                pass
+            time.sleep(1.0)
+        return False
 
     def _start_gateway(self, port: int):
         """Start the gateway."""
         log_file = LOG_DIR / "gateway.log"
         fh = open(log_file, 'a', encoding='utf-8')
-        self._log_handles.append(fh)
+        with self._proc_lock:
+            self._log_handles.append(fh)
 
         proc = subprocess.Popen(
             [sys.executable, "-m", "uvicorn", "gateway:app",
@@ -703,7 +897,8 @@ class FlowKitGUI(tk.Tk):
             stdout=fh, stderr=fh,
             creationflags=subprocess.CREATE_NEW_PROCESS_GROUP,
         )
-        self._processes.append(proc)
+        with self._proc_lock:
+            self._processes.append(proc)
         self._log(f"Gateway started: port {port} (PID {proc.pid})", "INFO")
 
     def _on_stop(self):
@@ -711,7 +906,7 @@ class FlowKitGUI(tk.Tk):
         self._log("Stopping FlowKit Server...", "WARN")
         self._started = False
 
-        # Kill processes
+        # Kill managed subprocesses (agents, gateway)
         for proc in self._processes:
             try:
                 proc.kill()
@@ -727,7 +922,16 @@ class FlowKitGUI(tk.Tk):
                 pass
         self._log_handles.clear()
 
-        # Kill Chrome Portable
+        self._kill_all_chrome()
+        self._kill_flowkit_python()
+
+        self._start_btn.config(state='normal', bg=GREEN)
+        self._stop_btn.config(state='disabled')
+        self._log("FlowKit Server stopped.", "WARN")
+
+    def _kill_all_chrome(self):
+        """Kill all GoogleChromePortable chrome.exe — dual strategy like old server."""
+        # Step 1: WMIC terminate
         try:
             subprocess.run(
                 ['wmic', 'process', 'where',
@@ -739,9 +943,73 @@ class FlowKitGUI(tk.Tk):
         except Exception:
             pass
 
-        self._start_btn.config(state='normal', bg=GREEN)
-        self._stop_btn.config(state='disabled')
-        self._log("FlowKit Server stopped.", "WARN")
+        # Step 2: taskkill /F /T tree kill (catches child processes WMIC missed)
+        try:
+            proc = subprocess.run(
+                ['wmic', 'process', 'where',
+                 "name='chrome.exe' and CommandLine like '%GoogleChromePortable%'",
+                 'get', 'ProcessId', '/FORMAT:CSV'],
+                capture_output=True, text=True, timeout=8,
+                creationflags=0x08000000,
+            )
+            for line in (proc.stdout or "").splitlines():
+                s = line.strip()
+                if not s or not any(c.isdigit() for c in s):
+                    continue
+                parts = s.rsplit(',', 1)
+                if len(parts) == 2:
+                    try:
+                        pid = int(parts[1].strip())
+                        subprocess.run(
+                            ['taskkill', '/F', '/T', '/PID', str(pid)],
+                            capture_output=True, timeout=5,
+                            creationflags=0x08000000,
+                        )
+                    except Exception:
+                        pass
+        except Exception:
+            pass
+
+        # Step 3: Kill GoogleChromePortable.exe launcher itself
+        try:
+            subprocess.run(
+                ['taskkill', '/F', '/IM', 'GoogleChromePortable.exe'],
+                capture_output=True, timeout=5,
+                creationflags=0x08000000,
+            )
+        except Exception:
+            pass
+
+    def _kill_flowkit_python(self):
+        """Kill python subprocesses spawned by FlowKit (agent, gateway)."""
+        markers = ("flowkit\\agent", "flowkit/agent", "flowkit\\gateway", "flowkit/gateway")
+        try:
+            proc = subprocess.run(
+                ['wmic', 'process', 'where',
+                 'name="python.exe" or name="pythonw.exe"',
+                 'get', 'ProcessId,CommandLine', '/FORMAT:CSV'],
+                capture_output=True, text=True, timeout=8,
+                creationflags=0x08000000,
+            )
+            for line in (proc.stdout or "").splitlines():
+                s = line.strip()
+                if not s:
+                    continue
+                if not any(m in s.lower() for m in markers):
+                    continue
+                parts = s.rsplit(',', 1)
+                if len(parts) == 2:
+                    try:
+                        pid = int(parts[1].strip())
+                        subprocess.run(
+                            ['taskkill', '/F', '/T', '/PID', str(pid)],
+                            capture_output=True, timeout=5,
+                            creationflags=0x08000000,
+                        )
+                    except Exception:
+                        pass
+        except Exception:
+            pass
 
     # ============================================================
     # Monitoring
@@ -779,12 +1047,12 @@ class FlowKitGUI(tk.Tk):
         for i, w in enumerate(self._workers):
             card = tk.Frame(self._workers_frame, bg=BG, bd=1, relief='solid',
                             highlightbackground=BORDER)
-            card.pack(side='left', fill='y', padx=4, pady=4, expand=True)
+            card.pack(side='left', fill='y', padx=2, pady=2, expand=True)
 
             # Status color
             if w.get('cooling'):
                 border_color = ORANGE
-                status_text = f"COOLING ({w.get('cooling_remaining', 0)}s)"
+                status_text = f"COOL {w.get('cooling_remaining', 0)}s"
                 status_fg = ORANGE
             elif w.get('available'):
                 border_color = GREEN
@@ -801,23 +1069,23 @@ class FlowKitGUI(tk.Tk):
 
             card.config(highlightbackground=border_color)
 
-            tk.Label(card, text=w.get('name', '?'), font=('Segoe UI', 11, 'bold'),
-                     fg=FG, bg=BG).pack(padx=8, pady=(6, 2))
-            tk.Label(card, text=status_text, font=('Segoe UI', 9, 'bold'),
+            tk.Label(card, text=w.get('name', '?'), font=('Segoe UI', 9, 'bold'),
+                     fg=FG, bg=BG).pack(padx=6, pady=(4, 1))
+            tk.Label(card, text=status_text, font=('Segoe UI', 8, 'bold'),
                      fg=status_fg, bg=BG).pack()
 
             ext = "Ext: OK" if w.get('extension_connected') else "Ext: --"
             ext_fg = GREEN if w.get('extension_connected') else RED
-            tk.Label(card, text=ext, font=('Consolas', 9), fg=ext_fg, bg=BG).pack()
+            tk.Label(card, text=ext, font=('Consolas', 8), fg=ext_fg, bg=BG).pack()
 
             key = "Key: OK" if w.get('flow_key_present') else "Key: --"
             key_fg = GREEN if w.get('flow_key_present') else FG2
-            tk.Label(card, text=key, font=('Consolas', 9), fg=key_fg, bg=BG).pack()
+            tk.Label(card, text=key, font=('Consolas', 8), fg=key_fg, bg=BG).pack()
 
             tk.Label(card, text=f"403: {w.get('consecutive_403', 0)}",
-                     font=('Consolas', 9), fg=FG2, bg=BG).pack()
+                     font=('Consolas', 8), fg=FG2, bg=BG).pack()
             tk.Label(card, text=f"Done: {w.get('total_completed', 0)} | Fail: {w.get('total_failed', 0)}",
-                     font=('Consolas', 9), fg=FG2, bg=BG).pack(pady=(0, 6))
+                     font=('Consolas', 8), fg=FG2, bg=BG).pack(pady=(0, 4))
 
     # ============================================================
     # Logging
@@ -842,12 +1110,84 @@ class FlowKitGUI(tk.Tk):
     # ============================================================
     # Update
     # ============================================================
+
+    def _get_remote_version(self) -> str:
+        """Get remote version from GitHub (commit count or VERSION file)."""
+        import ssl
+        from urllib.request import urlopen, Request
+        ctx = ssl.create_default_context()
+        ctx.check_hostname = False
+        ctx.verify_mode = ssl.CERT_NONE
+        api_url = f"https://api.github.com/repos/{GITHUB_REPO}/commits?sha=main&per_page=1"
+        try:
+            req = Request(api_url, headers={"User-Agent": "FlowKit-Updater"})
+            with urlopen(req, timeout=15, context=ctx) as resp:
+                link = resp.headers.get("Link", "")
+                if 'rel="last"' in link:
+                    import re
+                    m = re.search(r'[&?]page=(\d+)>;\s*rel="last"', link)
+                    if m:
+                        return f"1.0.{m.group(1)}"
+        except Exception as e:
+            print(f"[UPDATE] GitHub API error: {e}")
+        try:
+            url = f"https://raw.githubusercontent.com/{GITHUB_REPO}/main/server/flowkit/VERSION.txt"
+            req = Request(url, headers={"User-Agent": "FlowKit-Updater"})
+            with urlopen(req, timeout=15, context=ctx) as resp:
+                return resp.read().decode("utf-8").strip()
+        except Exception as e:
+            print(f"[UPDATE] GitHub raw error: {e}")
+            return ""
+
+    def _on_check_update(self):
+        self._update_btn.config(text="Checking...", state="disabled", fg='#FFA500')
+        threading.Thread(target=self._check_update_thread, daemon=True).start()
+
+    def _check_update_thread(self):
+        try:
+            local = self._version
+            remote = self._get_remote_version()
+            self._remote_version = remote
+            if not remote:
+                self.after(0, lambda: self._update_btn.config(
+                    text="Loi ket noi", state="normal", bg=RED, fg='#fff'))
+                self.after(5000, lambda: self._update_btn.config(
+                    text="Check Update", bg='#0984e3', fg='#fff'))
+                return
+
+            has_update = False
+            try:
+                local_n = int(local.rsplit(".", 1)[-1])
+                remote_n = int(remote.rsplit(".", 1)[-1])
+                has_update = remote_n > local_n
+            except (ValueError, IndexError):
+                has_update = remote != local
+
+            if has_update:
+                self.after(0, lambda: self._update_btn.config(
+                    text=f"Update v{remote}", state="normal",
+                    bg='#2E7D32', fg='#fff',
+                    command=self._run_update))
+                self.after(0, lambda: self._version_label.config(
+                    text=f"v{local}  >>  v{remote}", fg='#FFA500'))
+            else:
+                self.after(0, lambda: self._update_btn.config(
+                    text="Da moi nhat", state="normal", bg=GREEN, fg='#fff'))
+                self.after(5000, lambda: self._update_btn.config(
+                    text="Check Update", bg='#0984e3', fg='#fff'))
+        except Exception as e:
+            self.after(0, lambda: self._update_btn.config(
+                text="Loi", state="normal", bg=RED, fg='#fff'))
+            print(f"Check update error: {e}")
+            self.after(5000, lambda: self._update_btn.config(
+                text="Check Update", bg='#0984e3', fg='#fff'))
+
     def _run_update(self):
         import urllib.request
         import zipfile
 
         def do_update():
-            self._update_btn.config(state="disabled", text="DANG CAP NHAT...", bg='#666')
+            self._update_btn.config(state="disabled", text="Dang cap nhat...", bg='#666', fg='#fff')
 
             try:
                 git_available = False
@@ -860,20 +1200,21 @@ class FlowKitGUI(tk.Tk):
                 except Exception:
                     pass
 
+                git_root = SUITE_ROOT if not _IS_STANDALONE else BASE_DIR
                 if git_available:
                     result = subprocess.run(
                         ["git", "remote", "get-url", "origin"],
-                        cwd=str(SUITE_ROOT), capture_output=True, text=True, timeout=10,
+                        cwd=str(git_root), capture_output=True, text=True, timeout=10,
                     )
                     if result.returncode != 0:
                         subprocess.run(
                             ["git", "remote", "add", "origin", GITHUB_GIT_URL],
-                            cwd=str(SUITE_ROOT), capture_output=True, timeout=10,
+                            cwd=str(git_root), capture_output=True, timeout=10,
                         )
                     elif GITHUB_GIT_URL not in result.stdout.strip():
                         subprocess.run(
                             ["git", "remote", "set-url", "origin", GITHUB_GIT_URL],
-                            cwd=str(SUITE_ROOT), capture_output=True, timeout=10,
+                            cwd=str(git_root), capture_output=True, timeout=10,
                         )
 
                     for cmd in [
@@ -881,7 +1222,7 @@ class FlowKitGUI(tk.Tk):
                         ["git", "checkout", "main"],
                         ["git", "reset", "--hard", "origin/main"],
                     ]:
-                        subprocess.run(cmd, cwd=str(SUITE_ROOT), capture_output=True, text=True, timeout=120)
+                        subprocess.run(cmd, cwd=str(git_root), capture_output=True, text=True, timeout=120)
                 else:
                     import ssl
                     ssl_context = ssl.create_default_context()
@@ -906,6 +1247,10 @@ class FlowKitGUI(tk.Tk):
                             shutil.copy2(str(py_file), str(BASE_DIR / py_file.name))
                         for bat_file in src_flowkit.glob("*.bat"):
                             shutil.copy2(str(bat_file), str(BASE_DIR / bat_file.name))
+                        for txt_file in ("VERSION.txt",):
+                            src_txt = src_flowkit / txt_file
+                            if src_txt.exists():
+                                shutil.copy2(str(src_txt), str(BASE_DIR / txt_file))
 
                         src_agent = src_flowkit / "agent"
                         dst_agent = BASE_DIR / "agent"
@@ -930,25 +1275,57 @@ class FlowKitGUI(tk.Tk):
                     src_server_root = extract_dir / "VE3_SUITE-main" / "server"
                     for shared_file in ("google_login.py", "requirements.txt"):
                         src = src_server_root / shared_file
-                        dst = TOOL_DIR / shared_file
                         if src.exists():
-                            shutil.copy2(str(src), str(dst))
+                            shutil.copy2(str(src), str(BASE_DIR / shared_file))
+                    src_ipv6 = src_server_root / "modules" / "ipv6_proxy.py"
+                    if src_ipv6.exists():
+                        shutil.copy2(str(src_ipv6), str(BASE_DIR / "ipv6_proxy.py"))
 
                     if zip_path.exists():
                         zip_path.unlink()
                     if extract_dir.exists():
                         shutil.rmtree(str(extract_dir))
 
-                self._update_btn.config(text="XONG - KHOI DONG LAI...", bg='#00ff88')
-                self.after(1000, lambda: os.execv(sys.executable, [sys.executable] + sys.argv))
+                remote_ver = getattr(self, '_remote_version', '') or self._get_remote_version()
+                if remote_ver:
+                    try:
+                        (BASE_DIR / "VERSION.txt").write_text(remote_ver + "\n", encoding="utf-8")
+                    except Exception:
+                        pass
+                    if not _IS_STANDALONE:
+                        try:
+                            (SUITE_ROOT / "VERSION").write_text(remote_ver + "\n", encoding="utf-8")
+                        except Exception:
+                            pass
+
+                new_ver = _get_auto_version()
+                self._version = new_ver
+                self.after(0, lambda: self._version_label.config(
+                    text=f"v{new_ver}", fg=GREEN))
+                self.after(0, lambda: self._update_btn.config(
+                    text=f"v{new_ver} OK! Restart...", bg='#00ff88', fg='#000'))
+                self.after(0, lambda: self.title(f"FlowKit Server v{new_ver}"))
+
+                def _restart_after_update():
+                    for proc in self._processes:
+                        try:
+                            proc.kill()
+                        except Exception:
+                            pass
+                    self._processes.clear()
+                    os.execv(sys.executable, [sys.executable] + sys.argv)
+
+                self.after(2000, _restart_after_update)
 
             except Exception as e:
-                self._update_btn.config(text="LOI", bg=RED)
+                self._update_btn.config(text="LOI", bg=RED, fg='#fff')
                 print(f"Update error: {e}")
                 from tkinter import messagebox
                 messagebox.showerror("Loi cap nhat", f"Loi: {e}\n\nThu tai thu cong:\n{GITHUB_ZIP_URL}")
             finally:
-                self.after(3000, lambda: self._update_btn.config(state="normal", text="UPDATE", bg='#0984e3'))
+                self.after(5000, lambda: self._update_btn.config(
+                    state="normal", text="Check Update", bg='#0984e3', fg='#fff',
+                    command=self._on_check_update))
 
         threading.Thread(target=do_update, daemon=True).start()
 
@@ -958,7 +1335,11 @@ class FlowKitGUI(tk.Tk):
     def _on_close(self):
         if self._started:
             self._on_stop()
-        self.destroy()
+        try:
+            self.destroy()
+        except Exception:
+            pass
+        os._exit(0)
 
 
 def main():
