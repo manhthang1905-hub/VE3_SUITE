@@ -534,21 +534,11 @@ class FlowKitGUI(tk.Tk):
         self._poll_thread.start()
 
     def _clear_chrome_profile(self, chrome_dir: Path, inst_name: str):
-        """Xoa du lieu Chrome profile de login lai tu dau."""
-        profile_dir = chrome_dir / "Data" / "profile" / "Default"
-        if not profile_dir.exists():
-            return
-        keep = {"Extensions", "Local Extension Settings"}
-        for item in profile_dir.iterdir():
-            if item.name in keep:
-                continue
-            try:
-                if item.is_dir():
-                    shutil.rmtree(str(item))
-                else:
-                    item.unlink()
-            except Exception:
-                pass
+        """Xoa toan bo du lieu Chrome profile de login lai tu dau.
+        Extension khong bi anh huong vi load tu thu muc ngoai (--load-extension)."""
+        profile_default = chrome_dir / "Data" / "profile" / "Default"
+        if profile_default.exists():
+            shutil.rmtree(str(profile_default), ignore_errors=True)
         self._log(f"[{inst_name}] Cleared Chrome profile data", "INFO")
 
     def _do_chrome_login(self, chrome_dir: Path, account: dict, inst: dict, proxy_arg: str = ""):
