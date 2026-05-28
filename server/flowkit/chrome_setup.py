@@ -275,46 +275,56 @@ def _dismiss_popups(page):
 
 
 def _click_new_project(page, log=None) -> bool:
-    """Click 'Du an moi' — y nguyen server cu."""
+    """Click 'Du an moi' — dung page.ele() thay vi run_js (de tin cay hon)."""
+    # 1. Tim button co text add_2 (material icon cua "New project")
     try:
-        result = page.run_js("""
-            (function() {
-                var elems = document.querySelectorAll('button, a, [role="button"]');
-                var newTexts = ['add_2','New project','Dự án mới','Novo projeto','Proyek baru',
-                    'Neues Projekt','Nouveau projet','Nuevo proyecto','Nuovo progetto',
-                    'Новый проект','新しいプロジェクト','新建项目','새 프로젝트','Yeni proje'];
-                var createTexts = ['Create with Flow','Tạo với Flow','Criar com o Flow',
-                    'Buat dengan Flow','Mit Flow erstellen','Créer avec Flow',
-                    'Crear con Flow','Crea con Flow','Создать в Flow'];
-                for (var b of elems) {
-                    var t = (b.textContent || '').trim();
-                    for (var k of newTexts) { if (t.indexOf(k) >= 0) { b.click(); return 'CLICKED_NEW:' + t.substring(0, 40); } }
-                }
-                for (var b of elems) {
-                    var t = (b.textContent || '').trim();
-                    for (var k of createTexts) { if (t.indexOf(k) >= 0) { b.click(); return 'CLICKED_CREATE:' + t.substring(0, 40); } }
-                }
-                var all = document.querySelectorAll('*');
-                for (var el of all) {
-                    var ar = el.getAttribute('aria-label') || '';
-                    if (ar.indexOf('New project') >= 0 || ar.indexOf('new project') >= 0 ||
-                        ar.indexOf('Dự án mới') >= 0 || ar.indexOf('add_2') >= 0) {
-                        el.click(); return 'CLICKED_ARIA:' + ar.substring(0, 40);
-                    }
-                }
-                var debug = [];
-                for (var b of elems) {
-                    var t = (b.textContent || '').trim().substring(0, 50);
-                    if (t) debug.push(b.tagName + ':' + t);
-                }
-                return 'NOT_FOUND|' + debug.slice(0, 15).join(';;');
-            })();
-        """)
-        if log and result and 'NOT_FOUND' in str(result):
-            log("Button scan: %s" % str(result)[:200])
-        return result and "CLICKED" in str(result)
+        btn = page.ele('tag:button@@text():add_2', timeout=2)
+        if btn:
+            btn.click()
+            if log:
+                log("Clicked button (add_2)")
+            return True
     except Exception:
-        return False
+        pass
+
+    # 2. Tim button "New project" / "Du an moi"
+    for text in ['New project', 'Dự án mới', 'Novo projeto', 'Proyek baru',
+                 'Neues Projekt', 'Nouveau projet', 'Nuevo proyecto']:
+        try:
+            btn = page.ele('tag:button@@text():%s' % text, timeout=1)
+            if btn:
+                btn.click()
+                if log:
+                    log("Clicked button (%s)" % text)
+                return True
+        except Exception:
+            pass
+
+    # 3. Tim "Create with Flow" / "Tao voi Flow"
+    for text in ['Create with Flow', 'Tạo với Flow', 'Criar com o Flow',
+                 'Buat dengan Flow']:
+        try:
+            btn = page.ele('tag:button@@text():%s' % text, timeout=1)
+            if btn:
+                btn.click()
+                if log:
+                    log("Clicked button (%s)" % text)
+                return True
+        except Exception:
+            pass
+
+    # 4. Fallback: bat ky element nao co text add_2
+    try:
+        el = page.ele('text:add_2', timeout=1)
+        if el:
+            el.click()
+            if log:
+                log("Clicked element (text add_2)")
+            return True
+    except Exception:
+        pass
+
+    return False
 
 
 def _create_new_project(page, log) -> bool:
@@ -587,6 +597,11 @@ def setup_chrome(
 
     current_url = page.url or ''
     log("URL: %s" % current_url)
+
+    # Log locale redirect (hl=en ensures English content regardless of path)
+    import re as _re
+    if _re.search(r'/fx/[a-z]{2}(-[a-z]{2})?/tools/flow', current_url):
+        log("Locale redirect detected (OK — hl=en forces English content)")
 
     # Check login fallback (redirect ve accounts.google.com)
     if 'accounts.google.com' in current_url:
