@@ -253,9 +253,7 @@ async def health_check_loop():
                         inst.healthy = True
                         inst.extension_connected = data.get("extension_connected", False)
                         inst.flow_key_present = data.get("flow_key_present", False)
-                        agent_403 = data.get("consecutive_403", 0)
-                        if agent_403 > inst.consecutive_403:
-                            inst.consecutive_403 = agent_403
+                        inst.consecutive_403 = data.get("consecutive_403", 0)
                     else:
                         inst.healthy = False
                 except Exception:
