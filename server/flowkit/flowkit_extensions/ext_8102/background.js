@@ -873,21 +873,4 @@ setInterval(() => { _telemetrySessionId = `;${Date.now()}`; }, _rand(25, 35) * 6
 
 scheduleTelemetry();
 
-// â”€â”€â”€ Page Zoom â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-// Use chrome.tabs.setZoom (real browser zoom, like Ctrl+-) instead of
-// CSS zoom. CSS zoom breaks viewport-relative layouts (100vh).
-
-const PAGE_ZOOM_FACTOR = 0.5; // 50%
-
-chrome.tabs.onUpdated.addListener((tabId, info, tab) => {
-  if (info.status === 'complete' && tab.url && tab.url.startsWith('https://labs.google/')) {
-    chrome.tabs.setZoom(tabId, PAGE_ZOOM_FACTOR).catch(() => {});
-  }
-});
-
-chrome.tabs.query({ url: 'https://labs.google/*' }).then(tabs => {
-  for (const tab of tabs) chrome.tabs.setZoom(tab.id, PAGE_ZOOM_FACTOR).catch(() => {});
-}).catch(() => {});
-
 console.log('[FlowAgent] Extension loaded');
-
