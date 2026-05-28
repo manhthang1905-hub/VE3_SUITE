@@ -104,9 +104,6 @@ class FlowClient:
     async def extract_project_id(self) -> dict:
         return await self.send("extract_project_id", {}, timeout=15)
 
-    async def ensure_project(self) -> dict:
-        return await self.send("ensure_project", {}, timeout=60)
-
     def health_dict(self) -> dict:
         uptime = None
         if self._ws_connected_at and self.connected:

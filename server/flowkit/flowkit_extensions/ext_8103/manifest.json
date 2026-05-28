@@ -3,17 +3,7 @@
   "name": "FlowKit-4",
   "version": "0.2.0",
   "description": "Local agent bridge for Google Flow API — captures tokens, solves reCAPTCHA, proxies API calls",
-  "permissions": [
-    "storage",
-    "alarms",
-    "tabs",
-    "webRequest",
-    "scripting",
-    "declarativeNetRequest",
-    "sidePanel",
-    "cookies",
-    "browsingData"
-  ],
+  "permissions": ["storage", "alarms", "tabs", "webRequest", "scripting", "declarativeNetRequest", "sidePanel", "cookies", "browsingData"],
   "host_permissions": [
     "https://labs.google/*",
     "https://aisandbox-pa.googleapis.com/*",
@@ -28,20 +18,14 @@
         "https://labs.google/fx/tools/flow*",
         "https://labs.google/fx/*/tools/flow*"
       ],
-      "js": [
-        "content.js"
-      ],
+      "js": ["content.js"],
       "run_at": "document_start"
     }
   ],
   "web_accessible_resources": [
     {
-      "resources": [
-        "injected.js"
-      ],
-      "matches": [
-        "https://labs.google/*"
-      ]
+      "resources": ["injected.js"],
+      "matches": ["https://labs.google/*"]
     }
   ],
   "declarative_net_request": {
