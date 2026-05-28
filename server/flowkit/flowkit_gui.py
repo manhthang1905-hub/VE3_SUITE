@@ -1069,23 +1069,23 @@ class FlowKitGUI(tk.Tk):
 
             card.config(highlightbackground=border_color)
 
-            tk.Label(card, text=w.get('name', '?'), font=('Segoe UI', 8, 'bold'),
-                     fg=FG, bg=BG).pack(padx=4, pady=(3, 1))
-            tk.Label(card, text=status_text, font=('Segoe UI', 7, 'bold'),
+            tk.Label(card, text=w.get('name', '?'), font=('Segoe UI', 9, 'bold'),
+                     fg=FG, bg=BG).pack(padx=6, pady=(4, 1))
+            tk.Label(card, text=status_text, font=('Segoe UI', 8, 'bold'),
                      fg=status_fg, bg=BG).pack()
 
             ext = "Ext: OK" if w.get('extension_connected') else "Ext: --"
             ext_fg = GREEN if w.get('extension_connected') else RED
-            tk.Label(card, text=ext, font=('Consolas', 7), fg=ext_fg, bg=BG).pack()
+            tk.Label(card, text=ext, font=('Consolas', 8), fg=ext_fg, bg=BG).pack()
 
             key = "Key: OK" if w.get('flow_key_present') else "Key: --"
             key_fg = GREEN if w.get('flow_key_present') else FG2
-            tk.Label(card, text=key, font=('Consolas', 7), fg=key_fg, bg=BG).pack()
+            tk.Label(card, text=key, font=('Consolas', 8), fg=key_fg, bg=BG).pack()
 
             tk.Label(card, text=f"403: {w.get('consecutive_403', 0)}",
-                     font=('Consolas', 7), fg=FG2, bg=BG).pack()
-            tk.Label(card, text=f"D:{w.get('total_completed', 0)} F:{w.get('total_failed', 0)}",
-                     font=('Consolas', 7), fg=FG2, bg=BG).pack(pady=(0, 3))
+                     font=('Consolas', 8), fg=FG2, bg=BG).pack()
+            tk.Label(card, text=f"Done: {w.get('total_completed', 0)} | Fail: {w.get('total_failed', 0)}",
+                     font=('Consolas', 8), fg=FG2, bg=BG).pack(pady=(0, 4))
 
     # ============================================================
     # Logging

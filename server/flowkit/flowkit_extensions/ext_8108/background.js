@@ -6,6 +6,7 @@
  */
 
 const AGENT_WS_URL = 'ws://127.0.0.1:9230';
+const AGENT_API_PORT = parseInt(AGENT_WS_URL.match(/:(\d+)/)[1]) - 1122;
 // NOTE: This is a browser-restricted public API key — safe to ship in extension bundles.
 const API_KEY = 'AIzaSyBtrm0o5ab1c-Ec8ZuLcGt3oJAA5VWt3pY';
 
@@ -251,7 +252,7 @@ function keepAlive() {
 function sendToAgent(msg) {
   // API responses (with msg.id) go via HTTP — immune to WS disconnect
   if (msg.id) {
-    fetch('http://127.0.0.1:8100/api/ext/callback', {
+    fetch(`http://127.0.0.1:${AGENT_API_PORT}/api/ext/callback`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(msg),
