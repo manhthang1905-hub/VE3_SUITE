@@ -116,6 +116,7 @@ chrome_layout:
   gui_width: 700
   cols: 2
   rows: 0
+  zoom: 50
 timeouts:
   health_check: 5
   image_generation: 120

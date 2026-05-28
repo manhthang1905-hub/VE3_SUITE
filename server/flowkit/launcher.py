@@ -168,6 +168,11 @@ def start_chrome(instance: dict, new_fingerprint: bool = True) -> Optional[subpr
         "--no-first-run",
     ]
 
+    # Page zoom (e.g. 50 = 50%)
+    zoom = CONFIG.get("chrome_layout", {}).get("zoom", 0)
+    if zoom and zoom != 100:
+        args.append(f"--force-device-scale-factor={zoom / 100:.2f}")
+
     # Window layout
     enabled_instances = [i for i in CONFIG.get("instances", []) if i.get("enabled", True)]
     slot = _resolve_chrome_slot(name)

@@ -612,9 +612,12 @@ class FlowKitGUI(tk.Tk):
             "--no-first-run",
         ]
 
-        # Window layout — same grid as login phase
+        # Page zoom and window layout — same config as launcher
         try:
             from launcher import _calc_chrome_layout, _resolve_chrome_slot, CONFIG as _lcfg
+            zoom = _lcfg.get("chrome_layout", {}).get("zoom", 0)
+            if zoom and zoom != 100:
+                args.append(f"--force-device-scale-factor={zoom / 100:.2f}")
             instances_cfg = [i for i in _lcfg.get("instances", []) if i.get("enabled", True)]
             slot = _resolve_chrome_slot(inst["name"])
             x, y, w, h = _calc_chrome_layout(slot, len(instances_cfg))
