@@ -203,7 +203,6 @@ def start_chrome(instance: dict, new_fingerprint: bool = True, clean: bool = Fal
         "--hide-crash-restore-bubble",
         "--no-first-run",
         "--no-default-browser-check",
-        "--force-device-scale-factor=0.5",
     ]
 
     # Window layout

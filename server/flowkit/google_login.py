@@ -167,8 +167,35 @@ def _enforce_window_layout(driver, chrome_exe: str, worker_id: int):
 
 
 def _apply_zoom_login(driver):
-    """Zoom handled by --force-device-scale-factor=0.5 Chrome flag."""
-    return
+    """Apply zoom cho login Chrome — CDP only (no run_js)."""
+    import os as _os
+    zoom_val = int(_os.getenv("CHROME_PAGE_ZOOM", "50"))
+    zoom_val = max(25, min(200, zoom_val))
+    target = f"{zoom_val}%"
+
+    zoom_js = "(function(){try{document.documentElement.style.zoom='%s';}catch(e){}try{if(document.body)document.body.style.zoom='100%%';}catch(e){}})()" % target
+    zoom_bootstrap_js = """
+        (function() {
+            var z = '%s';
+            var applyZoom = function() {
+                try { document.documentElement.style.zoom = z; } catch(e) {}
+                try { if (document.body) document.body.style.zoom = '100%%'; } catch(e) {}
+            };
+            try { applyZoom(); } catch(e) {}
+            try { document.addEventListener('DOMContentLoaded', applyZoom, true); } catch(e) {}
+            try { window.addEventListener('load', applyZoom, true); } catch(e) {}
+        })();
+    """ % target
+
+    try:
+        driver.run_cdp('Page.addScriptToEvaluateOnNewDocument', source=zoom_bootstrap_js)
+        try:
+            driver.run_cdp('Runtime.evaluate', expression=zoom_js)
+        except Exception:
+            pass
+        log(f"[ZOOM] {target} applied (CDP)")
+    except Exception as e:
+        log(f"[ZOOM] failed: {e}", "WARN")
 
 
 def get_proxy_arg_from_settings(ensure_ready: bool = True) -> str:
@@ -1152,9 +1179,6 @@ def login_google_chrome(account_info: dict, chrome_portable: str = None, profile
                 DrissionFlowAPI._block_ipv4_for_chrome_static(lambda msg: log(msg))
             except Exception as fw_err:
                 log(f"[FW] Firewall error: {fw_err}")
-
-        # Zoom 50% via Chrome flag (most reliable method)
-        options.set_argument("--force-device-scale-factor=0.5")
 
         # Má»Ÿ Chrome má»›i
         driver = ChromiumPage(options)
