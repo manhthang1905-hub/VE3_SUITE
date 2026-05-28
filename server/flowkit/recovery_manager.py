@@ -246,179 +246,139 @@ class RecoveryManager:
             logger.warning("[Recovery] %s Level 1 error: %s", instance_name, e)
             return False
 
-    async def _level2_rotate_ipv6(self, instance_name: str) -> bool:
-        """Level 2: Rotate IPv6, update SOCKS proxy, restart Chrome."""
-        logger.info("[Recovery] %s Level 2: rotating IPv6", instance_name)
-
+    def _rotate_ipv6(self, instance_name: str, reason: str = "403_recovery") -> str:
+        """Get new IPv6 from pool. Returns new IP or empty string."""
         if not self._ipv6_client:
-            logger.info("[Recovery] %s Level 2: no IPv6 pool, skipping to Level 3", instance_name)
-            return False
-
+            return ""
         state = self.states[instance_name]
-        cfg = self.instances_config.get(instance_name)
         old_ip = state.current_ipv6
-
         try:
-            if old_ip:
-                result = self._ipv6_client.rotate_ip(old_ip, reason="403_recovery", worker=instance_name)
-            else:
-                result = self._ipv6_client.get_ip(worker=instance_name)
-
-            if not result:
-                logger.warning("[Recovery] %s Level 2: IPv6 pool returned no IP", instance_name)
-                return False
-
-            new_ip = result["ip"]
-            state.current_ipv6 = new_ip
-            logger.info("[Recovery] %s Level 2: got new IPv6 %s", instance_name, new_ip)
-
-            import subprocess
-            try:
-                subprocess.run(
-                    f'netsh interface ipv6 add address "Ethernet" {new_ip}',
-                    shell=True, capture_output=True, timeout=10,
-                )
-                logger.info("[Recovery] %s: added %s to Ethernet", instance_name, new_ip)
-            except Exception as e:
-                logger.warning("[Recovery] %s: netsh add address failed: %s", instance_name, e)
-
-            proxy_port = 1081 + (cfg["api_port"] - 8100) if cfg else 0
-            if proxy_port:
-                try:
-                    Path(f".ipv6_override_{proxy_port}").write_text(new_ip)
-                    logger.info("[Recovery] %s: wrote IPv6 override for proxy port %d", instance_name, proxy_port)
-                except Exception as e:
-                    logger.warning("[Recovery] %s: write override failed: %s", instance_name, e)
-
-            return await self._restart_chrome_instance(instance_name, new_ipv6=new_ip)
+            result = (self._ipv6_client.rotate_ip(old_ip, reason=reason, worker=instance_name)
+                      if old_ip else self._ipv6_client.get_ip(worker=instance_name))
+            if result:
+                new_ip = result["ip"]
+                state.current_ipv6 = new_ip
+                logger.info("[Recovery] %s: got new IPv6 %s", instance_name, new_ip)
+                return new_ip
         except Exception as e:
-            logger.warning("[Recovery] %s Level 2 error: %s", instance_name, e)
+            logger.warning("[Recovery] %s: IPv6 rotate error: %s", instance_name, e)
+        return ""
+
+    async def _level2_rotate_ipv6(self, instance_name: str) -> bool:
+        """Level 2: Get new IPv6, restart Chrome from scratch."""
+        logger.info("[Recovery] %s Level 2: rotating IPv6", instance_name)
+        if not self._ipv6_client:
+            logger.info("[Recovery] %s Level 2: no IPv6 pool, skip to Level 3", instance_name)
             return False
+        new_ip = self._rotate_ipv6(instance_name, "403_L2")
+        if not new_ip:
+            return False
+        return await self._restart_chrome_instance(instance_name, new_ipv6=new_ip)
 
     async def _level3_restart_chrome(self, instance_name: str) -> bool:
-        """Level 3: Kill Chrome, generate new fingerprint, restart."""
-        state = self.states[instance_name]
-        new_ipv6 = state.current_ipv6 or ""
-        logger.info("[Recovery] %s Level 3: full Chrome restart (fingerprint + %s)",
-                    instance_name, f"IPv6={new_ipv6}" if new_ipv6 else "no IPv6")
-
-        return await self._restart_chrome_instance(instance_name, new_ipv6=new_ipv6)
+        """Level 3: Get NEW IPv6 + full restart from scratch."""
+        new_ip = self._rotate_ipv6(instance_name, "403_L3")
+        if not new_ip:
+            new_ip = self.states[instance_name].current_ipv6 or ""
+        logger.info("[Recovery] %s Level 3: full restart (%s)",
+                    instance_name, f"IPv6={new_ip}" if new_ip else "fingerprint-only")
+        return await self._restart_chrome_instance(instance_name, new_ipv6=new_ip)
 
     async def _restart_chrome_instance(self, instance_name: str, new_ipv6: str = "") -> bool:
-        """Restart Chrome with new fingerprint (and optionally new IPv6).
+        """Restart Chrome from scratch — y hệt startup.
 
-        Flow mirrors Phase 1→3 from normal startup:
-        1. Kill Chrome + clean profile
-        2. Login (profile was cleaned, need re-login)
-        3. Start Chrome (profile now has login cookies)
-        4. Wait for extension
-        5. Navigate to Flow + create project via ensure_chrome_ready
+        Flow: kill Chrome → update IPv6 → setup_chrome (login+Flow+project) →
+              start Chrome subprocess → wait extension → apply CDP
         """
         cfg = self.instances_config.get(instance_name)
         if not cfg:
             return False
 
         try:
-            from launcher import (
-                kill_chrome, clean_chrome_profile, start_chrome,
-                resolve_path, get_instance_seed, _write_chrome_prefs,
-            )
+            from launcher import kill_chrome, resolve_path, start_chrome
             loop = asyncio.get_running_loop()
-
-            # Step 1: Kill Chrome + clean profile
-            await loop.run_in_executor(None, lambda: kill_chrome(instance_name))
-            await asyncio.sleep(3)
 
             api_port = cfg["api_port"]
             chrome_dir = resolve_path(cfg["chrome_path"]).parent.parent.parent
             ext_dir = resolve_path(cfg["extension_dir"])
+            debug_port = 19200 + (api_port - 8100)
+            proxy_port = 1081 + (api_port - 8100)
 
-            await loop.run_in_executor(None, lambda: clean_chrome_profile(chrome_dir))
-            logger.info("[Recovery] %s: profile cleaned", instance_name)
+            # Step 1: Kill Chrome
+            await loop.run_in_executor(None, lambda: kill_chrome(instance_name))
+            await asyncio.sleep(3)
 
-            # Step 2: Login (profile was cleaned, need re-login)
-            account = self._get_account(instance_name)
+            # Step 2: Update IPv6 → SOCKS proxy picks up via override file
             proxy_arg = ""
-            if cfg.get("ipv6") or new_ipv6:
-                proxy_port = 1081 + (api_port - 8100)
+            if new_ipv6:
+                import subprocess as _sp
+                try:
+                    _sp.run(f'netsh interface ipv6 add address "Ethernet" {new_ipv6}',
+                            shell=True, capture_output=True, timeout=10)
+                except Exception:
+                    pass
+                try:
+                    Path(f".ipv6_override_{proxy_port}").write_text(new_ipv6)
+                except Exception:
+                    pass
+                proxy_arg = f"socks5://127.0.0.1:{proxy_port}"
+            elif cfg.get("ipv6"):
                 proxy_arg = f"socks5://127.0.0.1:{proxy_port}"
 
-            if account:
-                from chrome_setup import _do_login
-                worker_id = api_port - 8100
-                login_ok = await loop.run_in_executor(
-                    None,
-                    lambda: _do_login(chrome_dir, account, proxy_arg, worker_id),
-                )
-                if login_ok:
-                    logger.info("[Recovery] %s: login OK", instance_name)
-                else:
-                    logger.warning("[Recovery] %s: login FAILED — continuing anyway", instance_name)
+            # Step 3: setup_chrome — y hệt startup (DrissionPage login + Flow + project + kill)
+            account = self._get_account(instance_name)
+            from chrome_setup import setup_chrome
+            ok = await loop.run_in_executor(
+                None,
+                lambda: setup_chrome(
+                    chrome_dir=chrome_dir, ext_dir=ext_dir, port=debug_port,
+                    account=account, proxy_arg=proxy_arg,
+                    log_func=lambda msg: logger.info("[Recovery] %s: %s", instance_name, msg),
+                    instance_name=instance_name,
+                ),
+            )
+            if not ok:
+                logger.warning("[Recovery] %s: setup_chrome FAILED", instance_name)
+                return False
 
-            # Step 3: Start Chrome (profile now has login cookies)
-            _write_chrome_prefs(chrome_dir)
+            # Step 4: Start Chrome subprocess (extension connects to agent)
             cfg_start = {**cfg, "ipv6": new_ipv6} if new_ipv6 else cfg
             proc = await loop.run_in_executor(
                 None,
-                lambda: start_chrome(cfg_start, new_fingerprint=True, clean=False),
+                lambda: start_chrome(cfg_start, new_fingerprint=False, clean=False),
             )
-
             if not proc:
-                logger.warning("[Recovery] %s: Chrome start returned no process", instance_name)
+                logger.warning("[Recovery] %s: Chrome subprocess failed", instance_name)
                 return False
+            logger.info("[Recovery] %s: Chrome started (PID %d)", instance_name, proc.pid)
 
-            logger.info("[Recovery] %s: Chrome started (PID %d), waiting for extension...",
-                        instance_name, proc.pid)
-
-            # Step 4: Wait for extension
+            # Step 5: Wait for extension
             await asyncio.sleep(self.restart_delay)
             connected = await self._wait_extension_connect(api_port, timeout=self.reconnect_timeout)
-
-            if connected:
-                seed = get_instance_seed(instance_name)
-                self.states[instance_name].current_seed = seed
-                logger.info("[Recovery] %s: extension connected, seed=%d", instance_name, seed)
-
-                # Step 5: Navigate to Flow + create project (account=None — already logged in)
-                debug_port = 19200 + (api_port - 8100)
-                try:
-                    from chrome_setup import ensure_chrome_ready, apply_chrome_cdp
-                    ready = await loop.run_in_executor(
-                        None,
-                        lambda: ensure_chrome_ready(
-                            debug_port=debug_port,
-                            chrome_dir=chrome_dir,
-                            account=None,
-                            proxy_arg=proxy_arg,
-                            log_func=lambda msg: logger.info("[Recovery] %s: %s", instance_name, msg),
-                        ),
-                    )
-                    if ready:
-                        logger.info("[Recovery] %s: Chrome ready (Flow + project OK)", instance_name)
-                    else:
-                        logger.warning("[Recovery] %s: Chrome setup failed", instance_name)
-
-                    # Apply CDP settings (zoom, fingerprint, tab guard)
-                    await loop.run_in_executor(
-                        None,
-                        lambda: apply_chrome_cdp(
-                            debug_port=debug_port,
-                            ext_dir=ext_dir,
-                            instance_name=instance_name,
-                            log_func=lambda msg: logger.info("[Recovery] %s: %s", instance_name, msg),
-                        ),
-                    )
-                except Exception as e:
-                    logger.warning("[Recovery] %s: chrome_setup error: %s", instance_name, e)
-
-                return True
-            else:
-                logger.warning("[Recovery] %s: extension did not reconnect within %ds",
+            if not connected:
+                logger.warning("[Recovery] %s: extension not connected within %ds",
                                instance_name, self.reconnect_timeout)
                 return False
 
+            # Step 6: Apply CDP (zoom + fingerprint + tab guard)
+            try:
+                from chrome_setup import apply_chrome_cdp
+                await loop.run_in_executor(
+                    None,
+                    lambda: apply_chrome_cdp(
+                        debug_port=debug_port, ext_dir=ext_dir,
+                        instance_name=instance_name,
+                        log_func=lambda msg: logger.info("[Recovery] %s: %s", instance_name, msg),
+                    ),
+                )
+            except Exception as e:
+                logger.warning("[Recovery] %s: CDP error: %s", instance_name, e)
+
+            logger.info("[Recovery] %s: READY", instance_name)
+            return True
+
         except Exception as e:
-            logger.exception("[Recovery] %s Chrome restart error: %s", instance_name, e)
+            logger.exception("[Recovery] %s restart error: %s", instance_name, e)
             return False
 
     async def _ensure_project(self, api_port: int) -> bool:
