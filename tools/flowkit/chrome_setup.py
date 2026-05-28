@@ -586,38 +586,9 @@ def setup_chrome(
         _inject_tab_guard(page, log)
         _inject_fingerprint(page, ext_dir, instance_name, log)
 
-    # ── 4. Verify login — vao Flow de check redirect ──
-    log("Check login: %s" % FLOW_URL)
-    page.get(FLOW_URL)
-    time.sleep(5)
+    log("Login OK — ban giao cho FlowKit")
 
-    current_url = page.url or ''
-    if 'accounts.google.com' in current_url:
-        log("Chua dang nhap! Clear data + login...")
-        try:
-            page.quit()
-        except Exception:
-            pass
-        page = None
-        _kill_chrome_for_dir(chrome_dir)
-
-        _clear_chrome_data(chrome_dir, log)
-        login_ok = _do_login(chrome_dir, account, proxy_arg, _worker_id) if account else False
-        if not login_ok:
-            log("Login FAILED!")
-            return False
-
-        if instance_name:
-            try:
-                from launcher import generate_fingerprint
-                generate_fingerprint(ext_dir, instance_name)
-            except Exception:
-                pass
-        _write_chrome_prefs(chrome_dir)
-
-    log("Login OK")
-
-    # ── 5. Kill Chrome — ban giao cho FlowKit agent ──
+    # ── 4. Kill Chrome — ban giao cho FlowKit agent ──
     try:
         page.quit()
     except Exception:
