@@ -514,6 +514,14 @@ class FlowKitGUI(tk.Tk):
 
         time.sleep(5)
 
+        # Phase 3.5: Arrange Chrome windows in grid
+        try:
+            from launcher import arrange_chrome_windows
+            self._log("Arranging Chrome windows...", "INFO")
+            arrange_chrome_windows(instances)
+        except Exception as e:
+            self._log(f"Window arrange error: {e}", "WARN")
+
         # Phase 4: Start gateway
         self._log("Phase 4: Starting Gateway...", "INFO")
         self._start_gateway(gateway_port)

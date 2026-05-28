@@ -183,6 +183,108 @@ def start_chrome(instance: dict, new_fingerprint: bool = True) -> Optional[subpr
     return proc
 
 
+def arrange_chrome_windows(instances: list = None):
+    """Position all Chrome windows in grid layout using Win32 API.
+
+    Matches Chrome windows to instances by extension dir in command line.
+    """
+    if sys.platform != "win32":
+        return
+
+    import ctypes
+    import ctypes.wintypes
+
+    if instances is None:
+        instances = [i for i in CONFIG.get("instances", []) if i.get("enabled", True)]
+
+    total = len(instances)
+    if total == 0:
+        return
+
+    ext_to_slot = {}
+    for inst in instances:
+        name = inst["name"]
+        ext_dir = inst.get("extension_dir", "")
+        slot = _resolve_chrome_slot(name)
+        ext_marker = ext_dir.replace("/", "\\").split("\\")[-1] if ext_dir else ""
+        chrome_dir_name = resolve_path(inst["chrome_path"]).parent.parent.parent.name
+        ext_to_slot[name] = {
+            "slot": slot,
+            "ext_marker": ext_marker,
+            "chrome_dir": chrome_dir_name,
+        }
+
+    pid_to_name = {}
+    try:
+        result = subprocess.run(
+            ["wmic", "process", "where", "name='chrome.exe'",
+             "get", "processid,commandline"],
+            capture_output=True, text=True, timeout=10,
+        )
+        for line in result.stdout.split("\n"):
+            line = line.strip()
+            if not line or "ProcessId" in line:
+                continue
+            for name, info in ext_to_slot.items():
+                marker = info["ext_marker"]
+                chrome_dir = info["chrome_dir"]
+                if marker and marker in line:
+                    parts = line.rsplit(None, 1)
+                    if len(parts) == 2 and parts[1].isdigit():
+                        pid_to_name[int(parts[1])] = name
+                elif chrome_dir and chrome_dir in line:
+                    parts = line.rsplit(None, 1)
+                    if len(parts) == 2 and parts[1].isdigit():
+                        pid_to_name.setdefault(int(parts[1]), name)
+    except Exception as e:
+        print(f"[Layout] WMIC error: {e}")
+        return
+
+    if not pid_to_name:
+        print("[Layout] No Chrome processes found to arrange")
+        return
+
+    user32 = ctypes.windll.user32
+    EnumWindows = user32.EnumWindows
+    GetWindowThreadProcessId = user32.GetWindowThreadProcessId
+    IsWindowVisible = user32.IsWindowVisible
+    SetWindowPos = user32.SetWindowPos
+    HWND_TOP = 0
+    SWP_SHOWWINDOW = 0x0040
+
+    arranged = set()
+    windows = []
+
+    @ctypes.WINFUNCTYPE(ctypes.c_bool, ctypes.wintypes.HWND, ctypes.wintypes.LPARAM)
+    def enum_cb(hwnd, lparam):
+        if not IsWindowVisible(hwnd):
+            return True
+        pid = ctypes.wintypes.DWORD()
+        GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
+        pid_val = pid.value
+        if pid_val in pid_to_name:
+            length = user32.GetWindowTextLengthW(hwnd)
+            if length > 0:
+                windows.append((hwnd, pid_val))
+        return True
+
+    EnumWindows(enum_cb, 0)
+
+    for hwnd, pid_val in windows:
+        name = pid_to_name.get(pid_val)
+        if not name or name in arranged:
+            continue
+        info = ext_to_slot.get(name)
+        if not info:
+            continue
+        x, y, w, h = _calc_chrome_layout(info["slot"], total)
+        SetWindowPos(hwnd, HWND_TOP, x, y, w, h, SWP_SHOWWINDOW)
+        arranged.add(name)
+        print(f"  [Layout] {name}: pos=({x},{y}) size={w}x{h}")
+
+    print(f"[Layout] Arranged {len(arranged)}/{total} Chrome windows")
+
+
 def kill_chrome(instance_name: str) -> bool:
     """Kill Chrome process for a specific instance.
 
@@ -408,6 +510,9 @@ def main():
 
             print("\n  Waiting 5s for Chrome to initialize...")
             time.sleep(5)
+
+            print("\n[Phase 1.5] Arranging Chrome windows...")
+            arrange_chrome_windows(instances_cfg)
 
         # Step 2: Start agents
         print("\n[Phase 2] Starting FlowKit agents...")
