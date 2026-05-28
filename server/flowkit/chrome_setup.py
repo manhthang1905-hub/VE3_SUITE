@@ -93,17 +93,8 @@ def _apply_zoom(page, log):
 
 
 def _inject_fingerprint(page, ext_dir, instance_name, log):
-    """Inject fingerprint — y nguyen inject_fingerprint_spoof server cu."""
-    try:
-        fp_path = Path(ext_dir) / "fp_inject.js"
-        if not fp_path.exists():
-            return
-        js = fp_path.read_text(encoding="utf-8")
-        page.run_cdp('Page.addScriptToEvaluateOnNewDocument', source=js)
-        page.run_js(js)
-        log("Fingerprint injected via CDP")
-    except Exception as e:
-        log("Fingerprint CDP inject skip: %s" % e)
+    """Disabled — fingerprint spoofing breaks reCAPTCHA trust scores."""
+    return
 
 
 JS_BLOCK_NEW_TAB = """

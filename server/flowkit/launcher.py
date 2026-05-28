@@ -94,28 +94,8 @@ def resolve_path(rel_path: str) -> Path:
 # ─── Fingerprint ─────────────────────────────────────────────
 
 def generate_fingerprint(ext_dir: str | Path, instance_name: str = "") -> int:
-    """Generate unique fingerprint JS and write to extension directory.
-
-    Returns the seed used.
-    """
-    from fingerprint_data import build_fingerprint_js, get_unique_seed
-
-    ext_dir = Path(ext_dir)
-    seed = get_unique_seed()
-    js_code = build_fingerprint_js(seed)
-
-    fp_path = ext_dir / "fp_inject.js"
-    fp_path.write_text(js_code, encoding="utf-8")
-
-    seed_path = BASE_DIR / "config" / f".fingerprint_seed_{seed}"
-    seed_path.parent.mkdir(parents=True, exist_ok=True)
-    seed_path.write_text(
-        f"{instance_name}|{seed}|{int(time.time())}",
-        encoding="utf-8",
-    )
-
-    print(f"  Fingerprint: seed={seed} -> {fp_path.name}")
-    return seed
+    """Disabled — fingerprint spoofing breaks reCAPTCHA trust scores."""
+    return 0
 
 
 # ─── Chrome Process Management ───────────────────────────────

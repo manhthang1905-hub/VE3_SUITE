@@ -1188,37 +1188,7 @@ def login_google_chrome(account_info: dict, chrome_portable: str = None, profile
         _enforce_window_layout(driver, chrome_exe, worker_id)
         _apply_zoom_login(driver)
 
-        # v1.0.650: Inject fingerprint NGAY SAU khi mo Chrome, TRUOC khi navigate
-        # Dam bao login va tao anh dung CUNG fingerprint â†' Google khong detect thay doi
-        try:
-            try:
-                from fingerprint_data import get_unique_seed, build_fingerprint_js
-            except ImportError:
-                from modules.fingerprint_data import get_unique_seed, build_fingerprint_js
-            _fp_seed_file = Path(TOOL_DIR) / "config" / f".fingerprint_seed_{worker_id}"
-            _fp_seed = get_unique_seed()
-            _fp_js = build_fingerprint_js(_fp_seed)
-
-            # CDP: inject cho TAT CA page loads (TRUOC khi scripts chay)
-            try:
-                result = driver.run_cdp('Page.addScriptToEvaluateOnNewDocument', source=_fp_js)
-                log(f"[SPOOF] CDP fingerprint inject OK (seed={_fp_seed})")
-            except Exception as _cdp_err:
-                # Fallback: run_js cho page hien tai
-                driver.run_js(_fp_js)
-                log(f"[SPOOF] Fallback JS fingerprint inject (seed={_fp_seed})")
-
-            # Save seed â†' file de DrissionFlowAPI doc va dung CUNG seed
-            try:
-                _fp_seed_file.parent.mkdir(parents=True, exist_ok=True)
-                _fp_seed_file.write_text(str(_fp_seed))
-                log(f"[SPOOF] Saved seed to {_fp_seed_file.name}")
-            except Exception as _sf_err:
-                log(f"[SPOOF] Save seed failed: {_sf_err}", "WARN")
-        except ImportError:
-            log("[SPOOF] fingerprint_data not available, skip fingerprint inject")
-        except Exception as _fp_err:
-            log(f"[SPOOF] Fingerprint inject error: {_fp_err}", "WARN")
+        # Fingerprint spoofing disabled — breaks reCAPTCHA trust scores
 
         # Äi Ä'áº¿n trang Ä'Äƒng nháº­p Google
         log("Navigating to Google login...")
