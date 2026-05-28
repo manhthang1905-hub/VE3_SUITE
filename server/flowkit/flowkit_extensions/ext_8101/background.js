@@ -114,6 +114,13 @@ chrome.webRequest.onBeforeSendHeaders.addListener(
 const FLOW_URL = 'https://labs.google/fx/tools/flow';
 const FLOW_URL_PATTERNS = ['https://labs.google/fx/tools/flow*', 'https://labs.google/fx/*/tools/flow*'];
 
+// Auto-zoom 50% on all labs.google tabs (like Ctrl+-)
+chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
+  if (changeInfo.status === 'complete' && tab.url && tab.url.includes('labs.google')) {
+    chrome.tabs.setZoom(tabId, 0.5).catch(() => {});
+  }
+});
+
 async function ensureFlowTab() {
   const flowTabs = await chrome.tabs.query({ url: FLOW_URL_PATTERNS });
   if (flowTabs.length) return flowTabs[0];

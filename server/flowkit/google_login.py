@@ -167,33 +167,14 @@ def _enforce_window_layout(driver, chrome_exe: str, worker_id: int):
 
 
 def _apply_zoom_login(driver):
-    """Apply zoom cho login Chrome — CDP only (no run_js)."""
+    """Apply browser-level zoom via CDP (like Ctrl+-)."""
     import os as _os
     zoom_val = int(_os.getenv("CHROME_PAGE_ZOOM", "50"))
     zoom_val = max(25, min(200, zoom_val))
-    target = f"{zoom_val}%"
-
-    zoom_js = "(function(){try{document.documentElement.style.zoom='%s';}catch(e){}try{if(document.body)document.body.style.zoom='100%%';}catch(e){}})()" % target
-    zoom_bootstrap_js = """
-        (function() {
-            var z = '%s';
-            var applyZoom = function() {
-                try { document.documentElement.style.zoom = z; } catch(e) {}
-                try { if (document.body) document.body.style.zoom = '100%%'; } catch(e) {}
-            };
-            try { applyZoom(); } catch(e) {}
-            try { document.addEventListener('DOMContentLoaded', applyZoom, true); } catch(e) {}
-            try { window.addEventListener('load', applyZoom, true); } catch(e) {}
-        })();
-    """ % target
-
+    scale = max(0.25, min(2.0, zoom_val / 100.0))
     try:
-        driver.run_cdp('Page.addScriptToEvaluateOnNewDocument', source=zoom_bootstrap_js)
-        try:
-            driver.run_cdp('Runtime.evaluate', expression=zoom_js)
-        except Exception:
-            pass
-        log(f"[ZOOM] {target} applied (CDP)")
+        driver.run_cdp('Emulation.setPageScaleFactor', pageScaleFactor=scale)
+        log(f"[ZOOM] {zoom_val}% applied (setPageScaleFactor)")
     except Exception as e:
         log(f"[ZOOM] failed: {e}", "WARN")
 

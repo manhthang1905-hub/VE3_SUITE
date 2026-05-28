@@ -53,32 +53,13 @@ def _enforce_window_layout(page, window_args, log):
 
 
 def _apply_zoom(page, log):
-    """Apply zoom via CDP — backup for extension zoom.js."""
+    """Apply browser-level zoom via CDP (like Ctrl+-)."""
     zoom_val = int(os.getenv("CHROME_PAGE_ZOOM", "50"))
     zoom_val = max(25, min(200, zoom_val))
-    target = f"{zoom_val}%"
-
-    zoom_js = "(function(){try{document.documentElement.style.zoom='%s';}catch(e){}try{if(document.body)document.body.style.zoom='100%%';}catch(e){}})()" % target
-    zoom_bootstrap_js = """
-        (function() {
-            var z = '%s';
-            var applyZoom = function() {
-                try { document.documentElement.style.zoom = z; } catch(e) {}
-                try { if (document.body) document.body.style.zoom = '100%%'; } catch(e) {}
-            };
-            try { applyZoom(); } catch(e) {}
-            try { document.addEventListener('DOMContentLoaded', applyZoom, true); } catch(e) {}
-            try { window.addEventListener('load', applyZoom, true); } catch(e) {}
-        })();
-    """ % target
-
+    scale = max(0.25, min(2.0, zoom_val / 100.0))
     try:
-        page.run_cdp('Page.addScriptToEvaluateOnNewDocument', source=zoom_bootstrap_js)
-        try:
-            page.run_cdp('Runtime.evaluate', expression=zoom_js)
-        except Exception:
-            pass
-        log("Zoom %s applied (CDP)" % target)
+        page.run_cdp('Emulation.setPageScaleFactor', pageScaleFactor=scale)
+        log("Zoom %d%% applied (setPageScaleFactor)" % zoom_val)
     except Exception as e:
         log("Zoom failed: %s" % e)
 
