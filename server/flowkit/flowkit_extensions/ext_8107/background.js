@@ -1,12 +1,12 @@
-/**
- * Flow Kit — Chrome Extension Background Service Worker
+﻿/**
+ * Flow Kit â€” Chrome Extension Background Service Worker
  *
  * Connects to local Python agent via WebSocket (agent runs WS server).
  * Captures bearer token, solves reCAPTCHA, proxies API calls through browser.
  */
 
 const AGENT_WS_URL = 'ws://127.0.0.1:9229';
-// NOTE: This is a browser-restricted public API key — safe to ship in extension bundles.
+// NOTE: This is a browser-restricted public API key â€” safe to ship in extension bundles.
 const API_KEY = 'AIzaSyBtrm0o5ab1c-Ec8ZuLcGt3oJAA5VWt3pY';
 
 let ws = null;
@@ -22,9 +22,9 @@ let metrics = {
   lastError: null,
 };
 
-// ─── URL → Log Type Classifier ─────────────────────────────
+// â”€â”€â”€ URL â†’ Log Type Classifier â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
-// Visible log types — only these appear in the request log
+// Visible log types â€” only these appear in the request log
 const _VISIBLE_TYPES = new Set(['GEN_IMG', 'GEN_VID', 'GEN_VID_REF', 'UPSCALE', 'TRACKING', 'URL_REFRESH']);
 
 function _classifyApiUrl(url) {
@@ -40,7 +40,7 @@ function _classifyApiUrl(url) {
   return 'API';
 }
 
-// ─── Request Log ────────────────────────────────────────────
+// â”€â”€â”€ Request Log â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 let requestLog = [];
 
@@ -60,7 +60,7 @@ function broadcastRequestLog() {
   chrome.runtime.sendMessage({ type: 'REQUEST_LOG_UPDATE', log: requestLog }).catch(() => {});
 }
 
-// ─── Startup ────────────────────────────────────────────────
+// â”€â”€â”€ Startup â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 chrome.runtime.onInstalled.addListener(init);
 chrome.runtime.onStartup.addListener(init);
@@ -81,7 +81,7 @@ async function init() {
   chrome.alarms.create('keepAlive', { periodInMinutes: 0.4 });
 }
 
-// ─── Token Capture ──────────────────────────────────────────
+// â”€â”€â”€ Token Capture â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 chrome.webRequest.onBeforeSendHeaders.addListener(
   (details) => {
@@ -95,7 +95,7 @@ chrome.webRequest.onBeforeSendHeaders.addListener(
     const token = value.replace(/^Bearer\s+/i, '').trim();
     if (!token) return;
 
-    // Always update — even if same token string, refresh the timestamp
+    // Always update â€” even if same token string, refresh the timestamp
     flowKey = token;
     metrics.tokenCapturedAt = Date.now();
     chrome.storage.local.set({ flowKey, metrics });
@@ -123,7 +123,7 @@ async function captureTokenFromFlowTab() {
     }
     _openingFlowTab = true;
     try {
-      console.log('[FlowAgent] No Flow tab found — opening one in background');
+      console.log('[FlowAgent] No Flow tab found â€” opening one in background');
       await chrome.tabs.create({ url: 'https://labs.google/fx/tools/flow', active: false });
       await sleep(3000);
       const retryTabs = await chrome.tabs.query({
@@ -156,7 +156,7 @@ async function captureTokenFromFlowTab() {
   }
 }
 
-// ─── WebSocket to Agent ─────────────────────────────────────
+// â”€â”€â”€ WebSocket to Agent â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 function connectToAgent() {
   if (manualDisconnect) return;
@@ -176,7 +176,7 @@ function connectToAgent() {
     chrome.alarms.clear('reconnect');
     setState('idle');
 
-    // Token refresh alarm — 45 min gives buffer before ~60 min expiry
+    // Token refresh alarm â€” 45 min gives buffer before ~60 min expiry
     chrome.alarms.create('token-refresh', { periodInMinutes: 45 });
 
     // Send current state + resend token if we have one
@@ -259,25 +259,25 @@ function keepAlive() {
 }
 
 function sendToAgent(msg) {
-  // API responses (with msg.id) go via HTTP — immune to WS disconnect
+  // API responses (with msg.id) go via HTTP â€” immune to WS disconnect
   if (msg.id) {
     fetch('http://127.0.0.1:8107/api/ext/callback', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(msg),
     }).catch(() => {
-      // HTTP failed — fallback to WS
+      // HTTP failed â€” fallback to WS
       if (ws?.readyState === WebSocket.OPEN) ws.send(JSON.stringify(msg));
     });
     return;
   }
-  // Non-response messages (ping, status) or no secret yet — use WS
+  // Non-response messages (ping, status) or no secret yet â€” use WS
   if (ws?.readyState === WebSocket.OPEN) {
     ws.send(JSON.stringify(msg));
   }
 }
 
-// ─── reCAPTCHA Solving ──────────────────────────────────────
+// â”€â”€â”€ reCAPTCHA Solving â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 async function requestCaptchaFromTab(tabId, requestId, pageAction) {
   try {
@@ -360,7 +360,7 @@ async function handleSolveCaptcha(msg) {
   sendToAgent({ id, result });
 }
 
-// ─── Reset reCAPTCHA (clear cookies + refresh Flow tab) ─────
+// â”€â”€â”€ Reset reCAPTCHA (clear cookies + refresh Flow tab) â”€â”€â”€â”€â”€
 
 async function handleResetCaptcha(msg) {
   const { id } = msg;
@@ -382,7 +382,7 @@ async function handleResetCaptcha(msg) {
       await chrome.tabs.reload(tab.id, { bypassCache: true });
     }
 
-    // Wait for page to reload (may redirect to login → user re-logs in → back to Flow)
+    // Wait for page to reload (may redirect to login â†’ user re-logs in â†’ back to Flow)
     await sleep(8000);
 
     // Re-inject content script on all Flow tabs
@@ -400,10 +400,10 @@ async function handleResetCaptcha(msg) {
 
     // Capture fresh token
     await captureTokenFromFlowTab();
-    // Reset flow key — force re-capture
+    // Reset flow key â€” force re-capture
     flowKey = null;
 
-    console.log('[FlowAgent] reCAPTCHA reset complete — waiting for re-login + fresh token');
+    console.log('[FlowAgent] reCAPTCHA reset complete â€” waiting for re-login + fresh token');
     sendToAgent({ id, data: { ok: true, needsRelogin: true } });
   } catch (e) {
     console.error('[FlowAgent] Reset captcha failed:', e);
@@ -411,7 +411,7 @@ async function handleResetCaptcha(msg) {
   }
 }
 
-// ─── Extract Project ID from Flow Tab URL ──────────────────
+// â”€â”€â”€ Extract Project ID from Flow Tab URL â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 async function handleExtractProjectId(msg) {
   const { id } = msg;
@@ -435,7 +435,7 @@ async function handleExtractProjectId(msg) {
       }
     }
 
-    // No project in URL — try to get it from page via content script
+    // No project in URL â€” try to get it from page via content script
     try {
       const results = await chrome.scripting.executeScript({
         target: { tabId: tabs[0].id },
@@ -471,7 +471,7 @@ async function handleExtractProjectId(msg) {
   }
 }
 
-// ─── API Request Proxy ──────────────────────────────────────
+// â”€â”€â”€ API Request Proxy â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 async function handleTrpcRequest(msg) {
   const { id, params } = msg;
@@ -483,11 +483,11 @@ async function handleTrpcRequest(msg) {
   }
 
   setState('running');
-  // TRPC calls don't consume captcha — don't count in metrics
+  // TRPC calls don't consume captcha â€” don't count in metrics
 
   const logId = id;
   const logType = url.includes('createProject') ? 'CREATE_PROJECT' : 'TRPC';
-  // TRPC calls are silent — don't show in request log
+  // TRPC calls are silent â€” don't show in request log
 
   const fetchHeaders = { 'Content-Type': 'application/json', ...headers };
   if (flowKey) {
@@ -547,7 +547,7 @@ async function handleApiRequest(msg) {
       const captchaResult = await solveCaptcha(id, captchaAction);
       captchaToken = captchaResult?.token || null;
       if (!captchaToken) {
-        // Cannot proceed without captcha — API will 403
+        // Cannot proceed without captcha â€” API will 403
         const err = captchaResult?.error || 'CAPTCHA_FAILED';
         console.error(`[FlowAgent] Captcha failed for ${captchaAction}: ${err}`);
         sendToAgent({ id, status: 403, error: `CAPTCHA_FAILED: ${err}` });
@@ -639,11 +639,11 @@ async function handleApiRequest(msg) {
   setState('idle');
 }
 
-// ─── State & Popup ──────────────────────────────────────────
+// â”€â”€â”€ State & Popup â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 function setState(newState) {
   state = newState;
-  const badges = { idle: '●', running: '▶', off: '○' };
+  const badges = { idle: 'â—', running: 'â–¶', off: 'â—‹' };
   const colors = { idle: '#22c55e', running: '#f59e0b', off: '#6b7280' };
   chrome.action.setBadgeText({ text: badges[state] || '' });
   chrome.action.setBadgeBackgroundColor({ color: colors[state] || '#000' });
@@ -730,7 +730,7 @@ chrome.runtime.onMessage.addListener((msg, _, reply) => {
   return true;
 });
 
-// ─── TRPC Media URL Extractor ──────────────────────────────
+// â”€â”€â”€ TRPC Media URL Extractor â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 function handleTrpcMediaUrls(trpcUrl, bodyText) {
   try {
@@ -756,7 +756,7 @@ function handleTrpcMediaUrls(trpcUrl, bodyText) {
     if (!entries.length) return;
 
     console.log(`[FlowAgent] Captured ${entries.length} fresh media URLs from TRPC`);
-    // URL refresh is silent — don't show in request log
+    // URL refresh is silent â€” don't show in request log
 
     // Forward to agent for DB update
     if (ws?.readyState === WebSocket.OPEN) {
@@ -774,7 +774,7 @@ function sleep(ms) {
   return new Promise((r) => setTimeout(r, ms));
 }
 
-// ─── Human-like Telemetry ──────────────────────────────────
+// â”€â”€â”€ Human-like Telemetry â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 // Periodically send tracking events to Google's analytics endpoints
 // to mimic normal browser behavior.
 
@@ -843,7 +843,7 @@ async function sendTelemetry() {
     'authorization': `Bearer ${flowKey}`,
   };
 
-  // Telemetry is silent — don't show in request log
+  // Telemetry is silent â€” don't show in request log
   try {
     if (Math.random() < 0.5) {
       await fetch(`https://aisandbox-pa.googleapis.com/v1:batchLog`, {
@@ -873,4 +873,35 @@ setInterval(() => { _telemetrySessionId = `;${Date.now()}`; }, _rand(25, 35) * 6
 
 scheduleTelemetry();
 
+// â”€â”€â”€ Page Zoom â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// Apply CSS zoom (like old server's CDP apply_page_zoom) on every
+// labs.google tab load. Uses chrome.scripting.executeScript (MAIN world)
+// which is equivalent to CDP Page.addScriptToEvaluateOnNewDocument.
+
+const PAGE_ZOOM = '50%';
+
+function applyZoomToTab(tabId) {
+  chrome.scripting.executeScript({
+    target: { tabId },
+    world: 'MAIN',
+    func: (z) => {
+      try { document.documentElement.style.zoom = z; } catch(e) {}
+      try { if (document.body) document.body.style.zoom = '100%'; } catch(e) {}
+    },
+    args: [PAGE_ZOOM],
+  }).catch(() => {});
+}
+
+chrome.tabs.onUpdated.addListener((tabId, info, tab) => {
+  if (info.status === 'complete' && tab.url && tab.url.startsWith('https://labs.google/')) {
+    applyZoomToTab(tabId);
+  }
+});
+
+// Apply zoom to all existing labs.google tabs on startup
+chrome.tabs.query({ url: 'https://labs.google/*' }).then(tabs => {
+  for (const tab of tabs) applyZoomToTab(tab.id);
+}).catch(() => {});
+
 console.log('[FlowAgent] Extension loaded');
+

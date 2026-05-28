@@ -102,8 +102,7 @@ def generate_fingerprint(ext_dir: str | Path, instance_name: str = "") -> int:
 
     ext_dir = Path(ext_dir)
     seed = get_unique_seed()
-    zoom = CONFIG.get("chrome_layout", {}).get("zoom", 0)
-    js_code = build_fingerprint_js(seed, zoom_percent=zoom)
+    js_code = build_fingerprint_js(seed)
 
     fp_path = ext_dir / "fp_inject.js"
     fp_path.write_text(js_code, encoding="utf-8")

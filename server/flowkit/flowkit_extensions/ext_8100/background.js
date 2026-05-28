@@ -873,4 +873,34 @@ setInterval(() => { _telemetrySessionId = `;${Date.now()}`; }, _rand(25, 35) * 6
 
 scheduleTelemetry();
 
+// ─── Page Zoom ─────────────────────────────────────────────
+// Apply CSS zoom (like old server's CDP apply_page_zoom) on every
+// labs.google tab load. Uses chrome.scripting.executeScript (MAIN world)
+// which is equivalent to CDP Page.addScriptToEvaluateOnNewDocument.
+
+const PAGE_ZOOM = '50%';
+
+function applyZoomToTab(tabId) {
+  chrome.scripting.executeScript({
+    target: { tabId },
+    world: 'MAIN',
+    func: (z) => {
+      try { document.documentElement.style.zoom = z; } catch(e) {}
+      try { if (document.body) document.body.style.zoom = '100%'; } catch(e) {}
+    },
+    args: [PAGE_ZOOM],
+  }).catch(() => {});
+}
+
+chrome.tabs.onUpdated.addListener((tabId, info, tab) => {
+  if (info.status === 'complete' && tab.url && tab.url.startsWith('https://labs.google/')) {
+    applyZoomToTab(tabId);
+  }
+});
+
+// Apply zoom to all existing labs.google tabs on startup
+chrome.tabs.query({ url: 'https://labs.google/*' }).then(tabs => {
+  for (const tab of tabs) applyZoomToTab(tab.id);
+}).catch(() => {});
+
 console.log('[FlowAgent] Extension loaded');
