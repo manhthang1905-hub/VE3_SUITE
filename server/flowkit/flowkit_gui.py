@@ -1127,7 +1127,17 @@ class FlowKitGUI(tk.Tk):
                 self.after(0, lambda: self._update_btn.config(
                     text=f"v{new_ver} OK! Restart...", bg='#00ff88', fg='#000'))
                 self.after(0, lambda: self.title(f"FlowKit Server v{new_ver}"))
-                self.after(2000, lambda: os.execv(sys.executable, [sys.executable] + sys.argv))
+
+                def _restart_after_update():
+                    for proc in self._processes:
+                        try:
+                            proc.kill()
+                        except Exception:
+                            pass
+                    self._processes.clear()
+                    os.execv(sys.executable, [sys.executable] + sys.argv)
+
+                self.after(2000, _restart_after_update)
 
             except Exception as e:
                 self._update_btn.config(text="LOI", bg=RED, fg='#fff')
