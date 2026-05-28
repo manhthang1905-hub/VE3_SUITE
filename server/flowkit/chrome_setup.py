@@ -486,6 +486,7 @@ def setup_chrome(
         _apply_zoom(page, log)
     except Exception as e:
         log("Chrome failed: %s" % e)
+        _kill_chrome_for_dir(chrome_dir)
         return False
 
     # Chan mo tab moi truoc khi thao tac UI
@@ -547,6 +548,7 @@ def setup_chrome(
             _apply_zoom(page, log)
         except Exception as e:
             log("Chrome restart failed: %s" % e)
+            _kill_chrome_for_dir(chrome_dir)
             return False
 
         _inject_tab_guard(page, log)
@@ -595,6 +597,7 @@ def setup_chrome(
             _apply_zoom(page, log)
         except Exception as e:
             log("Chrome restart failed sau login fallback: %s" % e)
+            _kill_chrome_for_dir(chrome_dir)
             return False
 
         _inject_tab_guard(page, log)

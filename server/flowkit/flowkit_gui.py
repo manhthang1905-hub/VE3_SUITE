@@ -547,6 +547,9 @@ class FlowKitGUI(tk.Tk):
                 while not setup_ok:
                     attempt += 1
                     if attempt > 1:
+                        # Kill zombie Chrome truoc khi retry
+                        from chrome_setup import _kill_chrome_for_dir
+                        _kill_chrome_for_dir(chrome_dir)
                         delay = min(10 * attempt, 60)
                         self._log(f"[{name}] Retry setup (lan {attempt}), cho {delay}s...", "WARN")
                         time.sleep(delay)
