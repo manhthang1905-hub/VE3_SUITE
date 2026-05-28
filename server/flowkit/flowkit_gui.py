@@ -591,6 +591,18 @@ class FlowKitGUI(tk.Tk):
             "--disable-renderer-backgrounding",
             "--disable-backgrounding-occluded-windows",
         ]
+
+        # Window layout — same grid as login phase
+        try:
+            from launcher import _calc_chrome_layout, _resolve_chrome_slot, CONFIG as _lcfg
+            instances_cfg = [i for i in _lcfg.get("instances", []) if i.get("enabled", True)]
+            slot = _resolve_chrome_slot(inst["name"])
+            x, y, w, h = _calc_chrome_layout(slot, len(instances_cfg))
+            args.append(f"--window-position={x},{y}")
+            args.append(f"--window-size={w},{h}")
+        except Exception:
+            pass
+
         if proxy_arg:
             args.append(f"--proxy-server={proxy_arg}")
         # Open directly to Flow page so extension can capture flow key

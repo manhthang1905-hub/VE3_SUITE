@@ -75,28 +75,63 @@ def _apply_window_layout_args(options, chrome_exe: str, worker_id: int):
 
 
 def _calc_window_layout(chrome_exe: str, worker_id: int):
-    """Tinh layout cua so theo man hinh hien tai."""
+    """Tinh layout cua so theo man hinh hien tai.
+    Dung chung config voi launcher.py (config.yaml chrome_layout).
+    """
     slot = _resolve_chrome_window_slot(chrome_exe, worker_id)
+
+    # Try to use launcher's layout (same config source)
+    try:
+        from launcher import _calc_chrome_layout, CONFIG as _lconfig
+        total = len([i for i in _lconfig.get("instances", []) if i.get("enabled", True)])
+        x, y, cell_w, cell_h = _calc_chrome_layout(slot, total)
+        return slot, x, y, cell_w, cell_h
+    except Exception:
+        pass
+
+    # Fallback: read config.yaml directly
+    try:
+        import yaml
+        cfg_path = Path(__file__).parent / "config.yaml"
+        if cfg_path.exists():
+            with open(cfg_path) as f:
+                cfg = yaml.safe_load(f)
+            layout = cfg.get("chrome_layout", {})
+            instances = [i for i in cfg.get("instances", []) if i.get("enabled", True)]
+            total = len(instances)
+            gui_width = layout.get("gui_width", 700)
+            cols = layout.get("cols", 2)
+            rows = layout.get("rows", 0)
+            if rows <= 0:
+                rows = max(1, -(-total // cols))
+
+            rect = ctypes.wintypes.RECT()
+            ctypes.windll.user32.SystemParametersInfoW(0x0030, 0, ctypes.byref(rect), 0)
+            sw = rect.right - rect.left
+            sh = rect.bottom - rect.top
+            if sw <= 0 or sh <= 0:
+                sw = int(ctypes.windll.user32.GetSystemMetrics(0))
+                sh = int(ctypes.windll.user32.GetSystemMetrics(1))
+
+            usable_w = max(300, sw - gui_width)
+            cell_w = max(320, usable_w // cols)
+            cell_h = max(180, sh // rows)
+            col = slot % cols
+            row = slot // cols
+            x = gui_width + col * cell_w
+            y = row * cell_h
+            return slot, x, y, cell_w, cell_h
+    except Exception:
+        pass
+
+    # Last resort fallback
     total_slots = max(1, int(os.getenv("CHROME_LAYOUT_SLOTS", "10")))
     slot = max(0, min(slot, total_slots - 1))
-    cols = 2
-    rows = 5
     sw = int(ctypes.windll.user32.GetSystemMetrics(0))
     sh = int(ctypes.windll.user32.GetSystemMetrics(1))
-    if sw >= 3800:
-        default_cols = "3"
-    else:
-        default_cols = "2"
-    cols = max(1, int(os.getenv("CHROME_LAYOUT_COLS", default_cols)))
+    cols = 2
     rows = max(1, (total_slots + cols - 1) // cols)
-    if sw >= 3800:
-        default_reserve = "1920"
-    elif sw >= 2500:
-        default_reserve = "960"
-    else:
-        default_reserve = "760"
-    reserve_left = int(os.getenv("CHROME_LAYOUT_LEFT_RESERVED", default_reserve))
-    reserve_left = max(0, min(reserve_left, sw - 300))
+    reserve_left = 700
     usable_w = max(300, sw - reserve_left)
     cell_w = max(320, usable_w // cols)
     cell_h = max(180, sh // rows)
