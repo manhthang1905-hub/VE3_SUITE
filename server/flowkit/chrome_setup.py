@@ -39,147 +39,9 @@ def _enforce_window_layout(page, window_args, log):
         log("CDP layout skip: %s" % e)
 
 
-_zoom_script_id = ''
-
 def _apply_zoom(page, log, retries=3, force_register_script=True):
-    """Copy y nguyen apply_page_zoom tu server cu chrome_session.py."""
-    global _zoom_script_id
-    if not page:
-        return False
-    try:
-        zoom_val = int(os.getenv("CHROME_PAGE_ZOOM", "50"))
-        zoom_val = max(25, min(200, zoom_val))
-    except Exception:
-        zoom_val = 50
-
-    target = f"{zoom_val}%"
-    scale = max(0.25, min(2.0, zoom_val / 100.0))
-
-    zoom_reset_js = """
-        (function() {
-            try {
-                try { document.documentElement.style.zoom = '100%'; } catch(e) {}
-                try { if (document.body) document.body.style.zoom = '100%'; } catch(e) {}
-                return '100%';
-            } catch(e) {
-                return 'ERR:' + e;
-            }
-        })();
-    """
-
-    zoom_apply_js = f"""
-        (function() {{
-            try {{
-                var z = '{target}';
-                try {{ document.documentElement.style.zoom = z; }} catch(e) {{}}
-                try {{ if (document.body) document.body.style.zoom = '100%'; }} catch(e) {{}}
-                return (document.documentElement && document.documentElement.style.zoom) || '';
-            }} catch(e) {{
-                return 'ERR:' + e;
-            }}
-        }})();
-    """
-
-    zoom_verify_js = """
-        (function() {
-            try {
-                var dz = '';
-                try { dz = (document.documentElement && document.documentElement.style.zoom) || ''; } catch(e) {}
-                var vv = '';
-                try {
-                    if (window.visualViewport && window.visualViewport.scale != null) {
-                        vv = String(window.visualViewport.scale);
-                    }
-                } catch(e) {}
-                return JSON.stringify({dz: dz, vv: vv});
-            } catch(e) {
-                return JSON.stringify({dz: '', vv: '', err: String(e)});
-            }
-        })();
-    """
-
-    zoom_bootstrap_js = f"""
-        (function() {{
-            try {{
-                var z = '{target}';
-                var applyZoom = function() {{
-                    try {{ document.documentElement.style.zoom = z; }} catch(e) {{}}
-                    try {{ if (document.body) document.body.style.zoom = '100%'; }} catch(e) {{}}
-                }};
-                try {{ applyZoom(); }} catch(e) {{}}
-                try {{ document.addEventListener('DOMContentLoaded', applyZoom, true); }} catch(e) {{}}
-                try {{ window.addEventListener('load', applyZoom, true); }} catch(e) {{}}
-            }} catch(e) {{}}
-        }})();
-    """
-
-    try:
-        if force_register_script:
-            try:
-                if _zoom_script_id:
-                    try:
-                        page.run_cdp(
-                            'Page.removeScriptToEvaluateOnNewDocument',
-                            identifier=_zoom_script_id
-                        )
-                    except Exception:
-                        pass
-                res = page.run_cdp(
-                    'Page.addScriptToEvaluateOnNewDocument',
-                    source=zoom_bootstrap_js
-                )
-                _zoom_script_id = res.get('identifier', '')
-            except Exception as cdp_e:
-                log("[ZOOM] CDP pre-load inject failed: %s" % cdp_e)
-
-        cdp_scale_ok = False
-        for i in range(max(1, retries)):
-            try:
-                page.run_js(zoom_reset_js)
-            except Exception:
-                pass
-
-            try:
-                page.run_cdp('Emulation.setPageScaleFactor', pageScaleFactor=1.0)
-                page.run_cdp('Emulation.setPageScaleFactor', pageScaleFactor=scale)
-                cdp_scale_ok = True
-            except Exception:
-                pass
-
-            actual = ''
-            vv = ''
-            try:
-                page.run_js(zoom_apply_js)
-                raw = page.run_js(zoom_verify_js)
-                parsed = json.loads(raw) if isinstance(raw, str) and raw else {}
-                actual = str(parsed.get('dz') or '').strip()
-                vv = str(parsed.get('vv') or '').strip()
-            except Exception:
-                pass
-
-            if actual == target:
-                log("[ZOOM] Verified: %s" % actual)
-                return True
-
-            try:
-                if vv:
-                    vv_val = float(vv)
-                    if abs(vv_val - scale) <= 0.05:
-                        log("[ZOOM] Verified via viewport scale: %.2f" % vv_val)
-                        return True
-            except Exception:
-                pass
-
-            if cdp_scale_ok and not actual:
-                log("[ZOOM] Applied (verify-unavailable), target=%s" % target)
-                return True
-            time.sleep(0.2)
-
-        log("[ZOOM] MISMATCH target=%s, actual=%s, vv=%s" % (target, actual, vv))
-        return False
-    except Exception as e:
-        log("[ZOOM] Set zoom failed: %s" % e)
-        return False
+    """No-op — Chrome is maximized full screen, zoom not needed."""
+    return True
 
 
 def _inject_fingerprint(page, ext_dir, instance_name, log):
@@ -895,18 +757,12 @@ def apply_chrome_cdp(
     except Exception as e:
         log("CDP apply error: %s" % e)
     finally:
-        # Giu connection song — chi disconnect khi thuc su can
-        # Zoom + setPageScaleFactor la CDP session-scoped,
-        # disconnect = mat het settings
-        # Tuy nhien page object se bi GC khi function return,
-        # nen luu vao global dict de giu song
-        _keep_alive_pages[debug_port] = page
+        try:
+            page.disconnect()
+        except Exception:
+            pass
 
     return True
-
-
-# Giu page objects song de CDP session (zoom) khong mat
-_keep_alive_pages = {}
 
 
 # ─── ensure_chrome_ready — dung cho recovery_manager ────────────────
@@ -1010,8 +866,10 @@ def ensure_chrome_ready(
                 pass
             return False
 
-    # Giu page song de zoom khong mat (CDP session-scoped)
-    _keep_alive_pages[debug_port] = page
+    try:
+        page.disconnect()
+    except Exception:
+        pass
 
     log("Setup xong")
     return True

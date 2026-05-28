@@ -193,11 +193,6 @@ def build_fingerprint_js(seed: int, zoom_percent: int = 0) -> str:
         // Audio
         var ogf=AnalyserNode.prototype.getFloatFrequencyData;
         AnalyserNode.prototype.getFloatFrequencyData=function(a){{ogf.call(this,a);for(var i=0;i<Math.min(a.length,10);i++)a[i]+={audio_noise:.6f};}};
-        // Zoom 50% (like old server apply_page_zoom)
-        var _applyZoom=function(){{try{{document.documentElement.style.zoom='50%';}}catch(e){{}}if(document.body)try{{document.body.style.zoom='100%';}}catch(e){{}}}};
-        try{{_applyZoom();}}catch(e){{}}
-        document.addEventListener('DOMContentLoaded',_applyZoom,true);
-        window.addEventListener('load',_applyZoom,true);
         console.log('[SPOOF] seed={seed} gpu={gpu["renderer"][:30]}...');
     }})();
     """
