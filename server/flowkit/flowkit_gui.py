@@ -501,7 +501,7 @@ class FlowKitGUI(tk.Tk):
         # Phase 1: DrissionPage setup (login + navigate + create project)
         # BEFORE agents — google_login uses port 9222+i which conflicts with agent ws_port
         # Parallel setup with semaphore — same as old server chrome_pool.py
-        setup_concurrency = max(1, int(os.getenv("CHROME_SETUP_CONCURRENCY", "3")))
+        setup_concurrency = max(1, int(os.getenv("CHROME_SETUP_CONCURRENCY", "6")))
         setup_stagger = max(0.0, float(os.getenv("CHROME_SETUP_STAGGER_SEC", "1.0")))
         self._log(f"Phase 1: Setting up Chrome (concurrency={setup_concurrency})...", "INFO")
 
@@ -1047,12 +1047,12 @@ class FlowKitGUI(tk.Tk):
         for i, w in enumerate(self._workers):
             card = tk.Frame(self._workers_frame, bg=BG, bd=1, relief='solid',
                             highlightbackground=BORDER)
-            card.pack(side='left', fill='y', padx=4, pady=4, expand=True)
+            card.pack(side='left', fill='y', padx=2, pady=2, expand=True)
 
             # Status color
             if w.get('cooling'):
                 border_color = ORANGE
-                status_text = f"COOLING ({w.get('cooling_remaining', 0)}s)"
+                status_text = f"COOL {w.get('cooling_remaining', 0)}s"
                 status_fg = ORANGE
             elif w.get('available'):
                 border_color = GREEN
@@ -1069,23 +1069,23 @@ class FlowKitGUI(tk.Tk):
 
             card.config(highlightbackground=border_color)
 
-            tk.Label(card, text=w.get('name', '?'), font=('Segoe UI', 11, 'bold'),
-                     fg=FG, bg=BG).pack(padx=8, pady=(6, 2))
-            tk.Label(card, text=status_text, font=('Segoe UI', 9, 'bold'),
+            tk.Label(card, text=w.get('name', '?'), font=('Segoe UI', 8, 'bold'),
+                     fg=FG, bg=BG).pack(padx=4, pady=(3, 1))
+            tk.Label(card, text=status_text, font=('Segoe UI', 7, 'bold'),
                      fg=status_fg, bg=BG).pack()
 
             ext = "Ext: OK" if w.get('extension_connected') else "Ext: --"
             ext_fg = GREEN if w.get('extension_connected') else RED
-            tk.Label(card, text=ext, font=('Consolas', 9), fg=ext_fg, bg=BG).pack()
+            tk.Label(card, text=ext, font=('Consolas', 7), fg=ext_fg, bg=BG).pack()
 
             key = "Key: OK" if w.get('flow_key_present') else "Key: --"
             key_fg = GREEN if w.get('flow_key_present') else FG2
-            tk.Label(card, text=key, font=('Consolas', 9), fg=key_fg, bg=BG).pack()
+            tk.Label(card, text=key, font=('Consolas', 7), fg=key_fg, bg=BG).pack()
 
             tk.Label(card, text=f"403: {w.get('consecutive_403', 0)}",
-                     font=('Consolas', 9), fg=FG2, bg=BG).pack()
-            tk.Label(card, text=f"Done: {w.get('total_completed', 0)} | Fail: {w.get('total_failed', 0)}",
-                     font=('Consolas', 9), fg=FG2, bg=BG).pack(pady=(0, 6))
+                     font=('Consolas', 7), fg=FG2, bg=BG).pack()
+            tk.Label(card, text=f"D:{w.get('total_completed', 0)} F:{w.get('total_failed', 0)}",
+                     font=('Consolas', 7), fg=FG2, bg=BG).pack(pady=(0, 3))
 
     # ============================================================
     # Logging

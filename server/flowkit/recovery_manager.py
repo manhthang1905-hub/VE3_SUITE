@@ -305,63 +305,109 @@ class RecoveryManager:
         return await self._restart_chrome_instance(instance_name, new_ipv6=new_ipv6)
 
     async def _restart_chrome_instance(self, instance_name: str, new_ipv6: str = "") -> bool:
-        """Restart Chrome with new fingerprint (and optionally new IPv6)."""
+        """Restart Chrome with new fingerprint (and optionally new IPv6).
+
+        Flow mirrors Phase 1→3 from normal startup:
+        1. Kill Chrome + clean profile
+        2. Login (profile was cleaned, need re-login)
+        3. Start Chrome (profile now has login cookies)
+        4. Wait for extension
+        5. Navigate to Flow + create project via ensure_chrome_ready
+        """
         cfg = self.instances_config.get(instance_name)
         if not cfg:
             return False
 
         try:
-            from launcher import restart_chrome as _restart_chrome
+            from launcher import (
+                kill_chrome, clean_chrome_profile, start_chrome,
+                resolve_path, get_instance_seed, _write_chrome_prefs,
+            )
             loop = asyncio.get_running_loop()
+
+            # Step 1: Kill Chrome + clean profile
+            await loop.run_in_executor(None, lambda: kill_chrome(instance_name))
+            await asyncio.sleep(3)
+
+            api_port = cfg["api_port"]
+            chrome_dir = resolve_path(cfg["chrome_path"]).parent.parent.parent
+            ext_dir = resolve_path(cfg["extension_dir"])
+
+            await loop.run_in_executor(None, lambda: clean_chrome_profile(chrome_dir))
+            logger.info("[Recovery] %s: profile cleaned", instance_name)
+
+            # Step 2: Login (profile was cleaned, need re-login)
+            account = self._get_account(instance_name)
+            proxy_arg = ""
+            if cfg.get("ipv6") or new_ipv6:
+                proxy_port = 1081 + (api_port - 8100)
+                proxy_arg = f"socks5://127.0.0.1:{proxy_port}"
+
+            if account:
+                from chrome_setup import _do_login
+                worker_id = api_port - 8100
+                login_ok = await loop.run_in_executor(
+                    None,
+                    lambda: _do_login(chrome_dir, account, proxy_arg, worker_id),
+                )
+                if login_ok:
+                    logger.info("[Recovery] %s: login OK", instance_name)
+                else:
+                    logger.warning("[Recovery] %s: login FAILED — continuing anyway", instance_name)
+
+            # Step 3: Start Chrome (profile now has login cookies)
+            _write_chrome_prefs(chrome_dir)
+            cfg_start = {**cfg, "ipv6": new_ipv6} if new_ipv6 else cfg
             proc = await loop.run_in_executor(
                 None,
-                lambda: _restart_chrome(cfg, new_ipv6=new_ipv6),
+                lambda: start_chrome(cfg_start, new_fingerprint=True, clean=False),
             )
 
             if not proc:
-                logger.warning("[Recovery] %s: Chrome restart returned no process", instance_name)
+                logger.warning("[Recovery] %s: Chrome start returned no process", instance_name)
                 return False
 
-            logger.info("[Recovery] %s: Chrome restarted (PID %d), waiting for extension...",
+            logger.info("[Recovery] %s: Chrome started (PID %d), waiting for extension...",
                         instance_name, proc.pid)
 
+            # Step 4: Wait for extension
             await asyncio.sleep(self.restart_delay)
-
-            api_port = cfg["api_port"]
             connected = await self._wait_extension_connect(api_port, timeout=self.reconnect_timeout)
 
             if connected:
-                from launcher import get_instance_seed, resolve_path
                 seed = get_instance_seed(instance_name)
                 self.states[instance_name].current_seed = seed
-                logger.info("[Recovery] %s: extension reconnected, new seed=%d", instance_name, seed)
+                logger.info("[Recovery] %s: extension connected, seed=%d", instance_name, seed)
 
-                # Use DrissionPage to check login + create project (like old server)
+                # Step 5: Navigate to Flow + create project (account=None — already logged in)
                 debug_port = 19200 + (api_port - 8100)
-                chrome_dir = resolve_path(cfg["chrome_path"]).parent.parent.parent
-                account = self._get_account(instance_name)
-                proxy_arg = ""
-                if cfg.get("ipv6"):
-                    proxy_port = 1081 + (api_port - 8100)
-                    proxy_arg = f"socks5://127.0.0.1:{proxy_port}"
-
                 try:
-                    from chrome_setup import ensure_chrome_ready
-                    loop = asyncio.get_running_loop()
+                    from chrome_setup import ensure_chrome_ready, apply_chrome_cdp
                     ready = await loop.run_in_executor(
                         None,
                         lambda: ensure_chrome_ready(
                             debug_port=debug_port,
                             chrome_dir=chrome_dir,
-                            account=account,
+                            account=None,
                             proxy_arg=proxy_arg,
                             log_func=lambda msg: logger.info("[Recovery] %s: %s", instance_name, msg),
                         ),
                     )
                     if ready:
-                        logger.info("[Recovery] %s: Chrome ready (login + project OK)", instance_name)
+                        logger.info("[Recovery] %s: Chrome ready (Flow + project OK)", instance_name)
                     else:
                         logger.warning("[Recovery] %s: Chrome setup failed", instance_name)
+
+                    # Apply CDP settings (zoom, fingerprint, tab guard)
+                    await loop.run_in_executor(
+                        None,
+                        lambda: apply_chrome_cdp(
+                            debug_port=debug_port,
+                            ext_dir=ext_dir,
+                            instance_name=instance_name,
+                            log_func=lambda msg: logger.info("[Recovery] %s: %s", instance_name, msg),
+                        ),
+                    )
                 except Exception as e:
                     logger.warning("[Recovery] %s: chrome_setup error: %s", instance_name, e)
 

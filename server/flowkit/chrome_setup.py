@@ -454,6 +454,7 @@ def setup_chrome(
         page = ChromiumPage(co)
         log("Chrome opened: %s" % (page.title or "(no title)"))
         _enforce_window_layout(page, window_args, log)
+        _apply_zoom(page, log)
     except Exception as e:
         log("Chrome failed: %s" % e)
         return False
@@ -514,6 +515,7 @@ def setup_chrome(
             page = ChromiumPage(co2)
             log("Chrome mo lai: %s" % (page.title or "(no title)"))
             _enforce_window_layout(page, window_args, log)
+            _apply_zoom(page, log)
         except Exception as e:
             log("Chrome restart failed: %s" % e)
             return False
@@ -561,6 +563,7 @@ def setup_chrome(
             page = ChromiumPage(co3)
             log("Chrome mo lai sau login: %s" % (page.title or "(no title)"))
             _enforce_window_layout(page, window_args, log)
+            _apply_zoom(page, log)
         except Exception as e:
             log("Chrome restart failed sau login fallback: %s" % e)
             return False
@@ -756,7 +759,7 @@ def ensure_chrome_ready(
 
     url = page.url or ""
     if 'accounts.google.com' in url:
-        log("Redirect ve login — can login lai")
+        log("Redirect ve login — chua dang nhap")
         try:
             page.disconnect()
         except Exception:
