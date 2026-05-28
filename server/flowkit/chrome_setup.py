@@ -458,6 +458,7 @@ def _build_options(chrome_dir: Path, ext_dir: Path, port: int, proxy_arg: str = 
     co.set_argument("--disable-backgrounding-occluded-windows")
     co.set_argument("--disable-session-crashed-bubble")
     co.set_argument("--hide-crash-restore-bubble")
+    co.set_argument("--force-device-scale-factor=0.5")
 
     if proxy_arg:
         co.set_argument(f"--proxy-server={proxy_arg}")

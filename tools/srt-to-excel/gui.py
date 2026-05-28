@@ -233,7 +233,9 @@ class SrtToExcelApp(tk.Tk):
         cfg_path = Path(TOOL_DIR) / "config" / "settings.yaml"
         cfg_path.parent.mkdir(parents=True, exist_ok=True)
         # Cập nhật từ UI
-        self.cfg["deepseek_api_key"] = self.var_deepseek.get().strip()
+        dk = self.var_deepseek.get().strip()
+        self.cfg["deepseek_api_key"] = dk
+        self.cfg["deepseek_api_keys"] = [dk] if dk else []
         self.cfg["gemini_api_keys"] = [k.strip() for k in self.var_gemini.get().split(",") if k.strip()]
         self.cfg["groq_api_keys"] = [k.strip() for k in self.var_groq.get().split(",") if k.strip()]
         self.cfg["whisper_model"] = self.var_whisper_model.get()

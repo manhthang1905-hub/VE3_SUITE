@@ -1183,6 +1183,9 @@ def login_google_chrome(account_info: dict, chrome_portable: str = None, profile
             except Exception as fw_err:
                 log(f"[FW] Firewall error: {fw_err}")
 
+        # Zoom 50% via Chrome flag (most reliable method)
+        options.set_argument("--force-device-scale-factor=0.5")
+
         # Má»Ÿ Chrome má»›i
         driver = ChromiumPage(options)
         _enforce_window_layout(driver, chrome_exe, worker_id)
