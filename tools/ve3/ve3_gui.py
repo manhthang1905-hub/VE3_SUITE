@@ -3798,23 +3798,16 @@ Get-CimInstance Win32_Process |
             all_pairs = self._get_server_pairs(only_available=False)
             bound_pair = next((p for p in all_pairs if p["server_name"] == bound_server), None)
             if bound_pair:
-                self._log(f"[QUEUE/VE3] {project_dir.name}: bound pair {bound_server}/{bound_account or '?'} is not ready. enabled={bound_pair.get('enabled')}, account={bound_pair.get('flow_account_name')}, available={bound_pair.get('available')}. Trying another pair.", "WARN", "ve3")
+                self._log(f"[QUEUE/VE3] {project_dir.name}: bound server {bound_server}/{bound_account or '?'} is not ready. Waiting (will not reassign).", "WARN", "ve3")
             else:
-                self._log(f"[QUEUE/VE3] {project_dir.name}: bound pair {bound_server}/{bound_account or '?'} is missing from config. Trying another pair.", "WARN", "ve3")
-            fallback = _best_pair(free_pairs)
-            if fallback:
-                self._log(f"[QUEUE/VE3] {project_dir.name}: using fallback pair {fallback['server_name']}/{fallback['flow_account_name']} to avoid queue stall", "WARN", "ve3")
-                return fallback
+                self._log(f"[QUEUE/VE3] {project_dir.name}: bound server {bound_server}/{bound_account or '?'} is missing from config. Waiting (will not reassign).", "WARN", "ve3")
             return None
 
         if bound_account:
             candidates = by_account.get(bound_account, [])
             if candidates:
                 return _best_pair(candidates)
-            self._log(f"[QUEUE/VE3] {project_dir.name}: bound account {bound_account} has no ready server. Trying another pair.", "WARN", "ve3")
-            fallback = _best_pair(free_pairs)
-            if fallback:
-                return fallback
+            self._log(f"[QUEUE/VE3] {project_dir.name}: bound account {bound_account} has no ready server. Waiting (will not reassign).", "WARN", "ve3")
             return None
 
         if flow_project_id and len(free_pairs) > 1:
