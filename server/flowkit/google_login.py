@@ -3,7 +3,7 @@
 """
 VE3 Tool - Google Login Helper
 
-Äá»c thÃ´ng tin tÃ i khoáº£n tá»« Google Sheet vÃ  Ä‘Äƒng nháº­p vÃ o Chrome.
+Äá»c thÃ´ng tin tÃ i khoáº£n tá»« Google Sheet vÃ  Ä'Äƒng nháº­p vÃ o Chrome.
 
 v1.0.105: Äá»c tá»« sheet THÃ”NG TIN (thay vÃ¬ ve3)
 - Cá»™t B: MÃ£ kÃªnh (AR35, AR47, KA2...)
@@ -15,7 +15,7 @@ Há»— trá»£ xoay vÃ²ng tÃ i khoáº£n:
 - Xoay vÃ²ng khi háº¿t danh sÃ¡ch
 
 CÃ¡ch detect mÃ£ kÃªnh:
-- Tá»« Ä‘Æ°á»ng dáº«n: Documents\AR35-T1\ve3-tool-simple\ â†’ kÃªnh lÃ  AR35
+- Tá»« Ä'Æ°á»ng dáº«n: Documents\AR35-T1\ve3-tool-simple\ â†' kÃªnh lÃ  AR35
 """
 
 import sys
@@ -175,8 +175,8 @@ def get_proxy_arg_from_settings(ensure_ready: bool = True) -> str:
 
     Khi ensure_ready=True (default):
     - Kiem tra port proxy da san sang chua (SOCKS5 dang chay)
-    - Neu chua â†’ tu start SOCKS5 proxy (lay IP tu pool/rotator)
-    - Neu khong start duoc â†’ tra ve "" (login khong qua proxy)
+    - Neu chua â†' tu start SOCKS5 proxy (lay IP tu pool/rotator)
+    - Neu khong start duoc â†' tra ve "" (login khong qua proxy)
 
     Args:
         ensure_ready: True = tu dong start proxy neu chua chay
@@ -211,7 +211,7 @@ def get_proxy_arg_from_settings(ensure_ready: bool = True) -> str:
         if pp_type in ('ipv6', 'ipv6_pool'):
             # v1.0.613: VM mode dung IPv6 truc tiep + firewall block IPv4
             # ipv6_rotator.set_ipv6() da add IPv6 vao interface
-            # Firewall block IPv4 cho Chrome â†’ bat buoc dung IPv6
+            # Firewall block IPv4 cho Chrome â†' bat buoc dung IPv6
             # Chi server mode can SOCKS5 proxy (nhieu workers, nhieu IPv6)
             gen_mode = cfg.get('generation_mode', 'api')
             if gen_mode != 'server':
@@ -226,12 +226,12 @@ def get_proxy_arg_from_settings(ensure_ready: bool = True) -> str:
             proxy_arg = f"socks5://127.0.0.1:{port}"
 
             if ensure_ready and not _is_port_open(port):
-                # Port chua mo â†’ tu start proxy
+                # Port chua mo â†' tu start proxy
                 log(f"[PROXY] Port {port} chua san sang, dang khoi tao...", "INFO")
                 if _ensure_socks5_proxy(cfg, pp_type, port):
                     log(f"[PROXY] SOCKS5 proxy started on port {port}", "INFO")
                 else:
-                    log(f"[PROXY] Khong start duoc proxy â†’ login KHONG qua proxy", "WARN")
+                    log(f"[PROXY] Khong start duoc proxy â†' login KHONG qua proxy", "WARN")
                     return ""
 
             return proxy_arg
@@ -262,7 +262,7 @@ def get_proxy_arg_from_settings(ensure_ready: bool = True) -> str:
                         log(f"[PROXY] ProxyXoay for login: {provider.get_current_ip()}", "INFO")
                         return proxy_arg
                     else:
-                        log("[PROXY] ProxyXoay setup failed â†’ login KHONG qua proxy", "WARN")
+                        log("[PROXY] ProxyXoay setup failed â†' login KHONG qua proxy", "WARN")
                 except Exception as e:
                     log(f"[PROXY] ProxyXoay error: {e}", "WARN")
 
@@ -289,8 +289,8 @@ def _ensure_ipv6_on_interface(cfg: dict, pp_type: str) -> bool:
     """
     v1.0.612: Dam bao IPv6 da tren interface (VM mode, KHONG tao SOCKS5 proxy).
     ipv6_rotator.init_with_working_ipv6() se:
-    - Pool mode: lay IP tu API â†’ set_ipv6 (netsh add) â†’ test
-    - File mode: doc ipv6.txt â†’ set_ipv6 (netsh add) â†’ test
+    - Pool mode: lay IP tu API â†' set_ipv6 (netsh add) â†' test
+    - File mode: doc ipv6.txt â†' set_ipv6 (netsh add) â†' test
     """
     try:
         from modules.ipv6_rotator import get_ipv6_rotator
@@ -306,7 +306,7 @@ def _ensure_ipv6_on_interface(cfg: dict, pp_type: str) -> bool:
             log(f"[PROXY] IPv6 da san sang: {rotator.current_ipv6}", "INFO")
             return True
 
-        # Chua co â†’ tim va set IPv6 len interface
+        # Chua co â†' tim va set IPv6 len interface
         working_ipv6 = rotator.init_with_working_ipv6()
         if working_ipv6:
             log(f"[PROXY] IPv6 active: {working_ipv6}", "INFO")
@@ -342,8 +342,8 @@ def _ensure_socks5_proxy(cfg: dict, pp_type: str, port: int) -> bool:
         rotator.set_logger(log)
 
         # init_with_working_ipv6() tu dong:
-        # - Pool mode: lay IP tu API â†’ set_ipv6 (netsh add) â†’ test
-        # - File mode: doc ipv6.txt â†’ set_ipv6 (netsh add) â†’ test
+        # - Pool mode: lay IP tu API â†' set_ipv6 (netsh add) â†' test
+        # - File mode: doc ipv6.txt â†' set_ipv6 (netsh add) â†' test
         working_ipv6 = rotator.init_with_working_ipv6()
         if not working_ipv6:
             log("[PROXY] Khong tim duoc IPv6 hoat dong", "WARN")
@@ -483,13 +483,13 @@ def get_channel_accounts(channel_code: str, max_retries: int = 3) -> list:
     """
     Láº¥y danh sÃ¡ch tÃ i khoáº£n Veo3 cho má»™t kÃªnh tá»« Google Sheet.
 
-    v1.0.110: TÃ¬m cáº£ mÃ£ Ä‘áº§y Ä‘á»§ (AR8-T1) vÃ  mÃ£ channel (AR8)
-    - Cá»™t B: MÃ£ mÃ¡y Ä‘áº§y Ä‘á»§ (AR8-T1, KA2-T2...)
+    v1.0.110: TÃ¬m cáº£ mÃ£ Ä'áº§y Ä'á»§ (AR8-T1) vÃ  mÃ£ channel (AR8)
+    - Cá»™t B: MÃ£ mÃ¡y Ä'áº§y Ä'á»§ (AR8-T1, KA2-T2...)
     - Cá»™t AT: TÃ i khoáº£n Veo3 (format: id|pass|2fa per line)
 
     Args:
         channel_code: MÃ£ cáº§n tÃ¬m (cÃ³ thá»ƒ lÃ  AR8-T1 hoáº·c AR8)
-        max_retries: Sá»‘ láº§n retry khi gáº·p lá»—i
+        max_retries: Sá»' láº§n retry khi gáº·p lá»—i
 
     Returns:
         List of account dicts: [{"id": "...", "password": "...", "totp_secret": "..."}, ...]
@@ -506,7 +506,7 @@ def get_channel_accounts(channel_code: str, max_retries: int = 3) -> list:
     for attempt in range(max_retries):
         if attempt > 0:
             wait_time = 2 * attempt
-            log(f"Retry Ä‘á»c Google Sheet ({attempt + 1}/{max_retries}) sau {wait_time}s...")
+            log(f"Retry Ä'á»c Google Sheet ({attempt + 1}/{max_retries}) sau {wait_time}s...")
             time.sleep(wait_time)
 
         gc, spreadsheet_name = load_gsheet_client()
@@ -524,7 +524,7 @@ def get_channel_accounts(channel_code: str, max_retries: int = 3) -> list:
 
             # v1.0.110: TÃ¬m theo nhiá»u cÃ¡ch:
             # 1. Khá»›p chÃ­nh xÃ¡c (AR8-T1 == AR8-T1)
-            # 2. Khá»›p báº¯t Ä‘áº§u báº±ng (AR8-T1 starts with AR8)
+            # 2. Khá»›p báº¯t Ä'áº§u báº±ng (AR8-T1 starts with AR8)
             # 3. Khá»›p channel (AR8 == AR8)
             for row_idx, row in enumerate(all_data, start=1):
                 if len(row) <= max(channel_col_idx, accounts_col_idx):
@@ -532,7 +532,7 @@ def get_channel_accounts(channel_code: str, max_retries: int = 3) -> list:
 
                 row_code = str(row[channel_col_idx]).strip().upper()
 
-                # Kiá»ƒm tra khá»›p: chÃ­nh xÃ¡c HOáº¶C báº¯t Ä‘áº§u báº±ng
+                # Kiá»ƒm tra khá»›p: chÃ­nh xÃ¡c HOáº¶C báº¯t Ä'áº§u báº±ng
                 is_match = (
                     row_code == code_upper or  # Khá»›p chÃ­nh xÃ¡c
                     row_code.startswith(code_upper + "-") or  # AR8 matches AR8-T1
@@ -588,7 +588,7 @@ def get_channel_ipv6(channel_code: str, max_retries: int = 3) -> list:
     for attempt in range(max_retries):
         if attempt > 0:
             wait_time = 2 * attempt
-            log(f"Retry Ä‘á»c IPv6 ({attempt + 1}/{max_retries}) sau {wait_time}s...")
+            log(f"Retry Ä'á»c IPv6 ({attempt + 1}/{max_retries}) sau {wait_time}s...")
             time.sleep(wait_time)
 
         gc, spreadsheet_name = load_gsheet_client()
@@ -606,7 +606,7 @@ def get_channel_ipv6(channel_code: str, max_retries: int = 3) -> list:
 
             log(f"[IPv6] TÃ¬m mÃ£ '{code_upper}' trong {len(all_data)} dÃ²ng, cá»™t B (idx={channel_col_idx}), cá»™t IPv6 (idx={ipv6_col_idx})")
 
-            # Debug: hiá»‡n vÃ i mÃ£ Ä‘áº§u trong cá»™t B
+            # Debug: hiá»‡n vÃ i mÃ£ Ä'áº§u trong cá»™t B
             sample_codes = []
             for r in all_data[:10]:
                 if len(r) > channel_col_idx:
@@ -664,26 +664,26 @@ def get_current_account_for_channel(channel_code: str, machine_code: str = None)
     """
     Láº¥y tÃ i khoáº£n hiá»‡n táº¡i cho má»™t kÃªnh (theo index rotation).
 
-    v1.0.110: DÃ¹ng machine_code (mÃ£ Ä‘áº§y Ä‘á»§) Ä‘á»ƒ tÃ¬m trong sheet,
-    nhÆ°ng dÃ¹ng channel_code Ä‘á»ƒ track rotation (táº¥t cáº£ mÃ¡y cÃ¹ng kÃªnh dÃ¹ng chung).
+    v1.0.110: DÃ¹ng machine_code (mÃ£ Ä'áº§y Ä'á»§) Ä'á»ƒ tÃ¬m trong sheet,
+    nhÆ°ng dÃ¹ng channel_code Ä'á»ƒ track rotation (táº¥t cáº£ mÃ¡y cÃ¹ng kÃªnh dÃ¹ng chung).
 
     Args:
-        channel_code: MÃ£ kÃªnh (AR8, KA2) - dÃ¹ng Ä‘á»ƒ track rotation
-        machine_code: MÃ£ mÃ¡y Ä‘áº§y Ä‘á»§ (AR8-T1, KA2-T2) - dÃ¹ng Ä‘á»ƒ tÃ¬m trong sheet
+        channel_code: MÃ£ kÃªnh (AR8, KA2) - dÃ¹ng Ä'á»ƒ track rotation
+        machine_code: MÃ£ mÃ¡y Ä'áº§y Ä'á»§ (AR8-T1, KA2-T2) - dÃ¹ng Ä'á»ƒ tÃ¬m trong sheet
                       Náº¿u khÃ´ng cÃ³, dÃ¹ng channel_code
 
     Returns:
         Account dict: {"id": "...", "password": "...", "totp_secret": "...", "index": N, "total": M}
         or None if no accounts found
     """
-    # DÃ¹ng machine_code Ä‘á»ƒ tÃ¬m trong sheet, fallback to channel_code
+    # DÃ¹ng machine_code Ä'á»ƒ tÃ¬m trong sheet, fallback to channel_code
     search_code = machine_code if machine_code else channel_code
     accounts = get_channel_accounts(search_code)
 
     if not accounts:
         return None
 
-    # DÃ¹ng channel_code Ä‘á»ƒ track rotation
+    # DÃ¹ng channel_code Ä'á»ƒ track rotation
     current_index = load_account_index(channel_code)
     # Ensure index is within bounds
     if current_index >= len(accounts):
@@ -700,11 +700,11 @@ def get_current_account_for_channel(channel_code: str, machine_code: str = None)
 
 def get_account_by_index(machine_code: str, index: int) -> dict:
     """
-    v1.0.154: Láº¥y tÃ i khoáº£n theo index cá»‘ Ä‘á»‹nh (khÃ´ng rotate).
-    DÃ¹ng khi cáº§n login láº¡i Ä‘Ãºng account Ä‘Ã£ dÃ¹ng ban Ä‘áº§u.
+    v1.0.154: Láº¥y tÃ i khoáº£n theo index cá»' Ä'á»‹nh (khÃ´ng rotate).
+    DÃ¹ng khi cáº§n login láº¡i Ä'Ãºng account Ä'Ã£ dÃ¹ng ban Ä'áº§u.
 
     Args:
-        machine_code: MÃ£ mÃ¡y Ä‘áº§y Ä‘á»§ (KA2-T2, AR8-T1) - KHÃ”NG pháº£i channel code!
+        machine_code: MÃ£ mÃ¡y Ä'áº§y Ä'á»§ (KA2-T2, AR8-T1) - KHÃ”NG pháº£i channel code!
         index: Index cá»§a account (0-based)
 
     Returns:
@@ -730,13 +730,13 @@ def get_account_by_index(machine_code: str, index: int) -> dict:
 
 # ============================================================================
 # EXCEL ACCOUNT TRACKING (v1.0.106)
-# LÆ°u/Ä‘á»c thÃ´ng tin tÃ i khoáº£n trong Excel Ä‘á»ƒ resume Ä‘Ãºng account
+# LÆ°u/Ä'á»c thÃ´ng tin tÃ i khoáº£n trong Excel Ä'á»ƒ resume Ä'Ãºng account
 # ============================================================================
 
 def save_project_account_json(project_dir, channel: str, account_index: int, account_email: str) -> bool:
     """
     v1.0.264: LÆ°u account vÃ o .account.json trong thÆ° má»¥c project.
-    File nÃ y Ä‘á»™c láº­p vá»›i Excel - khÃ´ng bá»‹ áº£nh hÆ°á»Ÿng khi Excel bá»‹ xÃ³a/restore.
+    File nÃ y Ä'á»™c láº­p vá»›i Excel - khÃ´ng bá»‹ áº£nh hÆ°á»Ÿng khi Excel bá»‹ xÃ³a/restore.
     """
     try:
         import json
@@ -772,10 +772,10 @@ def get_project_account_json(project_dir) -> dict:
 
 def save_account_to_excel(excel_path: str, channel: str, account_index: int, account_email: str) -> bool:
     """
-    LÆ°u thÃ´ng tin tÃ i khoáº£n Ä‘ang sá»­ dá»¥ng vÃ o Excel config sheet.
+    LÆ°u thÃ´ng tin tÃ i khoáº£n Ä'ang sá»­ dá»¥ng vÃ o Excel config sheet.
 
     Args:
-        excel_path: ÄÆ°á»ng dáº«n Ä‘áº¿n file Excel
+        excel_path: ÄÆ°á»ng dáº«n Ä'áº¿n file Excel
         channel: MÃ£ kÃªnh (VD: AR35, AR47)
         account_index: Index cá»§a tÃ i khoáº£n (0-based)
         account_email: Email cá»§a tÃ i khoáº£n
@@ -810,7 +810,7 @@ def save_account_to_excel(excel_path: str, channel: str, account_index: int, acc
         }
 
         for key, value in config_items.items():
-            # TÃ¬m row cÃ³ key nÃ y Ä‘á»ƒ update
+            # TÃ¬m row cÃ³ key nÃ y Ä'á»ƒ update
             found = False
             for row in range(2, ws.max_row + 1):
                 cell_key = ws.cell(row=row, column=1).value
@@ -839,7 +839,7 @@ def get_account_from_excel(excel_path: str) -> dict:
     Äá»c thÃ´ng tin tÃ i khoáº£n tá»« Excel config sheet.
 
     Args:
-        excel_path: ÄÆ°á»ng dáº«n Ä‘áº¿n file Excel
+        excel_path: ÄÆ°á»ng dáº«n Ä'áº¿n file Excel
 
     Returns:
         {"channel": "AR35", "index": 0, "email": "xxx@gmail.com"} hoáº·c None náº¿u chÆ°a cÃ³
@@ -852,7 +852,7 @@ def get_account_from_excel(excel_path: str) -> dict:
         if not path.exists():
             return None
 
-        # data_only=True: Ä‘á»c giÃ¡ trá»‹ thá»±c (khÃ´ng pháº£i cÃ´ng thá»©c)
+        # data_only=True: Ä'á»c giÃ¡ trá»‹ thá»±c (khÃ´ng pháº£i cÃ´ng thá»©c)
         # KhÃ´ng dÃ¹ng read_only=True vÃ¬ ws.max_row cÃ³ thá»ƒ lÃ  None
         wb = load_workbook(str(path), data_only=True)
 
@@ -862,7 +862,7 @@ def get_account_from_excel(excel_path: str) -> dict:
         ws = wb['config']
 
         result = {}
-        # DÃ¹ng ws.iter_rows() thay vÃ¬ range(max_row) Ä‘á»ƒ trÃ¡nh lá»—i max_row=None
+        # DÃ¹ng ws.iter_rows() thay vÃ¬ range(max_row) Ä'á»ƒ trÃ¡nh lá»—i max_row=None
         for row_cells in ws.iter_rows(min_row=2, values_only=True):
             cell_key = row_cells[0] if len(row_cells) > 0 else None
             cell_value = row_cells[1] if len(row_cells) > 1 else None
@@ -899,14 +899,14 @@ def get_account_from_excel(excel_path: str) -> dict:
 
 def set_account_index_for_resume(excel_path: str, channel: str) -> bool:
     """
-    Äá»c thÃ´ng tin account tá»« Excel vÃ  set vÃ o index tracker Ä‘á»ƒ resume Ä‘Ãºng account.
+    Äá»c thÃ´ng tin account tá»« Excel vÃ  set vÃ o index tracker Ä'á»ƒ resume Ä'Ãºng account.
 
     Args:
-        excel_path: ÄÆ°á»ng dáº«n Ä‘áº¿n file Excel
+        excel_path: ÄÆ°á»ng dáº«n Ä'áº¿n file Excel
         channel: MÃ£ kÃªnh hiá»‡n táº¡i
 
     Returns:
-        True náº¿u Ä‘Ã£ restore account index tá»« Excel
+        True náº¿u Ä'Ã£ restore account index tá»« Excel
     """
     account_info = get_account_from_excel(excel_path)
 
@@ -927,12 +927,12 @@ def set_account_index_for_resume(excel_path: str, channel: str) -> bool:
 
 def detect_machine_code() -> str:
     """
-    Detect mÃ£ mÃ¡y tá»« Ä‘Æ°á»ng dáº«n thÆ° má»¥c tool.
+    Detect mÃ£ mÃ¡y tá»« Ä'Æ°á»ng dáº«n thÆ° má»¥c tool.
 
     VÃ­ dá»¥:
-    - C:\\Users\\Admin\\Documents\\AR57-T1\\ve3-tool-simple â†’ AR57-T1
-    - D:\\VMs\\AR4-T1\\ve3-tool-simple â†’ AR4-T1
-    - C:\\Users\\hoangmai\\Documents\\AR4-T1\\ve3-tool-simple â†’ AR4-T1
+    - C:\\Users\\Admin\\Documents\\AR57-T1\\ve3-tool-simple â†' AR57-T1
+    - D:\\VMs\\AR4-T1\\ve3-tool-simple â†' AR4-T1
+    - C:\\Users\\hoangmai\\Documents\\AR4-T1\\ve3-tool-simple â†' AR4-T1
     """
     tool_path = TOOL_DIR.resolve()
 
@@ -941,7 +941,7 @@ def detect_machine_code() -> str:
 
     # MÃ£ mÃ¡y thÆ°á»ng cÃ³ dáº¡ng: XX#-T# hoáº·c XX##-T# hoáº·c XX##-####
     # VÃ­ dá»¥: AR4-T1, AR57-T1, AR47-0028
-    # Pattern linh hoáº¡t: 2 chá»¯ cÃ¡i + 1-3 sá»‘ + dash + alphanumeric
+    # Pattern linh hoáº¡t: 2 chá»¯ cÃ¡i + 1-3 sá»' + dash + alphanumeric
     code_pattern = re.compile(r'^[A-Z]{2}\d{1,3}-[A-Z0-9]+$', re.IGNORECASE)
 
     # Kiá»ƒm tra parent folder
@@ -1044,7 +1044,7 @@ def get_account_info(machine_code: str, max_retries: int = 3) -> dict:
 
     Args:
         machine_code: MÃ£ mÃ¡y (VD: AR35-T1) - sáº½ extract thÃ nh mÃ£ kÃªnh (AR35)
-        max_retries: Sá»‘ láº§n retry khi gáº·p lá»—i
+        max_retries: Sá»' láº§n retry khi gáº·p lá»—i
 
     Returns:
         {"id": "email@gmail.com", "password": "xxx", "totp_secret": "...", "index": N, "total": M}
@@ -1067,11 +1067,11 @@ def get_account_info(machine_code: str, max_retries: int = 3) -> dict:
 
 def login_google_chrome(account_info: dict, chrome_portable: str = None, profile_dir: str = None, worker_id: int = 0, proxy_arg: str = "") -> bool:
     """
-    Má»Ÿ Chrome vÃ  Ä‘Äƒng nháº­p Google báº±ng JavaScript.
+    Má»Ÿ Chrome vÃ  Ä'Äƒng nháº­p Google báº±ng JavaScript.
 
-    Do Google cÃ³ nhiá»u biá»‡n phÃ¡p chá»‘ng bot, script nÃ y sáº½:
-    1. Má»Ÿ Chrome Ä‘áº¿n trang Ä‘Äƒng nháº­p
-    2. DÃ¹ng JavaScript Ä‘á»ƒ Ä‘iá»n email/password vÃ  trigger events
+    Do Google cÃ³ nhiá»u biá»‡n phÃ¡p chá»'ng bot, script nÃ y sáº½:
+    1. Má»Ÿ Chrome Ä'áº¿n trang Ä'Äƒng nháº­p
+    2. DÃ¹ng JavaScript Ä'á»ƒ Ä'iá»n email/password vÃ  trigger events
     3. Äá»ƒ user xÃ¡c thá»±c náº¿u cáº§n
 
     Args:
@@ -1080,7 +1080,7 @@ def login_google_chrome(account_info: dict, chrome_portable: str = None, profile
                         Quan trá»ng khi cÃ³ nhiá»u Chrome cháº¡y song song.
         profile_dir: ÄÆ°á»ng dáº«n profile Chrome cá»¥ thá»ƒ (náº¿u cÃ³).
                     DÃ¹ng cho Chrome 2 vá»›i profile riÃªng (vÃ­ dá»¥: pic2).
-        worker_id: Worker ID Ä‘á»ƒ dÃ¹ng port khÃ¡c nhau cho má»—i Chrome.
+        worker_id: Worker ID Ä'á»ƒ dÃ¹ng port khÃ¡c nhau cho má»—i Chrome.
         proxy_arg: Proxy argument cho Chrome (vd: "socks5://127.0.0.1:1088").
                    v1.0.571: Dam bao login cung dung proxy nhu khi tao anh.
     """
@@ -1106,13 +1106,13 @@ def login_google_chrome(account_info: dict, chrome_portable: str = None, profile
         options.set_local_port(base_port)  # DÃ¹ng set_local_port nhÆ° drission_flow_api.py
         log(f"Using port: {base_port} (worker_id={worker_id})")
 
-        # Æ¯u tiÃªn chrome_portable Ä‘Æ°á»£c truyá»n vÃ o (cho Chrome 2 song song)
+        # Æ¯u tiÃªn chrome_portable Ä'Æ°á»£c truyá»n vÃ o (cho Chrome 2 song song)
         chrome_exe = None
         if chrome_portable and Path(chrome_portable).exists():
             chrome_exe = chrome_portable
             log(f"Using specified Chrome: {chrome_exe}")
         else:
-            # Fallback: TÃ¬m Chrome Portable máº·c Ä‘á»‹nh
+            # Fallback: TÃ¬m Chrome Portable máº·c Ä'á»‹nh
             chrome_paths = [
                 TOOL_DIR / "GoogleChromePortable" / "GoogleChromePortable.exe",
                 Path.home() / "Documents" / "GoogleChromePortable" / "GoogleChromePortable.exe",
@@ -1156,7 +1156,7 @@ def login_google_chrome(account_info: dict, chrome_portable: str = None, profile
         _enforce_window_layout(driver, chrome_exe, worker_id)
 
         # v1.0.650: Inject fingerprint NGAY SAU khi mo Chrome, TRUOC khi navigate
-        # Dam bao login va tao anh dung CUNG fingerprint â†’ Google khong detect thay doi
+        # Dam bao login va tao anh dung CUNG fingerprint â†' Google khong detect thay doi
         try:
             try:
                 from fingerprint_data import get_unique_seed, build_fingerprint_js
@@ -1175,7 +1175,7 @@ def login_google_chrome(account_info: dict, chrome_portable: str = None, profile
                 driver.run_js(_fp_js)
                 log(f"[SPOOF] Fallback JS fingerprint inject (seed={_fp_seed})")
 
-            # Save seed â†’ file de DrissionFlowAPI doc va dung CUNG seed
+            # Save seed â†' file de DrissionFlowAPI doc va dung CUNG seed
             try:
                 _fp_seed_file.parent.mkdir(parents=True, exist_ok=True)
                 _fp_seed_file.write_text(str(_fp_seed))
@@ -1187,12 +1187,12 @@ def login_google_chrome(account_info: dict, chrome_portable: str = None, profile
         except Exception as _fp_err:
             log(f"[SPOOF] Fingerprint inject error: {_fp_err}", "WARN")
 
-        # Äi Ä‘áº¿n trang Ä‘Äƒng nháº­p Google
+        # Äi Ä'áº¿n trang Ä'Äƒng nháº­p Google
         log("Navigating to Google login...")
         driver.get("https://accounts.google.com/signin")
         time.sleep(3)
 
-        # Kiá»ƒm tra xem Ä’Ã£ Ä’Äƒng nháº­p chÆ°a
+        # Kiá»ƒm tra xem Ä'Ã£ Ä'Äƒng nháº­p chÆ°a
         if "myaccount.google.com" in driver.url or "google.com/search" in driver.url:
             log("Already logged in!", "OK")
             try:
@@ -1211,11 +1211,11 @@ def login_google_chrome(account_info: dict, chrome_portable: str = None, profile
 
             if email_input:
                 log(f"Found email input, filling: {email}")
-                # Click Ä‘á»ƒ focus
+                # Click Ä'á»ƒ focus
                 email_input.click()
                 time.sleep(0.3)
 
-                # DÃ¹ng JavaScript Ä‘á»ƒ set value vÃ  trigger events
+                # DÃ¹ng JavaScript Ä'á»ƒ set value vÃ  trigger events
                 js_set_email = f'''
                     this.value = "{email}";
                     this.dispatchEvent(new Event('input', {{bubbles: true}}));
@@ -1249,7 +1249,7 @@ def login_google_chrome(account_info: dict, chrome_portable: str = None, profile
                     if 'challenge/pwd' in current_url or 'challenge/password' in current_url:
                         log(f"Password page loaded (after {_url_wait+1}s)")
                         break
-                        if 'signin/rejected' in current_url:
+                    if 'signin/rejected' in current_url:
                         log(f"Google REJECTED login: {current_url}", "ERROR")
                         try:
                             driver.quit()
@@ -1274,13 +1274,13 @@ def login_google_chrome(account_info: dict, chrome_portable: str = None, profile
             log(f"Email step error: {e}", "WARN")
 
         # === BÆ¯á»šC 2: ÄIá»€N PASSWORD (Ctrl+V) ===
-        # v1.0.645: Fix password detection - Google Ä‘á»•i DOM, dÃ¹ng JS detect + thÃªm selectors
+        # v1.0.645: Fix password detection - Google Ä'á»•i DOM, dÃ¹ng JS detect + thÃªm selectors
         log("Waiting for password input...")
         try:
             pw_input = None
 
             # v1.0.645: DÃ¹ng JavaScript detect trÆ°á»›c (nhanh + reliable hÆ¡n DrissionPage selectors)
-            # Google cÃ³ thá»ƒ thay Ä‘á»•i attribute nhÆ°ng váº«n cÃ³ input[type=password] trong DOM
+            # Google cÃ³ thá»ƒ thay Ä'á»•i attribute nhÆ°ng váº«n cÃ³ input[type=password] trong DOM
             JS_FIND_PW = '''
                 // CÃ¡ch 1: type=password (chuáº©n nháº¥t)
                 var el = document.querySelector('input[type="password"]');
@@ -1337,7 +1337,7 @@ def login_google_chrome(account_info: dict, chrome_portable: str = None, profile
 
             if not pw_found_js and not pw_input:
                 log("Password input NOT FOUND after 15s!", "WARN")
-                # v1.0.645: Log URL hiá»‡n táº¡i Ä‘á»ƒ debug
+                # v1.0.645: Log URL hiá»‡n táº¡i Ä'á»ƒ debug
                 try:
                     log(f"Current URL: {driver.url[:80]}...", "WARN")
                 except Exception:
@@ -1367,16 +1367,16 @@ def login_google_chrome(account_info: dict, chrome_portable: str = None, profile
                     except Exception:
                         pass
 
-                # v1.0.645: Náº¿u JS Ä‘Ã£ focus, Ä‘á»£i thÃªm chÃºt cho á»•n Ä‘á»‹nh
+                # v1.0.645: Náº¿u JS Ä'Ã£ focus, Ä'á»£i thÃªm chÃºt cho á»•n Ä'á»‹nh
                 if pw_found_js:
                     time.sleep(0.3)
 
-                # Gá»­i Ctrl+V Ä‘á»ƒ paste
+                # Gá»­i Ctrl+V Ä'á»ƒ paste
                 actions.key_down('ctrl').key_down('v').key_up('v').key_up('ctrl')
                 log("Sent Ctrl+V")
                 time.sleep(0.5)
 
-                # Nháº¥n Enter Ä‘á»ƒ submit
+                # Nháº¥n Enter Ä'á»ƒ submit
                 actions.key_down('enter').key_up('enter')
                 log("Pressed Enter")
         except Exception as e:
@@ -1384,7 +1384,7 @@ def login_google_chrome(account_info: dict, chrome_portable: str = None, profile
 
         # === BÆ¯á»šC 2.5: Xá»¬ LÃ TRANG "PHÃŠ DUYá»†T THIáº¾T Bá»Š" (náº¿u cÃ³) ===
         # v1.0.649: Doi URL THAY DOI (khong chi check 'challenge')
-        # Bug cu: URL `challenge/pwd` cung chua 'challenge' â†’ break ngay (false positive)
+        # Bug cu: URL `challenge/pwd` cung chua 'challenge' â†' break ngay (false positive)
         # Fix: Ghi nhan URL truoc khi Enter, doi URL KHAC hoac chua 'totp'/'az'/'ipp'/'myaccount'
         log("Waiting for password to be accepted...")
         _url_before_enter = driver.url.lower()
@@ -1432,7 +1432,7 @@ def login_google_chrome(account_info: dict, chrome_portable: str = None, profile
                 except:
                     continue
 
-            # B) KhÃ´ng cÃ³ 2FA option â†’ thá»­ click "Try another way"
+            # B) KhÃ´ng cÃ³ 2FA option â†' thá»­ click "Try another way"
             if not found_2fa:
                 try_another_selectors = [
                     'button:contains("Try another way")',
@@ -1555,7 +1555,7 @@ def login_google_chrome(account_info: dict, chrome_portable: str = None, profile
             current_url = driver.url.lower()
 
             # Google rejected -> fail ngay, khong cho them
-            if ‘signin/rejected’ in current_url:
+            if 'signin/rejected' in current_url:
                 log(f"Google REJECTED login: {current_url}", "ERROR")
                 try:
                     driver.quit()
@@ -1599,7 +1599,7 @@ def login_google_chrome(account_info: dict, chrome_portable: str = None, profile
             return False
 
         # v1.0.655: VERIFY LOGIN - check dung tai khoan (giong server/chrome_session.py)
-        # Navigate myaccount.google.com â†’ doc email â†’ so sanh voi email dang login
+        # Navigate myaccount.google.com â†' doc email â†' so sanh voi email dang login
         log("Verifying login account via myaccount.google.com...")
         try:
             driver.get("https://myaccount.google.com")
@@ -1651,7 +1651,7 @@ def login_google_chrome(account_info: dict, chrome_portable: str = None, profile
         except Exception as ve:
             log(f"Verify error (non-critical): {ve}", "WARN")
 
-        # v1.0.158: Tá»‘i Æ°u tá»‘c Ä‘á»™ warm-up
+        # v1.0.158: Tá»'i Æ°u tá»'c Ä'á»™ warm-up
         log("Warm-up Flow...")
         flow_url = "https://labs.google/fx/vi/tools/flow"
         try:
@@ -1699,7 +1699,7 @@ def login_google_chrome(account_info: dict, chrome_portable: str = None, profile
             log(f"Warm up error: {e}", "WARN")
 
         # v1.0.655: Dong Chrome sau login - DrissionFlowAPI se mo Chrome moi voi cung profile
-        # Session login da luu trong cookies/profile â†’ Chrome moi van logged in
+        # Session login da luu trong cookies/profile â†' Chrome moi van logged in
         log("Closing Chrome after login (session saved in profile)")
         try:
             driver.quit()
