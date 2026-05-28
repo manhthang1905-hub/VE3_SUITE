@@ -500,59 +500,79 @@ class FlowKitGUI(tk.Tk):
 
         # Phase 1: DrissionPage setup (login + navigate + create project)
         # BEFORE agents — google_login uses port 9222+i which conflicts with agent ws_port
-        self._log("Phase 1: Setting up Chrome (DrissionPage)...", "INFO")
-        for i, inst in enumerate(instances):
-            if not inst.get('enabled', True) or i >= len(self._chrome_dirs):
-                continue
+        # Parallel setup with semaphore — same as old server chrome_pool.py
+        setup_concurrency = max(1, int(os.getenv("CHROME_SETUP_CONCURRENCY", "3")))
+        setup_stagger = max(0.0, float(os.getenv("CHROME_SETUP_STAGGER_SEC", "1.0")))
+        self._log(f"Phase 1: Setting up Chrome (concurrency={setup_concurrency})...", "INFO")
 
-            chrome_dir = self._chrome_dirs[i]
-            ext_dir = BASE_DIR / inst['extension_dir']
-            debug_port = 19200 + (inst['api_port'] - 8100)
+        setup_sem = threading.Semaphore(setup_concurrency)
+        setup_threads = []
+
+        def _setup_one(idx, inst_cfg):
+            chrome_dir = self._chrome_dirs[idx]
+            ext_dir = BASE_DIR / inst_cfg['extension_dir']
+            debug_port = 19200 + (inst_cfg['api_port'] - 8100)
+            name = inst_cfg['name']
 
             account_info = None
             if accounts:
-                acc = accounts[i % len(accounts)]
+                acc = accounts[idx % len(accounts)]
                 account_info = {
                     'id': acc['email'],
                     'password': acc['password'],
                     'totp_secret': acc.get('totp_secret', ''),
                 }
 
-            proxy_arg = f"socks5://127.0.0.1:{proxy_port_map[i]}" if i in proxy_port_map else ""
+            proxy_arg = f"socks5://127.0.0.1:{proxy_port_map[idx]}" if idx in proxy_port_map else ""
 
             win_args = []
             try:
                 from launcher import _calc_chrome_layout, _resolve_chrome_slot, CONFIG as _lcfg
                 instances_cfg = [ii for ii in _lcfg.get("instances", []) if ii.get("enabled", True)]
-                slot = _resolve_chrome_slot(inst["name"])
+                slot = _resolve_chrome_slot(name)
                 x, y, w, h = _calc_chrome_layout(slot, len(instances_cfg))
                 win_args = [f"--window-position={x},{y}", f"--window-size={w},{h}"]
             except Exception:
                 pass
 
-            self._log(f"[{inst['name']}] DrissionPage setup...", "INFO")
-            try:
-                from chrome_setup import setup_chrome
-                ok = setup_chrome(
-                    chrome_dir=chrome_dir,
-                    ext_dir=ext_dir,
-                    port=debug_port,
-                    account=account_info,
-                    proxy_arg=proxy_arg,
-                    window_args=win_args,
-                    log_func=lambda msg, n=inst['name']: self._log(f"[{n}] {msg}", "INFO"),
-                    instance_name=inst['name'],
-                )
-                if ok:
-                    self._log(f"[{inst['name']}] Chrome ready", "OK")
-                else:
-                    self._log(f"[{inst['name']}] DrissionPage failed — subprocess fallback", "WARN")
-                    self._start_chrome(chrome_dir, inst, proxy_arg)
-            except Exception as e:
-                self._log(f"[{inst['name']}] DrissionPage error: {e}", "WARN")
-                self._start_chrome(chrome_dir, inst, proxy_arg)
+            max_retries = 3
+            with setup_sem:
+                for attempt in range(max_retries):
+                    if attempt > 0:
+                        self._log(f"[{name}] Retry setup ({attempt + 1}/{max_retries})...", "WARN")
+                        time.sleep(5)
+                    try:
+                        from chrome_setup import setup_chrome
+                        ok = setup_chrome(
+                            chrome_dir=chrome_dir,
+                            ext_dir=ext_dir,
+                            port=debug_port,
+                            account=account_info,
+                            proxy_arg=proxy_arg,
+                            window_args=win_args,
+                            log_func=lambda msg, n=name: self._log(f"[{n}] {msg}", "INFO"),
+                            instance_name=name,
+                        )
+                        if ok:
+                            self._log(f"[{name}] Chrome ready", "OK")
+                            return
+                    except Exception as e:
+                        self._log(f"[{name}] Setup error: {e}", "ERROR")
 
-            time.sleep(2)
+                self._log(f"[{name}] All retries failed — subprocess fallback", "WARN")
+                self._start_chrome(chrome_dir, inst_cfg, proxy_arg)
+
+        for i, inst in enumerate(instances):
+            if not inst.get('enabled', True) or i >= len(self._chrome_dirs):
+                continue
+            t = threading.Thread(target=_setup_one, args=(i, inst), daemon=True)
+            t.start()
+            setup_threads.append(t)
+            if setup_stagger > 0:
+                time.sleep(setup_stagger)
+
+        for t in setup_threads:
+            t.join(timeout=180)
 
         # Phase 2: Start agents (extension reconnects automatically)
         self._log("Phase 2: Starting FlowKit agents...", "INFO")
