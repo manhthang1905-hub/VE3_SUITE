@@ -574,7 +574,7 @@ class FlowKitGUI(tk.Tk):
         for t in setup_threads:
             t.join(timeout=180)
 
-        # Phase 2: Start agents (extension reconnects automatically)
+        # Phase 2: Start agents (WS servers ready before Chrome opens)
         self._log("Phase 2: Starting FlowKit agents...", "INFO")
         for i, inst in enumerate(instances):
             if not inst.get('enabled', True) or i >= len(self._chrome_dirs):
@@ -584,8 +584,60 @@ class FlowKitGUI(tk.Tk):
 
         time.sleep(3)
 
-        # Phase 3: Start gateway
-        self._log("Phase 3: Starting Gateway...", "INFO")
+        # Phase 3: Start Chrome via subprocess (extension connects to agent WS)
+        # Then apply CDP settings (window layout + zoom + fingerprint) like DrissionPage did
+        self._log("Phase 3: Starting Chrome instances...", "INFO")
+        chrome_cdp_tasks = []
+        for i, inst in enumerate(instances):
+            if not inst.get('enabled', True) or i >= len(self._chrome_dirs):
+                continue
+            proxy_arg = f"socks5://127.0.0.1:{proxy_port_map[i]}" if i in proxy_port_map else ""
+            self._start_chrome(self._chrome_dirs[i], inst, proxy_arg)
+            chrome_cdp_tasks.append((i, inst))
+            time.sleep(0.5)
+
+        # Apply CDP settings (layout + zoom + fingerprint) to each Chrome
+        if chrome_cdp_tasks:
+            self._log("Applying CDP settings (layout + zoom + fingerprint)...", "INFO")
+            time.sleep(5)  # wait for Chrome to fully start
+
+            def _apply_cdp(idx, inst_cfg):
+                debug_port = 19200 + (inst_cfg['api_port'] - 8100)
+                ext_dir = BASE_DIR / inst_cfg['extension_dir']
+                name = inst_cfg['name']
+                win_args = []
+                try:
+                    from launcher import _calc_chrome_layout, _resolve_chrome_slot, CONFIG as _lcfg
+                    instances_cfg = [ii for ii in _lcfg.get("instances", []) if ii.get("enabled", True)]
+                    slot = _resolve_chrome_slot(name)
+                    x, y, w, h = _calc_chrome_layout(slot, len(instances_cfg))
+                    win_args = [f"--window-position={x},{y}", f"--window-size={w},{h}"]
+                except Exception:
+                    pass
+                try:
+                    from chrome_setup import apply_chrome_cdp
+                    apply_chrome_cdp(
+                        debug_port=debug_port,
+                        ext_dir=ext_dir,
+                        instance_name=name,
+                        window_args=win_args,
+                        log_func=lambda msg, n=name: self._log(f"[{n}] {msg}", "INFO"),
+                    )
+                except Exception as e:
+                    self._log(f"[{name}] CDP apply error: {e}", "WARN")
+
+            cdp_threads = []
+            for idx, inst_cfg in chrome_cdp_tasks:
+                t = threading.Thread(target=_apply_cdp, args=(idx, inst_cfg), daemon=True)
+                t.start()
+                cdp_threads.append(t)
+            for t in cdp_threads:
+                t.join(timeout=45)
+
+        time.sleep(3)
+
+        # Phase 4: Start gateway
+        self._log("Phase 4: Starting Gateway...", "INFO")
         self._start_gateway(gateway_port)
 
         time.sleep(3)

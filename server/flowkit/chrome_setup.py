@@ -325,7 +325,6 @@ def _build_options(chrome_dir: Path, ext_dir: Path, port: int, proxy_arg: str = 
 
     if proxy_arg:
         co.set_argument(f"--proxy-server={proxy_arg}")
-        co.set_argument("--proxy-bypass-list=<-loopback>")
 
     if window_args:
         for arg in window_args:
@@ -508,13 +507,69 @@ def setup_chrome(
     else:
         log("Textarea not found (may still work)")
 
-    # 10. Disconnect DrissionPage — Chrome stays open for extension
+    # 10. Kill Chrome — DrissionPage's job is done (login + project).
+    # Agent will start Chrome fresh via subprocess, extension connects to agent WS.
     try:
-        page.disconnect()
+        page.quit()
     except Exception:
         pass
+    _kill_chrome_for_dir(chrome_dir)
 
-    log("Setup complete — extension takes over")
+    log("Setup complete — Chrome killed, ready for agent to restart")
+    return True
+
+
+def apply_chrome_cdp(
+    debug_port: int,
+    ext_dir: Path = None,
+    instance_name: str = "",
+    window_args: list = None,
+    log_func=None,
+    timeout: int = 30,
+) -> bool:
+    """
+    Connect to already-running Chrome and apply CDP settings:
+    - Window layout (Browser.setWindowBounds)
+    - Zoom 50% (Emulation.setPageScaleFactor + JS)
+    - Fingerprint injection (Page.addScriptToEvaluateOnNewDocument)
+
+    Called after subprocess starts Chrome. DrissionPage connects, applies, disconnects.
+    """
+    log = log_func or (lambda msg: logger.info("[CDP] %s", msg))
+
+    from DrissionPage import ChromiumPage, ChromiumOptions
+
+    co = ChromiumOptions()
+    co.set_address(f"127.0.0.1:{debug_port}")
+
+    # Wait for Chrome to be ready
+    page = None
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        try:
+            page = ChromiumPage(co)
+            break
+        except Exception:
+            time.sleep(2)
+
+    if not page:
+        log("Cannot connect to Chrome on port %d" % debug_port)
+        return False
+
+    try:
+        _enforce_window_layout(page, window_args, log)
+        _apply_zoom(page, log)
+        if ext_dir:
+            _inject_fingerprint(page, ext_dir, instance_name, log)
+        log("CDP settings applied")
+    except Exception as e:
+        log("CDP apply error: %s" % e)
+    finally:
+        try:
+            page.disconnect()
+        except Exception:
+            pass
+
     return True
 
 
