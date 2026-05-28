@@ -27,6 +27,58 @@ with open(CONFIG_PATH) as f:
     CONFIG = yaml.safe_load(f)
 
 
+# ─── Screen / Window Layout ────────────────────────────────
+
+def _get_screen_size() -> tuple[int, int]:
+    """Get primary screen resolution."""
+    try:
+        import ctypes
+        user32 = ctypes.windll.user32
+        return user32.GetSystemMetrics(0), user32.GetSystemMetrics(1)
+    except Exception:
+        return 1920, 1080
+
+
+def _calc_chrome_layout(slot: int, total_slots: int) -> tuple[int, int, int, int]:
+    """Calculate (x, y, width, height) for Chrome window at given slot.
+
+    Layout: GUI occupies left column, Chrome windows fill remaining
+    space in a grid (cols x rows).
+    """
+    scr_w, scr_h = _get_screen_size()
+
+    layout = CONFIG.get("chrome_layout", {})
+    gui_width = layout.get("gui_width", 700)
+    cols = layout.get("cols", 3)
+    rows = layout.get("rows", 0)
+
+    if rows <= 0:
+        rows = max(1, -(-total_slots // cols))  # ceil division
+
+    usable_w = max(300, scr_w - gui_width)
+    cell_w = max(320, usable_w // cols)
+    cell_h = max(180, scr_h // rows)
+
+    col = slot % cols
+    row = slot // cols
+    x = gui_width + col * cell_w
+    y = row * cell_h
+
+    return x, y, cell_w, cell_h
+
+
+def _resolve_chrome_slot(instance_name: str) -> int:
+    """Map instance name to slot index (0-based).
+
+    Derives slot from the instance number: flowkit-1 -> 0, flowkit-2 -> 1, etc.
+    """
+    import re
+    m = re.search(r"(\d+)$", instance_name)
+    if m:
+        return int(m.group(1)) - 1
+    return 0
+
+
 def resolve_path(rel_path: str) -> Path:
     """Resolve path relative to flowkit directory."""
     return (BASE_DIR / rel_path).resolve()
@@ -94,12 +146,21 @@ def start_chrome(instance: dict, new_fingerprint: bool = True) -> Optional[subpr
         "--disable-backgrounding-occluded-windows",
     ]
 
+    # Window layout
+    enabled_instances = [i for i in CONFIG.get("instances", []) if i.get("enabled", True)]
+    slot = _resolve_chrome_slot(name)
+    total = len(enabled_instances)
+    x, y, w, h = _calc_chrome_layout(slot, total)
+    args.append(f"--window-position={x},{y}")
+    args.append(f"--window-size={w},{h}")
+
     if ipv6:
         args.append(f"--proxy-server=socks5://[{ipv6}]:1080")
 
     print(f"[{name}] Starting Chrome: {portable_exe.name}")
     print(f"  Dir: {chrome_dir}")
     print(f"  Extension: {ext_dir}")
+    print(f"  Window: slot={slot} pos=({x},{y}) size={w}x{h}")
     if ipv6:
         print(f"  IPv6 proxy: {ipv6}")
 

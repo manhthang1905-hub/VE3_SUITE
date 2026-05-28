@@ -50,6 +50,25 @@ RATE_LIMIT = CONFIG.get("rate_limit", {})
 COOLDOWN_PER_INSTANCE = RATE_LIMIT.get("cooldown_per_instance", 5)
 MAX_CONCURRENT = RATE_LIMIT.get("max_concurrent_per_instance", 1)
 
+QUOTA = CONFIG.get("quota", {})
+QUOTA_RETRY_COUNT = QUOTA.get("retry_count", 2)
+QUOTA_RETRY_DELAY = QUOTA.get("retry_delay", 30)
+QUOTA_COOLDOWN_SECONDS = QUOTA.get("cooldown_seconds", 3600)
+
+IMAGE_MODEL_FALLBACK = {"GEM_PIX_2": "NARWHAL", "NARWHAL": "GEM_PIX_2"}
+
+
+def _switch_image_model(body_json: dict) -> str:
+    """Switch imageModelName in body_json to fallback. Returns new model name or empty."""
+    for req in body_json.get("requests", []):
+        if isinstance(req, dict):
+            model = req.get("imageModelName", "")
+            if model in IMAGE_MODEL_FALLBACK:
+                req["imageModelName"] = IMAGE_MODEL_FALLBACK[model]
+                return IMAGE_MODEL_FALLBACK[model]
+    return ""
+
+
 TIMEOUTS = CONFIG.get("timeouts", {})
 IMAGE_TIMEOUT = TIMEOUTS.get("image_generation", 120)
 VIDEO_SUBMIT_TIMEOUT = TIMEOUTS.get("video_submit", 60)
@@ -75,6 +94,8 @@ class AgentInstance:
         self.flow_key_present = False
         self.consecutive_403 = 0
         self.cooling_until: float = 0
+        self.quota_exhausted_until: float = 0
+        self.active_image_model: str = ""  # if set, override imageModelName (fallback from 429)
         self.processing_count = 0
         self.total_completed = 0
         self.total_failed = 0
@@ -90,6 +111,8 @@ class AgentInstance:
             return False
         if self.cooling_until > time.time():
             return False
+        if self.quota_exhausted_until > time.time():
+            return False
         if self.processing_count >= MAX_CONCURRENT:
             return False
         return True
@@ -97,6 +120,25 @@ class AgentInstance:
     @property
     def is_cooling(self) -> bool:
         return self.cooling_until > time.time()
+
+    @property
+    def is_quota_exhausted(self) -> bool:
+        return self.quota_exhausted_until > time.time()
+
+    def mark_quota_exhausted(self):
+        self.quota_exhausted_until = time.time() + QUOTA_COOLDOWN_SECONDS
+        self.active_image_model = ""  # reset — all models exhausted
+        logger.warning("[%s] QUOTA EXHAUSTED — cooling for %ds (until %s)",
+                       self.name, QUOTA_COOLDOWN_SECONDS,
+                       time.strftime("%H:%M:%S", time.localtime(self.quota_exhausted_until)))
+
+    def apply_model_override(self, body_json: dict):
+        """If this instance has a fallback model active, apply it to the request."""
+        if not self.active_image_model:
+            return
+        for req in body_json.get("requests", []):
+            if isinstance(req, dict) and req.get("imageModelName"):
+                req["imageModelName"] = self.active_image_model
 
     def mark_403(self):
         self.consecutive_403 += 1
@@ -126,6 +168,8 @@ class AgentInstance:
             "available": self.available,
             "cooling": self.is_cooling,
             "cooling_remaining": max(0, int(self.cooling_until - time.time())) if self.is_cooling else 0,
+            "quota_exhausted": self.is_quota_exhausted,
+            "quota_remaining": max(0, int(self.quota_exhausted_until - time.time())) if self.is_quota_exhausted else 0,
             "consecutive_403": self.consecutive_403,
             "processing": self.processing_count,
             "total_completed": self.total_completed,
@@ -243,6 +287,7 @@ async def _process_image_task(task_id: str, data: dict):
         tried_instances.append(inst.name)
         tasks[task_id]["worker"] = inst.name
         inst.processing_count += 1
+        inst.apply_model_override(body_json)
 
         try:
             async with httpx.AsyncClient(timeout=IMAGE_TIMEOUT + 10) as client:
@@ -272,10 +317,88 @@ async def _process_image_task(task_id: str, data: dict):
                                task_id[:8], inst.name, attempt + 1, MAX_RETRIES)
                 continue  # Try next instance
 
-            # Non-403 failure → don't retry
+            # 429 quota — try fallback model first, then retry, then mark exhausted
+            if status_code == 429 or "QUOTA" in error.upper():
+                # Step 1: Try fallback model (e.g. GEM_PIX_2 -> NARWHAL)
+                import copy
+                fallback_body = copy.deepcopy(body_json)
+                new_model = _switch_image_model(fallback_body)
+                if new_model:
+                    logger.info("[Gateway] Image %s: 429 on %s, trying fallback model %s",
+                                task_id[:8], inst.name, new_model)
+                    try:
+                        async with httpx.AsyncClient(timeout=IMAGE_TIMEOUT + 10) as client_fb:
+                            resp_fb = await client_fb.post(f"{inst.base_url}/api/generate-image", json={
+                                "bearer_token": bearer_token,
+                                "project_id": project_id,
+                                "body_json": fallback_body,
+                                "flow_url": flow_url,
+                            })
+                            r_fb = resp_fb.json()
+                        if r_fb.get("success"):
+                            inst.active_image_model = new_model
+                            inst.mark_success()
+                            tasks[task_id]["status"] = "completed"
+                            tasks[task_id]["result"] = r_fb.get("result")
+                            stats["total_completed"] += 1
+                            logger.info("[Gateway] Image %s DONE via fallback model %s on %s (model persisted)",
+                                        task_id[:8], new_model, inst.name)
+                            return
+                        fb_status = r_fb.get("status", 500)
+                        fb_error = r_fb.get("error", "")
+                        if fb_status != 429 and "QUOTA" not in fb_error.upper():
+                            inst.mark_failed()
+                            tasks[task_id]["status"] = "failed"
+                            tasks[task_id]["error"] = fb_error
+                            stats["total_failed"] += 1
+                            return
+                        logger.info("[Gateway] Image %s: fallback model %s also 429", task_id[:8], new_model)
+                    except Exception:
+                        pass
+
+                # Step 2: Retry original model a few times
+                quota_confirmed = True
+                for q_retry in range(QUOTA_RETRY_COUNT):
+                    logger.info("[Gateway] Image %s: 429 from %s, retry %d/%d in %ds...",
+                                task_id[:8], inst.name, q_retry + 1, QUOTA_RETRY_COUNT, QUOTA_RETRY_DELAY)
+                    await asyncio.sleep(QUOTA_RETRY_DELAY)
+                    try:
+                        async with httpx.AsyncClient(timeout=IMAGE_TIMEOUT + 10) as client2:
+                            resp2 = await client2.post(f"{inst.base_url}/api/generate-image", json={
+                                "bearer_token": bearer_token,
+                                "project_id": project_id,
+                                "body_json": body_json,
+                                "flow_url": flow_url,
+                            })
+                            r2 = resp2.json()
+                        if r2.get("success"):
+                            inst.mark_success()
+                            tasks[task_id]["status"] = "completed"
+                            tasks[task_id]["result"] = r2.get("result")
+                            stats["total_completed"] += 1
+                            logger.info("[Gateway] Image %s DONE after 429 retry via %s", task_id[:8], inst.name)
+                            return
+                        s2 = r2.get("status", 500)
+                        if s2 != 429 and "QUOTA" not in r2.get("error", "").upper():
+                            quota_confirmed = False
+                            break
+                    except Exception:
+                        pass
+
+                # Step 3: All models + retries failed = confirmed quota exhausted
+                if quota_confirmed:
+                    inst.mark_quota_exhausted()
+                    tasks[task_id]["status"] = "failed"
+                    tasks[task_id]["error"] = f"[429_QUOTA] {error}"
+                    stats["total_failed"] += 1
+                    logger.warning("[Gateway] Image %s: QUOTA EXHAUSTED on %s (all models), cooldown %ds",
+                                   task_id[:8], inst.name, QUOTA_COOLDOWN_SECONDS)
+                    return
+
+            # Non-403/429 failure → don't retry
             inst.mark_failed()
             tasks[task_id]["status"] = "failed"
-            tasks[task_id]["error"] = f"[{status_code}] {error}" if status_code in (401, 429) else error
+            tasks[task_id]["error"] = f"[{status_code}] {error}" if status_code in (401,) else error
             stats["total_failed"] += 1
             logger.warning("[Gateway] Image %s FAILED via %s: [%s] %s", task_id[:8], inst.name, status_code, error[:100])
             return
@@ -283,7 +406,6 @@ async def _process_image_task(task_id: str, data: dict):
         except Exception as e:
             inst.mark_failed()
             logger.exception("[Gateway] Image %s exception via %s", task_id[:8], inst.name)
-            # Continue to retry with another instance
             continue
         finally:
             inst.processing_count -= 1
@@ -377,10 +499,46 @@ async def _process_video_task(task_id: str, data: dict):
 
             if status_code == 403:
                 inst.mark_403()
+            elif status_code == 429 or "QUOTA" in error.upper():
+                quota_confirmed = True
+                for q_retry in range(QUOTA_RETRY_COUNT):
+                    logger.info("[Gateway] Video %s: 429 from %s, retry %d/%d in %ds...",
+                                task_id[:8], inst.name, q_retry + 1, QUOTA_RETRY_COUNT, QUOTA_RETRY_DELAY)
+                    await asyncio.sleep(QUOTA_RETRY_DELAY)
+                    try:
+                        inst.processing_count += 1
+                        async with httpx.AsyncClient(timeout=VIDEO_SUBMIT_TIMEOUT + 10) as client2:
+                            resp2 = await client2.post(f"{inst.base_url}/api/generate-video", json={
+                                "bearer_token": bearer_token,
+                                "body_json": body_json,
+                                "flow_url": flow_url,
+                            })
+                            r2 = resp2.json()
+                        inst.processing_count -= 1
+                        if r2.get("success"):
+                            result = r2
+                            quota_confirmed = False
+                            break
+                        s2 = r2.get("status", 500)
+                        if s2 != 429 and "QUOTA" not in r2.get("error", "").upper():
+                            quota_confirmed = False
+                            break
+                    except Exception:
+                        inst.processing_count -= 1
+                if quota_confirmed:
+                    inst.mark_quota_exhausted()
+                    tasks[task_id]["status"] = "failed"
+                    tasks[task_id]["error"] = f"[429_QUOTA] {error}"
+                    stats["total_failed"] += 1
+                    logger.warning("[Gateway] Video %s: QUOTA EXHAUSTED on %s, cooldown %ds",
+                                   task_id[:8], inst.name, QUOTA_COOLDOWN_SECONDS)
+                    return
+                if not quota_confirmed and result.get("success"):
+                    break
             else:
                 inst.mark_failed()
             tasks[task_id]["status"] = "failed"
-            tasks[task_id]["error"] = f"[{status_code}] {error}" if status_code in (401, 429) else error
+            tasks[task_id]["error"] = f"[{status_code}] {error}" if status_code in (401,) else error
             if detail:
                 tasks[task_id]["detail"] = detail
             stats["total_failed"] += 1

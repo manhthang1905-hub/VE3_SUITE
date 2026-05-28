@@ -92,6 +92,7 @@ class VE3Worker:
         # FlowKit config
         self.flowkit_server_list = config.get("flowkit_server_list", [])
         self.flowkit_pool = None
+        self._sticky_flowkit_server = None
 
         # Server config
         self.server_url = config.get("local_server_url", "")
@@ -1587,13 +1588,47 @@ Generator/context error:
             wb._save_pending_write("character", char_id="nv1", **char.to_dict())
         return char
 
+    def _write_quota_wait_marker(self, server_name: str = ""):
+        """Write marker file so GUI queue skips this project for 1 hour."""
+        marker = self.project_dir / ".flowkit_quota_wait"
+        resume_ts = time.time() + 3600
+        try:
+            marker.write_text(json.dumps({
+                "resume_after": time.strftime("%Y-%m-%dT%H:%M:%S", time.localtime(resume_ts)),
+                "resume_ts": resume_ts,
+                "server": server_name,
+                "reason": "429_QUOTA",
+            }), encoding="utf-8")
+            self.log(f"[FLOWKIT] Quota exhausted — project paused for 1h (resume {time.strftime('%H:%M:%S', time.localtime(resume_ts))})", "WARN")
+        except Exception as e:
+            self.log(f"[FLOWKIT] Failed to write quota marker: {e}", "ERROR")
+
+    def _pick_flowkit_server(self, auto_reserve: bool = True):
+        """Pick FlowKit server with sticky affinity — same project always uses same server.
+        media_id/project references are tied to the Google account on a specific server."""
+        if not self.flowkit_pool:
+            return None
+        if self._sticky_flowkit_server:
+            with self.flowkit_pool._lock:
+                if self.flowkit_pool._is_available(self._sticky_flowkit_server):
+                    if auto_reserve:
+                        self._sticky_flowkit_server.local_pending += 1
+                    return self._sticky_flowkit_server
+            self.log(f"[FLOWKIT] Sticky server {self._sticky_flowkit_server.name} unavailable, picking new", "WARN")
+            self._sticky_flowkit_server = None
+        server = self.flowkit_pool.pick_best_server(auto_reserve=auto_reserve)
+        if server:
+            self._sticky_flowkit_server = server
+            self.log(f"[FLOWKIT] Sticky server assigned: {server.name}", "INFO")
+        return server
+
     def _upload_reference_via_flowkit(self, image_path: Path) -> str:
         """Upload reference image via FlowKit agent. Returns media_id or empty."""
         import base64 as _b64
         try:
             img_bytes = image_path.read_bytes()
             img_b64 = _b64.b64encode(img_bytes).decode()
-            server = self.flowkit_pool.pick_best_server() if self.flowkit_pool else None
+            server = self._pick_flowkit_server()
             if not server:
                 self.log("[FLOWKIT] No FlowKit server for upload", "ERROR")
                 return ""
@@ -3332,7 +3367,10 @@ Generator/context error:
                         break
                     time.sleep(2)
 
-            server = pool.pick_best_server() if pool else None
+            if pool is self.flowkit_pool:
+                server = self._pick_flowkit_server()
+            else:
+                server = pool.pick_best_server() if pool else None
             if not server:
                 self.log("  Cho server/flowkit available...", "WARN")
                 server = pool.wait_for_server(max_wait=300) if pool else None
@@ -3370,6 +3408,12 @@ Generator/context error:
                     last_error = error or "Unknown error"
                     self.log(f"    [{output_path.stem}] LOI: {last_error[:200]} (lan {attempt+1})", "WARN")
                     pool.mark_task_failed(server)
+
+                    # FlowKit: detect 429 quota exhausted — pause project
+                    if pool is self.flowkit_pool and "429_QUOTA" in last_error:
+                        self._write_quota_wait_marker(server.name if server else "")
+                        self._stop_flag = True
+                        return False, None, sinfo, last_error
 
                     # FlowKit: detect reCAPTCHA rate-limit - full reset with lock
                     if pool is self.flowkit_pool and "recaptcha" in last_error.lower():
@@ -3416,7 +3460,10 @@ Generator/context error:
             if self._stop_flag:
                 return False, sinfo, last_error
 
-            server = pool.pick_best_server() if pool else None
+            if is_flowkit:
+                server = self._pick_flowkit_server()
+            else:
+                server = pool.pick_best_server() if pool else None
             if not server:
                 server = pool.wait_for_server(max_wait=300) if pool else None
                 if not server:
@@ -3467,6 +3514,10 @@ Generator/context error:
                         last_error = result.get("error", "Video submit failed")
                         self.log(f"    [{output_path.stem}] VIDEO LOI: {last_error[:200]} (lan {attempt+1})", "WARN")
                         pool.mark_task_failed(server)
+                        if "429_QUOTA" in last_error:
+                            self._write_quota_wait_marker(server.name if server else "")
+                            self._stop_flag = True
+                            return False, sinfo, last_error
                     else:
                         task_id = result["taskId"]
                         t_start = time.time()
@@ -3549,6 +3600,10 @@ Generator/context error:
                         last_error = error or "Video generation failed"
                         self.log(f"    [{output_path.stem}] VIDEO LOI: {last_error[:200]} (lan {attempt+1})", "WARN")
                         pool.mark_task_failed(server)
+                        if pool is self.flowkit_pool and "429_QUOTA" in last_error:
+                            self._write_quota_wait_marker(server.name if server else "")
+                            self._stop_flag = True
+                            return False, sinfo, last_error
             except Exception as e:
                 last_error = str(e)
                 self.log(f"    [{output_path.stem}] VIDEO NGOAI LE: {e} (lan {attempt+1})", "ERROR")

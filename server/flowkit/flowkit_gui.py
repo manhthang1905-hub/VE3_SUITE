@@ -18,11 +18,13 @@ from pathlib import Path
 sys.stdout.reconfigure(encoding='utf-8', errors='replace')
 
 BASE_DIR = Path(__file__).parent
-TOOL_DIR = BASE_DIR.parent  # server/
-SUITE_ROOT = TOOL_DIR.parent  # VE3_SUITE root
+TOOL_DIR = BASE_DIR.parent  # server/ (or Documents/ on standalone VM)
+SUITE_ROOT = TOOL_DIR.parent  # VE3_SUITE root (or user home on standalone VM)
+_IS_STANDALONE = not (TOOL_DIR / "google_login.py").exists() and (BASE_DIR / "google_login.py").exists()
 LOG_DIR = BASE_DIR / "logs"
-sys.path.insert(0, str(TOOL_DIR))
 sys.path.insert(0, str(BASE_DIR))
+if not _IS_STANDALONE:
+    sys.path.insert(0, str(TOOL_DIR))
 
 GITHUB_REPO = "manhthang1905-hub/VE3_SUITE"
 GITHUB_ZIP_URL = f"https://github.com/{GITHUB_REPO}/archive/refs/heads/main.zip"
@@ -52,19 +54,27 @@ PROTECTED_PATHS = {
 
 
 def _get_auto_version() -> str:
-    try:
-        result = subprocess.run(
-            ["git", "rev-list", "--count", "HEAD"],
-            cwd=str(SUITE_ROOT), capture_output=True, text=True, timeout=5,
-        )
-        if result.returncode == 0:
-            return f"1.0.{result.stdout.strip()}"
-    except Exception:
-        pass
-    for vf in (BASE_DIR / "VERSION.txt", SUITE_ROOT / "VERSION"):
+    if not _IS_STANDALONE:
+        try:
+            result = subprocess.run(
+                ["git", "rev-list", "--count", "HEAD"],
+                cwd=str(SUITE_ROOT), capture_output=True, text=True, timeout=5,
+            )
+            if result.returncode == 0:
+                ver = f"1.0.{result.stdout.strip()}"
+                try:
+                    (BASE_DIR / "VERSION.txt").write_text(ver + "\n", encoding="utf-8")
+                except Exception:
+                    pass
+                return ver
+        except Exception:
+            pass
+    for vf in (BASE_DIR / "VERSION.txt", BASE_DIR / "VERSION"):
         try:
             if vf.exists():
-                return vf.read_text(encoding="utf-8").split("\n")[0].strip()
+                txt = vf.read_text(encoding="utf-8-sig").split("\n")[0].strip()
+                if txt:
+                    return txt
         except Exception:
             pass
     return "?"
@@ -74,8 +84,10 @@ class FlowKitGUI(tk.Tk):
     def __init__(self):
         super().__init__()
         self._version = _get_auto_version()
+        self._remote_version = ""
         self.title(f"FlowKit Server v{self._version}")
-        self.geometry("680x620")
+        gui_w, gui_h = 700, 1040
+        self.geometry(f"{gui_w}x{gui_h}+0+0")
         self.configure(bg=BG)
         self.resizable(True, True)
         self.minsize(600, 500)
@@ -510,14 +522,16 @@ class FlowKitGUI(tk.Tk):
         self._poll_thread.start()
 
     def _do_chrome_login(self, chrome_dir: Path, account: dict, inst: dict, proxy_arg: str = ""):
-        """Login Google account into Chrome profile using server's google_login.py."""
+        """Login Google account into Chrome profile using google_login.py."""
         try:
-            login_module = TOOL_DIR / "google_login.py"
+            login_module = BASE_DIR / "google_login.py"
+            if not login_module.exists():
+                login_module = TOOL_DIR / "google_login.py"
             if not login_module.exists():
                 self._log(f"[{inst['name']}] google_login.py not found, skip login", "WARN")
                 return
 
-            sys.path.insert(0, str(TOOL_DIR))
+            sys.path.insert(0, str(login_module.parent))
             from google_login import login_google_chrome
 
             portable = str(chrome_dir / "GoogleChromePortable.exe")
@@ -584,8 +598,11 @@ class FlowKitGUI(tk.Tk):
         try:
             from modules.ipv6_proxy import IPv6SocksProxy
         except ImportError:
-            self._log("modules.ipv6_proxy not found, cannot start SOCKS5 proxies", "ERROR")
-            return
+            try:
+                from ipv6_proxy import IPv6SocksProxy
+            except ImportError:
+                self._log("ipv6_proxy module not found, cannot start SOCKS5 proxies", "ERROR")
+                return
 
         iface = "Ethernet"
         self._ipv6_proxies = []
@@ -876,6 +893,7 @@ class FlowKitGUI(tk.Tk):
         try:
             local = self._version
             remote = self._get_remote_version()
+            self._remote_version = remote
             if not remote:
                 self.after(0, lambda: self._update_btn.config(
                     text="Loi ket noi", state="normal", bg=RED, fg='#fff'))
@@ -928,20 +946,21 @@ class FlowKitGUI(tk.Tk):
                 except Exception:
                     pass
 
+                git_root = SUITE_ROOT if not _IS_STANDALONE else BASE_DIR
                 if git_available:
                     result = subprocess.run(
                         ["git", "remote", "get-url", "origin"],
-                        cwd=str(SUITE_ROOT), capture_output=True, text=True, timeout=10,
+                        cwd=str(git_root), capture_output=True, text=True, timeout=10,
                     )
                     if result.returncode != 0:
                         subprocess.run(
                             ["git", "remote", "add", "origin", GITHUB_GIT_URL],
-                            cwd=str(SUITE_ROOT), capture_output=True, timeout=10,
+                            cwd=str(git_root), capture_output=True, timeout=10,
                         )
                     elif GITHUB_GIT_URL not in result.stdout.strip():
                         subprocess.run(
                             ["git", "remote", "set-url", "origin", GITHUB_GIT_URL],
-                            cwd=str(SUITE_ROOT), capture_output=True, timeout=10,
+                            cwd=str(git_root), capture_output=True, timeout=10,
                         )
 
                     for cmd in [
@@ -949,7 +968,7 @@ class FlowKitGUI(tk.Tk):
                         ["git", "checkout", "main"],
                         ["git", "reset", "--hard", "origin/main"],
                     ]:
-                        subprocess.run(cmd, cwd=str(SUITE_ROOT), capture_output=True, text=True, timeout=120)
+                        subprocess.run(cmd, cwd=str(git_root), capture_output=True, text=True, timeout=120)
                 else:
                     import ssl
                     ssl_context = ssl.create_default_context()
@@ -998,14 +1017,28 @@ class FlowKitGUI(tk.Tk):
                     src_server_root = extract_dir / "VE3_SUITE-main" / "server"
                     for shared_file in ("google_login.py", "requirements.txt"):
                         src = src_server_root / shared_file
-                        dst = TOOL_DIR / shared_file
                         if src.exists():
-                            shutil.copy2(str(src), str(dst))
+                            shutil.copy2(str(src), str(BASE_DIR / shared_file))
+                    src_ipv6 = src_server_root / "modules" / "ipv6_proxy.py"
+                    if src_ipv6.exists():
+                        shutil.copy2(str(src_ipv6), str(BASE_DIR / "ipv6_proxy.py"))
 
                     if zip_path.exists():
                         zip_path.unlink()
                     if extract_dir.exists():
                         shutil.rmtree(str(extract_dir))
+
+                remote_ver = getattr(self, '_remote_version', '') or self._get_remote_version()
+                if remote_ver:
+                    try:
+                        (BASE_DIR / "VERSION.txt").write_text(remote_ver + "\n", encoding="utf-8")
+                    except Exception:
+                        pass
+                    if not _IS_STANDALONE:
+                        try:
+                            (SUITE_ROOT / "VERSION").write_text(remote_ver + "\n", encoding="utf-8")
+                        except Exception:
+                            pass
 
                 new_ver = _get_auto_version()
                 self._version = new_ver

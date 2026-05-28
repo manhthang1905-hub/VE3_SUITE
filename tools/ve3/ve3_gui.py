@@ -6078,6 +6078,21 @@ Get-CimInstance Win32_Process |
                             active_reason = "excel_active" if pd.name in self.queue_active_excel else "ve3_active"
                             self._queue_ve3_skip_log(pd.name, active_reason)
                             continue
+                    # Check quota wait marker — skip project if FlowKit quota exhausted
+                    quota_marker = pd / ".flowkit_quota_wait"
+                    if quota_marker.exists():
+                        try:
+                            qdata = json.loads(quota_marker.read_text(encoding="utf-8"))
+                            resume_ts = qdata.get("resume_ts", 0)
+                            if time.time() < resume_ts:
+                                remaining = int(resume_ts - time.time())
+                                self._queue_ve3_skip_log(pd.name, "quota_wait", f"{remaining}s left")
+                                continue
+                            quota_marker.unlink()
+                            self._log(f"[QUEUE] {pd.name}: quota wait expired, resuming", "INFO", "ve3")
+                        except Exception:
+                            quota_marker.unlink(missing_ok=True)
+
                     if self._project_ready_for_endpoint_by_files(pd):
                         self._log(f"[QUEUE] {pd.name}: file da du, tu dong chot endpoint", "WARN", "ve3")
                         finalize_ok = self._finalize_project_outputs(pd)
