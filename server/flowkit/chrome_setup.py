@@ -26,28 +26,15 @@ LOGIN_INDICATORS = [
 # ─── CDP helpers (y nguyen tu server cu chrome_session.py) ──────────
 
 def _enforce_window_layout(page, window_args, log):
-    """Ep vi tri/size bang CDP — y nguyen _enforce_window_layout server cu."""
+    """Ep vi tri/size bang CDP — maximize window."""
     try:
-        bounds = {'windowState': 'normal'}
-        for arg in (window_args or []):
-            if '--window-position=' in arg:
-                parts = arg.split('=', 1)[1].split(',')
-                bounds['left'] = int(parts[0])
-                bounds['top'] = int(parts[1])
-            elif '--window-size=' in arg:
-                parts = arg.split('=', 1)[1].split(',')
-                bounds['width'] = int(parts[0])
-                bounds['height'] = int(parts[1])
-
-        if len(bounds) <= 1:
-            return
-
         info = page.run_cdp('Browser.getWindowForTarget')
         window_id = info.get('windowId')
         if not window_id:
             return
-        page.run_cdp('Browser.setWindowBounds', windowId=window_id, bounds=bounds)
-        log("Window layout enforced via CDP: %s" % bounds)
+        page.run_cdp('Browser.setWindowBounds', windowId=window_id,
+                      bounds={'windowState': 'maximized'})
+        log("Window maximized via CDP")
     except Exception as e:
         log("CDP layout skip: %s" % e)
 

@@ -87,63 +87,28 @@ def _calc_window_layout(chrome_exe: str, worker_id: int):
     except Exception:
         pass
 
-    # Fallback: read config.yaml directly
+    # Fallback: full screen
     try:
-        import yaml
-        cfg_path = Path(__file__).parent / "config.yaml"
-        if cfg_path.exists():
-            with open(cfg_path) as f:
-                cfg = yaml.safe_load(f)
-            layout = cfg.get("chrome_layout", {})
-            instances = [i for i in cfg.get("instances", []) if i.get("enabled", True)]
-            total = len(instances)
-            gui_width = layout.get("gui_width", 700)
-            cols = layout.get("cols", 2)
-            rows = layout.get("rows", 0)
-            if rows <= 0:
-                rows = max(1, -(-total // cols))
-
-            rect = ctypes.wintypes.RECT()
-            ctypes.windll.user32.SystemParametersInfoW(0x0030, 0, ctypes.byref(rect), 0)
-            sw = rect.right - rect.left
-            sh = rect.bottom - rect.top
-            if sw <= 0 or sh <= 0:
-                sw = int(ctypes.windll.user32.GetSystemMetrics(0))
-                sh = int(ctypes.windll.user32.GetSystemMetrics(1))
-
-            usable_w = max(300, sw - gui_width)
-            cell_w = max(320, usable_w // cols)
-            cell_h = max(180, sh // rows)
-            col = slot % cols
-            row = slot // cols
-            x = gui_width + col * cell_w
-            y = row * cell_h
-            return slot, x, y, cell_w, cell_h
+        rect = ctypes.wintypes.RECT()
+        ctypes.windll.user32.SystemParametersInfoW(0x0030, 0, ctypes.byref(rect), 0)
+        sw = rect.right - rect.left
+        sh = rect.bottom - rect.top
+        if sw <= 0 or sh <= 0:
+            sw = int(ctypes.windll.user32.GetSystemMetrics(0))
+            sh = int(ctypes.windll.user32.GetSystemMetrics(1))
+        return slot, 0, 0, sw, sh
     except Exception:
         pass
 
     # Last resort fallback
-    total_slots = max(1, int(os.getenv("CHROME_LAYOUT_SLOTS", "10")))
-    slot = max(0, min(slot, total_slots - 1))
     sw = int(ctypes.windll.user32.GetSystemMetrics(0))
     sh = int(ctypes.windll.user32.GetSystemMetrics(1))
-    cols = 2
-    rows = max(1, (total_slots + cols - 1) // cols)
-    reserve_left = 700
-    usable_w = max(300, sw - reserve_left)
-    cell_w = max(320, usable_w // cols)
-    cell_h = max(180, sh // rows)
-    col = slot % cols
-    row = slot // cols
-    x = reserve_left + col * cell_w
-    y = row * cell_h
-    return slot, x, y, cell_w, cell_h
+    return slot, 0, 0, sw, sh
 
 
 def _enforce_window_layout(driver, chrome_exe: str, worker_id: int):
-    """Ep vi tri/size bang CDP sau khi Chrome da mo."""
+    """Maximize Chrome window via CDP."""
     try:
-        slot, x, y, cell_w, cell_h = _calc_window_layout(chrome_exe, worker_id)
         info = driver.run_cdp('Browser.getWindowForTarget')
         window_id = info.get('windowId')
         if not window_id:
@@ -152,15 +117,9 @@ def _enforce_window_layout(driver, chrome_exe: str, worker_id: int):
         driver.run_cdp(
             'Browser.setWindowBounds',
             windowId=window_id,
-            bounds={
-                'left': int(x),
-                'top': int(y),
-                'width': int(cell_w),
-                'height': int(cell_h),
-                'windowState': 'normal',
-            }
+            bounds={'windowState': 'maximized'}
         )
-        log(f"[LAYOUT-CDP] slot={slot} pos=({x},{y}) size=({cell_w}x{cell_h})")
+        log("[LAYOUT-CDP] window maximized")
     except Exception as e:
         log(f"[LAYOUT-CDP] skip: {e}", "WARN")
 
