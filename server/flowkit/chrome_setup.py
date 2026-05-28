@@ -26,15 +26,28 @@ LOGIN_INDICATORS = [
 # ─── CDP helpers (y nguyen tu server cu chrome_session.py) ──────────
 
 def _enforce_window_layout(page, window_args, log):
-    """Ep vi tri/size bang CDP — maximize window."""
+    """Ep vi tri/size bang CDP."""
     try:
+        bounds = {'windowState': 'normal'}
+        for arg in (window_args or []):
+            if '--window-position=' in arg:
+                parts = arg.split('=', 1)[1].split(',')
+                bounds['left'] = int(parts[0])
+                bounds['top'] = int(parts[1])
+            elif '--window-size=' in arg:
+                parts = arg.split('=', 1)[1].split(',')
+                bounds['width'] = int(parts[0])
+                bounds['height'] = int(parts[1])
+
+        if len(bounds) <= 1:
+            return
+
         info = page.run_cdp('Browser.getWindowForTarget')
         window_id = info.get('windowId')
         if not window_id:
             return
-        page.run_cdp('Browser.setWindowBounds', windowId=window_id,
-                      bounds={'windowState': 'maximized'})
-        log("Window maximized via CDP")
+        page.run_cdp('Browser.setWindowBounds', windowId=window_id, bounds=bounds)
+        log("Window layout set: %s" % bounds)
     except Exception as e:
         log("CDP layout skip: %s" % e)
 
@@ -629,43 +642,12 @@ def setup_chrome(
             page = ChromiumPage(co3)
             log("Chrome mo lai sau login: %s" % (page.title or "(no title)"))
             _enforce_window_layout(page, window_args, log)
-            _apply_zoom(page, log)
         except Exception as e:
             log("Chrome restart failed sau login fallback: %s" % e)
             _kill_chrome_for_dir(chrome_dir)
             return False
 
-        _inject_tab_guard(page, log)
-        _inject_fingerprint(page, ext_dir, instance_name, log)
-
-        page.get(FLOW_URL)
-        time.sleep(5)
-        _apply_zoom(page, log)
-        _inject_fingerprint(page, ext_dir, instance_name, log)
         current_url = page.url or ''
-
-    # ── 5. Xac nhan Flow page da load (thay add_2 button = OK) ──
-    if '/project/' in current_url:
-        log("READY — da o trong project: %s" % current_url)
-    else:
-        page_ok = False
-        for wait_attempt in range(15):
-            try:
-                btn = page.ele('tag:button@@text():add_2', timeout=2)
-                if btn:
-                    log("READY — Flow page loaded (add_2 visible)")
-                    page_ok = True
-                    break
-            except Exception:
-                pass
-            time.sleep(1)
-        if not page_ok:
-            log("Flow page khong load duoc!")
-            try:
-                page.quit()
-            except Exception:
-                pass
-            return False
 
     # ── 7. Kill Chrome — DrissionPage xong viec, agent se restart ──
     try:
@@ -735,24 +717,10 @@ def apply_chrome_cdp(
 
         _close_extra_tabs(page, log)
         _enforce_window_layout(page, window_args, log)
-        _apply_zoom(page, log)
         _inject_tab_guard(page, log)
         if ext_dir:
             _inject_fingerprint(page, ext_dir, instance_name, log)
-        log("CDP settings applied")
-
-        # Tao project ngay tren cung connection (giong server cu)
-        # Server cu giu self.page song suot -> zoom khong mat
-        # Neu disconnect o day thi zoom mat vi CDP session-scoped
-        current_url = page.url or ''
-        if '/project/' not in current_url:
-            log("Chua co project — tao moi...")
-            _create_new_project(page, log)
-
-        # Doi textarea (giong server cu _wait_for_textarea)
-        if '/project/' in (page.url or ''):
-            _wait_for_textarea(page, timeout=15)
-            log("READY — project: %s" % page.url)
+        log("CDP settings applied — ready for FlowKit")
 
     except Exception as e:
         log("CDP apply error: %s" % e)
@@ -828,11 +796,10 @@ def ensure_chrome_ready(
                     pass
                 return False
 
-    # Navigate to Flow
+    # Navigate to Flow — check login
     log("Vao Flow...")
     page.get(FLOW_URL)
     time.sleep(5)
-    _apply_zoom(page, log)
 
     url = page.url or ""
     if 'accounts.google.com' in url:
@@ -843,33 +810,9 @@ def ensure_chrome_ready(
             pass
         return False
 
-    # Xac nhan Flow page da load (thay add_2 = OK)
-    if "/project/" in (page.url or ""):
-        log("READY — da o trong project: %s" % page.url)
-    else:
-        page_ok = False
-        for wait_attempt in range(15):
-            try:
-                btn = page.ele('tag:button@@text():add_2', timeout=2)
-                if btn:
-                    log("READY — Flow page loaded (add_2 visible)")
-                    page_ok = True
-                    break
-            except Exception:
-                pass
-            time.sleep(1)
-        if not page_ok:
-            log("Flow page khong load duoc!")
-            try:
-                page.disconnect()
-            except Exception:
-                pass
-            return False
-
+    log("Login OK — ready for FlowKit")
     try:
         page.disconnect()
     except Exception:
         pass
-
-    log("Setup xong")
     return True

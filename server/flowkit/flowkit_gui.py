@@ -536,7 +536,7 @@ class FlowKitGUI(tk.Tk):
                 instances_cfg = [ii for ii in _lcfg.get("instances", []) if ii.get("enabled", True)]
                 slot = _resolve_chrome_slot(name)
                 x, y, w, h = _calc_chrome_layout(slot, len(instances_cfg))
-                win_args = [f"--window-position={x},{y}", f"--window-size={w},{h}", "--start-maximized"]
+                win_args = [f"--window-position={x},{y}", f"--window-size={w},{h}"]
             except Exception:
                 pass
 
@@ -732,7 +732,6 @@ class FlowKitGUI(tk.Tk):
             x, y, w, h = _calc_chrome_layout(slot, len(instances_cfg))
             args.append(f"--window-position={x},{y}")
             args.append(f"--window-size={w},{h}")
-            args.append("--start-maximized")
         except Exception:
             pass
 

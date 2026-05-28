@@ -47,12 +47,27 @@ def _get_screen_size() -> tuple[int, int]:
 
 
 def _calc_chrome_layout(slot: int, total_slots: int) -> tuple[int, int, int, int]:
-    """Calculate (x, y, width, height) for Chrome window at given slot.
-
-    All windows open at full screen size (stacked) so content is fully visible.
-    """
+    """Calculate (x, y, width, height) for Chrome window at given slot."""
     scr_w, scr_h = _get_screen_size()
-    return 0, 0, scr_w, scr_h
+
+    layout = CONFIG.get("chrome_layout", {})
+    gui_width = layout.get("gui_width", 700)
+    cols = layout.get("cols", 3)
+    rows = layout.get("rows", 0)
+
+    if rows <= 0:
+        rows = max(1, -(-total_slots // cols))
+
+    usable_w = max(300, scr_w - gui_width)
+    cell_w = max(320, usable_w // cols)
+    cell_h = max(180, scr_h // rows)
+
+    col = slot % cols
+    row = slot // cols
+    x = gui_width + col * cell_w
+    y = row * cell_h
+
+    return x, y, cell_w, cell_h
 
 
 def _resolve_chrome_slot(instance_name: str) -> int:
@@ -193,7 +208,6 @@ def start_chrome(instance: dict, new_fingerprint: bool = True, clean: bool = Fal
     x, y, w, h = _calc_chrome_layout(slot, total)
     args.append(f"--window-position={x},{y}")
     args.append(f"--window-size={w},{h}")
-    args.append("--start-maximized")
 
     if ipv6:
         proxy_port = 1081 + (instance["api_port"] - 8100)
