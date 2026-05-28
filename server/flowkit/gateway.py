@@ -106,6 +106,7 @@ class AgentInstance:
         # Self-heal tracking (y het chrome_pool.py self-heal logic)
         self.self_heal_failures = 0
         self.next_self_heal_at: float = 0
+        self.was_healthy_once = False
 
     @property
     def available(self) -> bool:
@@ -261,17 +262,21 @@ async def health_check_loop():
                 inst.last_health_check = time.time()
 
             # Self-heal: auto-restart instances that are down
-            # Y het chrome_pool.py self-heal loop (lines 843-883)
+            # Only for instances that WERE healthy before (not during initial startup)
             if _recovery_manager:
                 now = time.time()
                 for inst in instances:
                     if not inst.enabled:
                         continue
-                    # Instance is working fine — reset self-heal counter
+                    # Instance is working fine — mark as was_healthy and reset counter
                     if inst.healthy and inst.extension_connected and inst.flow_key_present:
+                        inst.was_healthy_once = True
                         if inst.self_heal_failures > 0:
                             inst.self_heal_failures = 0
                             inst.next_self_heal_at = 0
+                        continue
+                    # Skip instances that never finished startup — GUI pipeline handles those
+                    if not inst.was_healthy_once:
                         continue
                     # Skip if cooling (403 recovery handles that) or quota exhausted
                     if inst.is_cooling or inst.is_quota_exhausted:

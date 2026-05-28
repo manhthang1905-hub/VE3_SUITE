@@ -381,22 +381,32 @@ def _do_login(chrome_dir: Path, account: dict, proxy_arg: str = "", worker_id: i
 
 
 def _kill_chrome_for_dir(chrome_dir: Path):
-    """Kill Chrome processes — y nguyen server cu."""
+    """Kill Chrome processes + clean lock files."""
     if sys.platform != "win32":
         return
     import subprocess
     dir_name = chrome_dir.name
-    try:
-        subprocess.run(
-            ['wmic', 'process', 'where',
-             f"name='chrome.exe' and CommandLine like '%{dir_name}%'",
-             'call', 'terminate'],
-            capture_output=True, timeout=10,
-            creationflags=0x08000000,
-        )
-    except Exception:
-        pass
-    time.sleep(2)
+    for exe_name in ("chrome.exe", "GoogleChromePortable.exe"):
+        try:
+            subprocess.run(
+                ['wmic', 'process', 'where',
+                 f"name='{exe_name}' and CommandLine like '%{dir_name}%'",
+                 'call', 'terminate'],
+                capture_output=True, timeout=10,
+                creationflags=0x08000000,
+            )
+        except Exception:
+            pass
+    time.sleep(3)
+    # Clean profile lock files so Chrome can start fresh
+    profile_dir = chrome_dir / "Data" / "profile" / "Default"
+    for lock_name in ("SingletonLock", "SingletonCookie", "SingletonSocket"):
+        lock_file = profile_dir.parent / lock_name
+        try:
+            if lock_file.exists():
+                lock_file.unlink()
+        except Exception:
+            pass
 
 
 def _clear_chrome_data(chrome_dir: Path, log):
