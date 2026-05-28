@@ -584,12 +584,32 @@ class FlowKitGUI(tk.Tk):
             except Exception:
                 pass
 
+        # Clear "crashed" state so Chrome won't show "Restore pages?" dialog
+        prefs_file = profile_dir / "Default" / "Preferences"
+        if prefs_file.exists():
+            try:
+                prefs = json.loads(prefs_file.read_text(encoding="utf-8"))
+                changed = False
+                if prefs.get("profile", {}).get("exit_type") != "Normal":
+                    prefs.setdefault("profile", {})["exit_type"] = "Normal"
+                    changed = True
+                if prefs.get("profile", {}).get("exited_cleanly") is not True:
+                    prefs["profile"]["exited_cleanly"] = True
+                    changed = True
+                if changed:
+                    prefs_file.write_text(json.dumps(prefs, ensure_ascii=False), encoding="utf-8")
+            except Exception:
+                pass
+
         args = [
             str(portable),
             f"--load-extension={ext_dir}",
             "--disable-background-timer-throttling",
             "--disable-renderer-backgrounding",
             "--disable-backgrounding-occluded-windows",
+            "--disable-session-crashed-bubble",
+            "--hide-crash-restore-bubble",
+            "--no-first-run",
         ]
 
         # Window layout — same grid as login phase

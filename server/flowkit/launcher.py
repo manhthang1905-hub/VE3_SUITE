@@ -141,6 +141,18 @@ def start_chrome(instance: dict, new_fingerprint: bool = True) -> Optional[subpr
         print(f"[ERROR] ChromePortable not found: {portable_exe}")
         return None
 
+    # Clear "crashed" state to suppress "Restore pages?" dialog
+    import json as _json
+    prefs_file = chrome_dir / "Data" / "profile" / "Default" / "Preferences"
+    if prefs_file.exists():
+        try:
+            prefs = _json.loads(prefs_file.read_text(encoding="utf-8"))
+            prefs.setdefault("profile", {})["exit_type"] = "Normal"
+            prefs["profile"]["exited_cleanly"] = True
+            prefs_file.write_text(_json.dumps(prefs, ensure_ascii=False), encoding="utf-8")
+        except Exception:
+            pass
+
     if new_fingerprint:
         seed = generate_fingerprint(ext_dir, name)
         _chrome_seeds[name] = seed
@@ -151,6 +163,9 @@ def start_chrome(instance: dict, new_fingerprint: bool = True) -> Optional[subpr
         "--disable-background-timer-throttling",
         "--disable-renderer-backgrounding",
         "--disable-backgrounding-occluded-windows",
+        "--disable-session-crashed-bubble",
+        "--hide-crash-restore-bubble",
+        "--no-first-run",
     ]
 
     # Window layout
