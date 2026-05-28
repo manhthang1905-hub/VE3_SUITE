@@ -33,8 +33,6 @@ sys.path.insert(0, str(TOOL_DIR))
 # Clipboard la tai nguyen dung chung theo OS.
 # Khi login nhieu Chrome cung luc, can lock de tranh copy/paste bi chong cheo.
 _CLIPBOARD_LOCK = threading.Lock()
-# Login flow dung chung focus/UI cua OS -> can chay tuan tu.
-_LOGIN_FLOW_LOCK = threading.Lock()
 
 
 def _resolve_chrome_window_slot(chrome_exe: str, worker_id: int) -> int:
