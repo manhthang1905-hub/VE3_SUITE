@@ -349,16 +349,12 @@ def setup_chrome(
     Full Chrome setup — ported from old server chrome_session.py setup().
 
     Flow:
-    1. Generate fingerprint
-    2. Open Chrome via DrissionPage (with extension)
-    3. Enforce window layout via CDP (Browser.setWindowBounds)
-    4. Inject fingerprint via CDP (Page.addScriptToEvaluateOnNewDocument)
-    5. Check account → login if needed
-    6. Navigate to Flow
-    7. Apply zoom via CDP (Emulation.setPageScaleFactor) + JS
-    8. Click 'Dự án mới' / create project
-    9. Wait for textarea
-    10. Disconnect DrissionPage (Chrome stays open for extension)
+    1. Generate fingerprint + open Chrome via DrissionPage
+    2. Enforce window layout via CDP + inject fingerprint
+    3. Navigate to Flow — if redirected to login → login → reopen
+    4. Apply zoom 50% via CDP + JS
+    5. Create project + wait for textarea
+    6. Kill Chrome (agent will restart via subprocess)
     """
     log = log_func or (lambda msg: logger.info("[Setup] %s", msg))
 
@@ -396,64 +392,16 @@ def setup_chrome(
     # 3. Inject fingerprint via CDP (like old server inject_fingerprint_spoof)
     _inject_fingerprint(page, ext_dir, instance_name, log)
 
-    # 4. Check account
-    need_login = False
-    if account:
-        current_email = _check_logged_in(page)
-        target_email = account["id"].strip().lower()
-        log("Current: %s | Target: %s" % (current_email or "(none)", target_email))
-
-        if current_email != target_email:
-            log("Wrong account — need login")
-            need_login = True
-
-    # 5. Login if needed
-    if need_login:
-        try:
-            page.quit()
-        except Exception:
-            pass
-        _kill_chrome_for_dir(chrome_dir)
-
-        clean_chrome_profile(chrome_dir)
-        login_ok = _do_login(chrome_dir, account, proxy_arg, _worker_id)
-        if not login_ok:
-            log("Login FAILED!")
-            return False
-
-        log("Login OK — reopening Chrome...")
-        # Re-generate fingerprint (profile was cleaned)
-        if instance_name:
-            try:
-                from launcher import generate_fingerprint
-                generate_fingerprint(ext_dir, instance_name)
-            except Exception:
-                pass
-        _write_chrome_prefs(chrome_dir)
-        co2 = _build_options(chrome_dir, ext_dir, port, proxy_arg, window_args)
-        try:
-            page = ChromiumPage(co2)
-            log("Chrome reopened: %s" % (page.title or "(no title)"))
-        except Exception as e:
-            log("Chrome reopen failed: %s" % e)
-            return False
-
-        # Enforce layout + fingerprint again
-        _enforce_window_layout(page, window_args, log)
-        _inject_fingerprint(page, ext_dir, instance_name, log)
-
-    # 6. Navigate to Flow
+    # 4. Navigate to Flow — check if logged in by whether we get redirected
     log("Navigating to Flow...")
     page.get(FLOW_URL)
     time.sleep(5)
-
-    # 7. Apply zoom (like old server apply_page_zoom)
     _apply_zoom(page, log)
 
-    # Check if redirected to login
+    # 5. If redirected to login page → need login
     url = page.url or ""
     if any(ind in url for ind in LOGIN_INDICATORS):
-        log("Redirected to login page!")
+        log("Not logged in — redirected to login page")
         if account:
             try:
                 page.quit()
@@ -461,10 +409,13 @@ def setup_chrome(
                 pass
             _kill_chrome_for_dir(chrome_dir)
             clean_chrome_profile(chrome_dir)
+
             login_ok = _do_login(chrome_dir, account, proxy_arg, _worker_id)
             if not login_ok:
-                log("Login FAILED after redirect!")
+                log("Login FAILED!")
                 return False
+
+            log("Login OK — reopening Chrome...")
             if instance_name:
                 try:
                     from launcher import generate_fingerprint
@@ -472,19 +423,28 @@ def setup_chrome(
                 except Exception:
                     pass
             _write_chrome_prefs(chrome_dir)
-            co3 = _build_options(chrome_dir, ext_dir, port, proxy_arg, window_args)
+            co2 = _build_options(chrome_dir, ext_dir, port, proxy_arg, window_args)
             try:
-                page = ChromiumPage(co3)
-                _enforce_window_layout(page, window_args, log)
-                _inject_fingerprint(page, ext_dir, instance_name, log)
-                page.get(FLOW_URL)
-                time.sleep(5)
-                _apply_zoom(page, log)
+                page = ChromiumPage(co2)
+                log("Chrome reopened: %s" % (page.title or "(no title)"))
             except Exception as e:
-                log("Chrome reopen after login failed: %s" % e)
+                log("Chrome reopen failed: %s" % e)
                 return False
 
-    # 8. Create project
+            _enforce_window_layout(page, window_args, log)
+            _inject_fingerprint(page, ext_dir, instance_name, log)
+            page.get(FLOW_URL)
+            time.sleep(5)
+            _apply_zoom(page, log)
+        else:
+            log("No account provided — cannot login!")
+            try:
+                page.quit()
+            except Exception:
+                pass
+            return False
+
+    # 6. Create project
     url = page.url or ""
     if "/project/" in url:
         log("Already in project: %s" % url)
