@@ -1,8 +1,8 @@
 project_root: ../../PROJECTS
 excel_ai_provider: deepseek
-deepseek_api_key: sk-5330403e57f1496aa5cfe6f65bf5fa3e
+deepseek_api_key: sk-9a0f488007e04fa5a7f5a6896a4872c8
 deepseek_api_keys:
-  - sk-5330403e57f1496aa5cfe6f65bf5fa3e
+  - sk-9a0f488007e04fa5a7f5a6896a4872c8
 deepseek_model: deepseek-v4-pro
 deepseek_thinking_type: disabled
 vov_direct_base_url: https://routerapi.vovantin.online/v1
