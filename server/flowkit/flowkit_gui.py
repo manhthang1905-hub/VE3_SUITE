@@ -581,9 +581,9 @@ class FlowKitGUI(tk.Tk):
         ipv6_map: {index: {'ip': '2001:...', 'gateway': '2001:...:1'}}
         """
         try:
-            from modules.ipv6_proxy import IPv6SocksProxy
+            from ipv6_proxy import IPv6SocksProxy
         except ImportError:
-            self._log("modules.ipv6_proxy not found, cannot start SOCKS5 proxies", "ERROR")
+            self._log("ipv6_proxy not found, cannot start SOCKS5 proxies", "ERROR")
             return
 
         iface = "Ethernet"
