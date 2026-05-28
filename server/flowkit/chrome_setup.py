@@ -53,125 +53,73 @@ def _enforce_window_layout(page, window_args, log):
 
 
 def _apply_zoom(page, log, retries=3, force_register_script=True):
-    """Apply page zoom — copy y nguyen apply_page_zoom server cu."""
+    """Apply page zoom — dung transform scale (khong gay half-height nhu CSS zoom)."""
     zoom_val = int(os.getenv("CHROME_PAGE_ZOOM", "50"))
     zoom_val = max(25, min(200, zoom_val))
-    target = "%d%%" % zoom_val
     scale = max(0.25, min(2.0, zoom_val / 100.0))
+    inv = 100.0 / zoom_val  # e.g. 200% for 50% zoom
 
-    zoom_reset_js = """
+    zoom_js = """
         (function() {
             try {
-                try { document.documentElement.style.zoom = '100%'; } catch(e) {}
-                try { if (document.body) document.body.style.zoom = '100%'; } catch(e) {}
-                return '100%';
-            } catch(e) {
-                return 'ERR:' + e;
-            }
+                var s = %s;
+                var inv = '%s%%';
+                var html = document.documentElement;
+                if (html) {
+                    html.style.transformOrigin = 'top left';
+                    html.style.transform = 'scale(' + s + ')';
+                    html.style.width = inv;
+                    html.style.height = inv;
+                }
+                return 'OK';
+            } catch(e) { return 'ERR:' + e; }
         })();
-    """
-
-    zoom_apply_js = """
-        (function() {
-            try {
-                var z = '%s';
-                try { document.documentElement.style.zoom = z; } catch(e) {}
-                try { if (document.body) document.body.style.zoom = '100%%'; } catch(e) {}
-                return (document.documentElement && document.documentElement.style.zoom) || '';
-            } catch(e) {
-                return 'ERR:' + e;
-            }
-        })();
-    """ % target
-
-    zoom_verify_js = """
-        (function() {
-            try {
-                var dz = '';
-                try { dz = (document.documentElement && document.documentElement.style.zoom) || ''; } catch(e) {}
-                var vv = '';
-                try {
-                    if (window.visualViewport && window.visualViewport.scale != null) {
-                        vv = String(window.visualViewport.scale);
-                    }
-                } catch(e) {}
-                return JSON.stringify({dz: dz, vv: vv});
-            } catch(e) {
-                return JSON.stringify({dz: '', vv: '', err: String(e)});
-            }
-        })();
-    """
+    """ % (scale, int(inv * 100))
 
     zoom_bootstrap_js = """
         (function() {
-            try {
-                var z = '%s';
-                var applyZoom = function() {
-                    try { document.documentElement.style.zoom = z; } catch(e) {}
-                    try { if (document.body) document.body.style.zoom = '100%%'; } catch(e) {}
-                };
-                try { applyZoom(); } catch(e) {}
-                try { document.addEventListener('DOMContentLoaded', applyZoom, true); } catch(e) {}
-                try { window.addEventListener('load', applyZoom, true); } catch(e) {}
-            } catch(e) {}
+            var s = %s;
+            var inv = '%s%%';
+            var apply = function() {
+                try {
+                    var html = document.documentElement;
+                    if (html) {
+                        html.style.transformOrigin = 'top left';
+                        html.style.transform = 'scale(' + s + ')';
+                        html.style.width = inv;
+                        html.style.height = inv;
+                    }
+                } catch(e) {}
+            };
+            try { apply(); } catch(e) {}
+            document.addEventListener('DOMContentLoaded', apply, true);
+            window.addEventListener('load', apply, true);
         })();
-    """ % target
+    """ % (scale, int(inv * 100))
 
     try:
         if force_register_script:
             try:
                 page.run_cdp('Page.addScriptToEvaluateOnNewDocument', source=zoom_bootstrap_js)
-            except Exception as e:
-                log("[ZOOM] CDP pre-load inject failed: %s" % e)
+            except Exception:
+                pass
 
-        cdp_scale_ok = False
         for i in range(max(1, retries)):
             try:
-                page.run_cdp('Runtime.evaluate', expression=zoom_reset_js)
-            except Exception:
-                pass
-
-            try:
-                page.run_cdp('Emulation.setPageScaleFactor', pageScaleFactor=1.0)
-                page.run_cdp('Emulation.setPageScaleFactor', pageScaleFactor=scale)
-                cdp_scale_ok = True
-            except Exception:
-                pass
-
-            actual = ''
-            vv = ''
-            try:
-                page.run_cdp('Runtime.evaluate', expression=zoom_apply_js)
-                raw_result = page.run_cdp('Runtime.evaluate', expression=zoom_verify_js,
-                                          returnByValue=True)
-                raw = raw_result.get('result', {}).get('value', '')
-                if isinstance(raw, str) and raw:
-                    import json as _json
-                    parsed = _json.loads(raw)
-                    actual = str(parsed.get('dz') or '').strip()
-                    vv = str(parsed.get('vv') or '').strip()
-            except Exception:
-                pass
-
-            if actual == target:
-                log("[ZOOM] Verified: %s" % actual)
+                page.run_cdp('Runtime.evaluate', expression=zoom_js)
+                log("[ZOOM] %d%% applied (transform scale)" % zoom_val)
                 return True
-
-            try:
-                if vv:
-                    vv_val = float(vv)
-                    if abs(vv_val - scale) <= 0.05:
-                        log("[ZOOM] Verified via viewport scale: %.2f" % vv_val)
-                        return True
             except Exception:
                 pass
-
-            if cdp_scale_ok and not actual:
-                log("[ZOOM] Applied (verify-unavailable), target=%s" % target)
+            try:
+                page.run_js(zoom_js)
+                log("[ZOOM] %d%% applied (transform scale, run_js)" % zoom_val)
                 return True
+            except Exception:
+                pass
             time.sleep(0.2)
 
-        log("[ZOOM] MISMATCH target=%s, actual=%s, vv=%s" % (target, actual, vv))
+        log("[ZOOM] Failed after %d retries" % retries)
         return False
     except Exception as e:
         log("[ZOOM] Set zoom failed: %s" % e)
@@ -405,34 +353,59 @@ def _click_new_project(page, log=None) -> bool:
 
 
 def _click_create_with_flow_js(page, log) -> bool:
-    """Click 'Create with Flow' via JS — y nguyen server cu."""
-    try:
-        click_result = page.run_cdp('Runtime.evaluate', expression="""
-            (function() {
+    """Click 'Create with Google Flow' via JS — scrollIntoView + click."""
+    js = """
+        (function() {
+            // 1. Tim bang class name (chinh xac nhat)
+            var btn = document.querySelector('button.sc-fe61cac2-1');
+            if (!btn) {
+                var span = document.querySelector('span.sc-fe61cac2-0');
+                if (span) btn = span.closest('button');
+            }
+            // 2. Tim bang text content
+            if (!btn) {
                 var btns = document.querySelectorAll('button');
                 for (var b of btns) {
-                    var text = (b.textContent || '').trim();
-                    if (text.includes('Create with Flow') || text.includes('Tạo với Flow')
-                        || text.includes('Create with Google Flow')) {
-                        b.click();
-                        return 'CLICKED';
+                    var t = (b.textContent || '').trim();
+                    if (t.includes('Create with Google Flow') || t.includes('Create with Flow')
+                        || t.includes('Tạo với Flow')) {
+                        btn = b; break;
                     }
                 }
+            }
+            // 3. Tim span roi click parent button
+            if (!btn) {
                 var spans = document.querySelectorAll('span');
                 for (var s of spans) {
-                    var text = (s.textContent || '').trim();
-                    if (text.includes('Create with Flow') || text.includes('Tạo với Flow')
-                        || text.includes('Create with Google Flow')) {
-                        var btn = s.closest('button');
-                        if (btn) { btn.click(); return 'CLICKED_VIA_SPAN'; }
+                    var t = (s.textContent || '').trim();
+                    if (t.includes('Create with Google Flow') || t.includes('Create with Flow')
+                        || t.includes('Tạo với Flow')) {
+                        btn = s.closest('button');
+                        if (btn) break;
                     }
                 }
-                return 'NOT_FOUND';
-            })();
-        """, returnByValue=True)
-        val = click_result.get('result', {}).get('value', '')
+            }
+            if (btn) {
+                btn.scrollIntoView({block:'center'});
+                btn.click();
+                return 'CLICKED';
+            }
+            return 'NOT_FOUND';
+        })();
+    """
+    try:
+        result = page.run_cdp('Runtime.evaluate', expression=js, returnByValue=True)
+        val = result.get('result', {}).get('value', '')
         if val and 'CLICKED' in str(val):
-            log("Clicked 'Create with Flow' (JS)")
+            log("Clicked 'Create with Google Flow' (JS+scroll)")
+            return True
+    except Exception:
+        pass
+    # Fallback: dung run_js neu Runtime.evaluate khong hoat dong
+    try:
+        result = page.run_js(js)
+        if result and 'CLICKED' in str(result):
+            log("Clicked 'Create with Google Flow' (run_js)")
             return True
     except Exception:
         pass
@@ -457,6 +430,12 @@ def _create_new_project(page, log) -> bool:
 
         _dismiss_popups(page)
 
+        # Thu click "Create with Google Flow" TRUOC (phai qua buoc nay truoc)
+        if _click_create_with_flow_js(page, log):
+            time.sleep(2)
+            continue
+
+        # Tim button "Du an moi" (add_2) — chi xuat hien SAU khi da qua "Create with Google Flow"
         if _click_new_project(page, log):
             log("Clicked new project (attempt %d)" % (attempt + 1))
             time.sleep(3)
@@ -471,10 +450,6 @@ def _create_new_project(page, log) -> bool:
                 if w % 10 == 9:
                     log("  ... doi vao project %ds" % (w + 1))
             log("Click OK but project not loaded, retrying...")
-            continue
-
-        if _click_create_with_flow_js(page, log):
-            time.sleep(1)
             continue
 
         if attempt > 0 and attempt % 5 == 0:

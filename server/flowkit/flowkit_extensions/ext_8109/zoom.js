@@ -1,6 +1,16 @@
 (function(){
-    var _applyZoom=function(){try{document.documentElement.style.zoom='50%';}catch(e){}if(document.body)try{document.body.style.zoom='100%';}catch(e){}};
-    try{_applyZoom();}catch(e){}
-    document.addEventListener('DOMContentLoaded',_applyZoom,true);
-    window.addEventListener('load',_applyZoom,true);
+    var apply = function() {
+        try {
+            var html = document.documentElement;
+            if (html) {
+                html.style.transformOrigin = 'top left';
+                html.style.transform = 'scale(0.5)';
+                html.style.width = '200%';
+                html.style.height = '200%';
+            }
+        } catch(e) {}
+    };
+    try { apply(); } catch(e) {}
+    document.addEventListener('DOMContentLoaded', apply, true);
+    window.addEventListener('load', apply, true);
 })();
