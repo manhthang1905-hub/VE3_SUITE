@@ -1249,8 +1249,14 @@ def login_google_chrome(account_info: dict, chrome_portable: str = None, profile
                     if 'challenge/pwd' in current_url or 'challenge/password' in current_url:
                         log(f"Password page loaded (after {_url_wait+1}s)")
                         break
-                    # Kiem tra neu bi reject hoac chuyen trang khac
-                    if 'signin/rejected' in current_url or 'myaccount' in current_url:
+                        if 'signin/rejected' in current_url:
+                        log(f"Google REJECTED login: {current_url}", "ERROR")
+                        try:
+                            driver.quit()
+                        except Exception:
+                            pass
+                        return False
+                    if 'myaccount' in current_url:
                         log(f"Page redirected: {current_url}")
                         break
                     time.sleep(1)
@@ -1390,8 +1396,14 @@ def login_google_chrome(account_info: dict, chrome_portable: str = None, profile
                 log(f"Page transitioned (after {_2fa_wait+1}s)")
                 _pwd_accepted = True
                 break
-            # URL chua doi nhung co the da chuyen sang challenge khac
-            if 'myaccount' in current or 'signin/rejected' in current:
+            if 'signin/rejected' in current:
+                log(f"Google REJECTED login after password: {current}", "ERROR")
+                try:
+                    driver.quit()
+                except Exception:
+                    pass
+                return False
+            if 'myaccount' in current:
                 log(f"Page transitioned (after {_2fa_wait+1}s)")
                 _pwd_accepted = True
                 break
@@ -1538,9 +1550,18 @@ def login_google_chrome(account_info: dict, chrome_portable: str = None, profile
         log("Waiting for Google to redirect after login...")
 
         login_success = False
-        max_wait = 60  # v1.0.659: Tang 30â†’60s cho mang IPv6 cham
+        max_wait = 60
         for wait_i in range(max_wait):
             current_url = driver.url.lower()
+
+            # Google rejected -> fail ngay, khong cho them
+            if ‘signin/rejected’ in current_url:
+                log(f"Google REJECTED login: {current_url}", "ERROR")
+                try:
+                    driver.quit()
+                except Exception:
+                    pass
+                return False
 
             # Da roi khoi trang login
             if "myaccount.google.com" in current_url or \
