@@ -804,7 +804,7 @@ class FlowKitGUI(tk.Tk):
         self._log("Stopping FlowKit Server...", "WARN")
         self._started = False
 
-        # Kill processes
+        # Kill managed subprocesses (agents, gateway)
         for proc in self._processes:
             try:
                 proc.kill()
@@ -820,7 +820,16 @@ class FlowKitGUI(tk.Tk):
                 pass
         self._log_handles.clear()
 
-        # Kill Chrome Portable
+        self._kill_all_chrome()
+        self._kill_flowkit_python()
+
+        self._start_btn.config(state='normal', bg=GREEN)
+        self._stop_btn.config(state='disabled')
+        self._log("FlowKit Server stopped.", "WARN")
+
+    def _kill_all_chrome(self):
+        """Kill all GoogleChromePortable chrome.exe — dual strategy like old server."""
+        # Step 1: WMIC terminate
         try:
             subprocess.run(
                 ['wmic', 'process', 'where',
@@ -832,9 +841,73 @@ class FlowKitGUI(tk.Tk):
         except Exception:
             pass
 
-        self._start_btn.config(state='normal', bg=GREEN)
-        self._stop_btn.config(state='disabled')
-        self._log("FlowKit Server stopped.", "WARN")
+        # Step 2: taskkill /F /T tree kill (catches child processes WMIC missed)
+        try:
+            proc = subprocess.run(
+                ['wmic', 'process', 'where',
+                 "name='chrome.exe' and CommandLine like '%GoogleChromePortable%'",
+                 'get', 'ProcessId', '/FORMAT:CSV'],
+                capture_output=True, text=True, timeout=8,
+                creationflags=0x08000000,
+            )
+            for line in (proc.stdout or "").splitlines():
+                s = line.strip()
+                if not s or not any(c.isdigit() for c in s):
+                    continue
+                parts = s.rsplit(',', 1)
+                if len(parts) == 2:
+                    try:
+                        pid = int(parts[1].strip())
+                        subprocess.run(
+                            ['taskkill', '/F', '/T', '/PID', str(pid)],
+                            capture_output=True, timeout=5,
+                            creationflags=0x08000000,
+                        )
+                    except Exception:
+                        pass
+        except Exception:
+            pass
+
+        # Step 3: Kill GoogleChromePortable.exe launcher itself
+        try:
+            subprocess.run(
+                ['taskkill', '/F', '/IM', 'GoogleChromePortable.exe'],
+                capture_output=True, timeout=5,
+                creationflags=0x08000000,
+            )
+        except Exception:
+            pass
+
+    def _kill_flowkit_python(self):
+        """Kill python subprocesses spawned by FlowKit (agent, gateway)."""
+        markers = ("flowkit\\agent", "flowkit/agent", "flowkit\\gateway", "flowkit/gateway")
+        try:
+            proc = subprocess.run(
+                ['wmic', 'process', 'where',
+                 'name="python.exe" or name="pythonw.exe"',
+                 'get', 'ProcessId,CommandLine', '/FORMAT:CSV'],
+                capture_output=True, text=True, timeout=8,
+                creationflags=0x08000000,
+            )
+            for line in (proc.stdout or "").splitlines():
+                s = line.strip()
+                if not s:
+                    continue
+                if not any(m in s.lower() for m in markers):
+                    continue
+                parts = s.rsplit(',', 1)
+                if len(parts) == 2:
+                    try:
+                        pid = int(parts[1].strip())
+                        subprocess.run(
+                            ['taskkill', '/F', '/T', '/PID', str(pid)],
+                            capture_output=True, timeout=5,
+                            creationflags=0x08000000,
+                        )
+                    except Exception:
+                        pass
+        except Exception:
+            pass
 
     # ============================================================
     # Monitoring
@@ -1160,7 +1233,11 @@ class FlowKitGUI(tk.Tk):
     def _on_close(self):
         if self._started:
             self._on_stop()
-        self.destroy()
+        try:
+            self.destroy()
+        except Exception:
+            pass
+        os._exit(0)
 
 
 def main():
