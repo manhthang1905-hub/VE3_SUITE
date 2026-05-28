@@ -167,31 +167,52 @@ def _enforce_window_layout(driver, chrome_exe: str, worker_id: int):
 
 
 def _apply_zoom_login(driver):
-    """Apply zoom cho login Chrome — transform scale (khong gay half-height)."""
+    """Apply zoom — copy y nguyen apply_page_zoom server cu."""
     import os as _os
     zoom_val = int(_os.getenv("CHROME_PAGE_ZOOM", "50"))
     zoom_val = max(25, min(200, zoom_val))
+    target = f"{zoom_val}%"
     scale = max(0.25, min(2.0, zoom_val / 100.0))
-    inv = int(100.0 / scale)
 
-    zoom_js = f"""(function(){{
-        try{{
-            var html=document.documentElement;
-            if(html){{
-                html.style.transformOrigin='top left';
-                html.style.transform='scale({scale})';
-                html.style.width='{inv}%';
-                html.style.height='{inv}%';
-            }}
-        }}catch(e){{}}
-    }})();"""
+    zoom_apply_js = f"""
+        (function() {{
+            try {{
+                var z = '{target}';
+                try {{ document.documentElement.style.zoom = z; }} catch(e) {{}}
+                try {{ if (document.body) document.body.style.zoom = '100%'; }} catch(e) {{}}
+            }} catch(e) {{}}
+        }})();
+    """
+    zoom_bootstrap_js = f"""
+        (function() {{
+            try {{
+                var z = '{target}';
+                var applyZoom = function() {{
+                    try {{ document.documentElement.style.zoom = z; }} catch(e) {{}}
+                    try {{ if (document.body) document.body.style.zoom = '100%'; }} catch(e) {{}}
+                }};
+                try {{ applyZoom(); }} catch(e) {{}}
+                try {{ document.addEventListener('DOMContentLoaded', applyZoom, true); }} catch(e) {{}}
+                try {{ window.addEventListener('load', applyZoom, true); }} catch(e) {{}}
+            }} catch(e) {{}}
+        }})();
+    """
 
     try:
         try:
-            driver.run_cdp('Runtime.evaluate', expression=zoom_js)
+            driver.run_cdp('Page.addScriptToEvaluateOnNewDocument', source=zoom_bootstrap_js)
         except Exception:
-            driver.run_js(zoom_js)
-        log(f"[ZOOM] {zoom_val}% applied (transform scale)")
+            pass
+        try:
+            driver.run_cdp('Emulation.setPageScaleFactor', pageScaleFactor=1.0)
+            driver.run_cdp('Emulation.setPageScaleFactor', pageScaleFactor=scale)
+        except Exception:
+            pass
+        try:
+            driver.run_js(zoom_apply_js)
+        except Exception:
+            pass
+        log(f"[ZOOM] {target} applied")
     except Exception as e:
         log(f"[ZOOM] failed: {e}", "WARN")
 
