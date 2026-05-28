@@ -13,7 +13,7 @@ from pathlib import Path
 logger = logging.getLogger(__name__)
 
 BASE_DIR = Path(__file__).parent
-FLOW_URL = "https://labs.google/fx/tools/flow"
+FLOW_URL = "https://labs.google/fx/tools/flow?hl=en"
 
 LOGIN_INDICATORS = [
     "accounts.google.com/signin",
@@ -244,7 +244,10 @@ def _dismiss_popups(page):
     try:
         page.run_js("""
             (function() {
-                var dismiss = ['Bắt đầu', 'Get started', 'Got it', 'Dismiss', 'Đã hiểu', 'I understand'];
+                var dismiss = ['Bắt đầu', 'Get started', 'Got it', 'Dismiss', 'Đã hiểu', 'I understand',
+                    'Começar', 'Entendi', 'Mulai', 'Mengerti', 'Jetzt starten', 'Verstanden',
+                    'Commencer', 'Compris', 'Empezar', 'Entendido', 'Inizia', 'Capito',
+                    'Начать', 'Понятно', '開始', '了解', '시작'];
                 var btns = document.querySelectorAll('button');
                 for (var b of btns) {
                     var t = (b.textContent || '').trim();
@@ -258,7 +261,9 @@ def _dismiss_popups(page):
                     for (var i = 0; i < dbtns.length; i++) {
                         var text = dbtns[i].textContent.trim();
                         if (text.indexOf('đồng ý') > -1 || text.indexOf('Agree') > -1 ||
-                            text.indexOf('Accept') > -1) {
+                            text.indexOf('Accept') > -1 || text.indexOf('Aceitar') > -1 ||
+                            text.indexOf('Terima') > -1 || text.indexOf('Akzeptieren') > -1 ||
+                            text.indexOf('Accepter') > -1 || text.indexOf('Aceptar') > -1) {
                             dbtns[i].click(); return;
                         }
                     }
@@ -275,24 +280,28 @@ def _click_new_project(page) -> bool:
         result = page.run_js("""
             (function() {
                 var btns = document.querySelectorAll('button');
+                var newTexts = ['add_2','New project','Dự án mới','Novo projeto','Proyek baru',
+                    'Neues Projekt','Nouveau projet','Nuevo proyecto','Nuovo progetto',
+                    'Новый проект','新しいプロジェクト','新建项目','새 프로젝트','Yeni proje'];
+                var createTexts = ['Create with Flow','Tạo với Flow','Criar com o Flow',
+                    'Buat dengan Flow','Mit Flow erstellen','Créer avec Flow',
+                    'Crear con Flow','Crea con Flow','Создать в Flow'];
                 for (var b of btns) {
                     var t = (b.textContent || '').trim();
-                    if (t.indexOf('add_2') >= 0 || t.indexOf('Dự án mới') >= 0 || t.indexOf('New project') >= 0) {
-                        b.click(); return 'CLICKED_NEW';
-                    }
+                    for (var k of newTexts) { if (t.indexOf(k) >= 0) { b.click(); return 'CLICKED_NEW'; } }
                 }
                 for (var b of btns) {
                     var t = (b.textContent || '').trim();
-                    if (t.indexOf('Create with Flow') >= 0 || t.indexOf('Tạo với Flow') >= 0) {
-                        b.click(); return 'CLICKED_CREATE';
-                    }
+                    for (var k of createTexts) { if (t.indexOf(k) >= 0) { b.click(); return 'CLICKED_CREATE'; } }
                 }
                 var spans = document.querySelectorAll('span');
                 for (var s of spans) {
                     var t = (s.textContent || '').trim();
-                    if (t.indexOf('Create with Flow') >= 0 || t.indexOf('Tạo với Flow') >= 0) {
-                        var btn = s.closest('button');
-                        if (btn) { btn.click(); return 'CLICKED_SPAN'; }
+                    for (var k of createTexts) {
+                        if (t.indexOf(k) >= 0) {
+                            var btn = s.closest('button');
+                            if (btn) { btn.click(); return 'CLICKED_SPAN'; }
+                        }
                     }
                 }
                 return 'NOT_FOUND';
