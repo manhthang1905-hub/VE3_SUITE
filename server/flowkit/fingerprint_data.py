@@ -147,7 +147,7 @@ def get_unique_seed() -> int:
         return seed
 
 
-def build_fingerprint_js(seed: int, zoom_percent: int = 0) -> str:
+def build_fingerprint_js(seed: int) -> str:
     """Tao JS spoof WebGL/Canvas/Hardware fingerprint tu seed."""
     r = random.Random(seed)
     gpu = r.choice(FAKE_GPUS)

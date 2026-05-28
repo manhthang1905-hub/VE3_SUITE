@@ -100,34 +100,6 @@ class RecoveryManager:
                 logger.warning("[Recovery] IPv6 client init failed: %s", e)
 
         self._recovery_tasks: Dict[str, asyncio.Task] = {}
-        self._accounts: Dict[str, dict] = {}
-
-    def set_accounts(self, accounts: List[dict], instances: List[dict]):
-        """Map accounts to instances for auto-login during recovery."""
-        for i, inst in enumerate(instances):
-            if not inst.get("enabled", True):
-                continue
-            if accounts:
-                acc = accounts[i % len(accounts)]
-                self._accounts[inst["name"]] = {
-                    "id": acc.get("email", acc.get("id", "")),
-                    "password": acc.get("password", ""),
-                    "totp_secret": acc.get("totp_secret", ""),
-                }
-
-    def _get_account(self, instance_name: str) -> Optional[dict]:
-        if instance_name in self._accounts:
-            return self._accounts[instance_name]
-        # Fallback: read from file saved by GUI
-        try:
-            import json as _json
-            accounts_file = BASE_DIR / "config" / ".flow_accounts.json"
-            if accounts_file.exists():
-                data = _json.loads(accounts_file.read_text(encoding="utf-8"))
-                return data.get(instance_name)
-        except Exception:
-            pass
-        return None
 
     def on_instance_success(self, instance_name: str):
         """Called when an instance completes a request successfully."""
@@ -157,56 +129,6 @@ class RecoveryManager:
 
         task = asyncio.create_task(self._run_recovery(instance_name))
         self._recovery_tasks[instance_name] = task
-
-    def trigger_self_heal(self, instance_name: str, rotate_ipv6: bool = False):
-        """Self-heal: instance is down (not healthy/extension dead).
-
-        Skips L1 captcha reset (useless when Chrome is dead) and goes
-        straight to full Chrome restart — y het startup.
-        """
-        if instance_name not in self.states:
-            return
-
-        state = self.states[instance_name]
-        if state.recovering:
-            return
-
-        now = time.time()
-        if now - state.last_recovery_time < self.min_interval:
-            return
-
-        task = asyncio.create_task(self._run_self_heal(instance_name, rotate_ipv6))
-        self._recovery_tasks[instance_name] = task
-
-    async def _run_self_heal(self, instance_name: str, rotate_ipv6: bool = False):
-        """Self-heal: full Chrome restart (skip L1 captcha reset)."""
-        state = self.states[instance_name]
-        state.recovering = True
-        state.last_recovery_time = time.time()
-        state.recovery_count += 1
-
-        logger.info("[SelfHeal] %s: full restart (rotate_ipv6=%s, attempt #%d)",
-                    instance_name, rotate_ipv6, state.recovery_count)
-
-        try:
-            new_ip = ""
-            if rotate_ipv6:
-                new_ip = self._rotate_ipv6(instance_name, "self_heal")
-
-            success = await self._restart_chrome_instance(instance_name, new_ipv6=new_ip)
-
-            if success:
-                logger.info("[SelfHeal] %s: restart OK", instance_name)
-                state.reset()
-                if self.on_cooldown_clear:
-                    self.on_cooldown_clear(instance_name)
-            else:
-                logger.warning("[SelfHeal] %s: restart FAILED", instance_name)
-
-        except Exception as e:
-            logger.exception("[SelfHeal] %s error: %s", instance_name, e)
-        finally:
-            state.recovering = False
 
     async def _run_recovery(self, instance_name: str):
         """Execute recovery escalation for an instance."""
@@ -296,155 +218,84 @@ class RecoveryManager:
             logger.warning("[Recovery] %s Level 1 error: %s", instance_name, e)
             return False
 
-    def _rotate_ipv6(self, instance_name: str, reason: str = "403_recovery") -> str:
-        """Get new IPv6 from pool. Returns new IP or empty string."""
+    async def _level2_rotate_ipv6(self, instance_name: str) -> bool:
+        """Level 2: Rotate IPv6 and restart Chrome with new proxy."""
+        logger.info("[Recovery] %s Level 2: rotating IPv6", instance_name)
+
         if not self._ipv6_client:
-            return ""
+            logger.info("[Recovery] %s Level 2: no IPv6 pool, skipping to Level 3", instance_name)
+            return False
+
         state = self.states[instance_name]
         old_ip = state.current_ipv6
-        try:
-            result = (self._ipv6_client.rotate_ip(old_ip, reason=reason, worker=instance_name)
-                      if old_ip else self._ipv6_client.get_ip(worker=instance_name))
-            if result:
-                new_ip = result["ip"]
-                state.current_ipv6 = new_ip
-                logger.info("[Recovery] %s: got new IPv6 %s", instance_name, new_ip)
-                return new_ip
-        except Exception as e:
-            logger.warning("[Recovery] %s: IPv6 rotate error: %s", instance_name, e)
-        return ""
 
-    async def _level2_rotate_ipv6(self, instance_name: str) -> bool:
-        """Level 2: Get new IPv6, restart Chrome from scratch."""
-        logger.info("[Recovery] %s Level 2: rotating IPv6", instance_name)
-        if not self._ipv6_client:
-            logger.info("[Recovery] %s Level 2: no IPv6 pool, skip to Level 3", instance_name)
+        try:
+            if old_ip:
+                result = self._ipv6_client.rotate_ip(old_ip, reason="403_recovery", worker=instance_name)
+            else:
+                result = self._ipv6_client.get_ip(worker=instance_name)
+
+            if not result:
+                logger.warning("[Recovery] %s Level 2: IPv6 pool returned no IP", instance_name)
+                return False
+
+            new_ip = result["ip"]
+            state.current_ipv6 = new_ip
+            logger.info("[Recovery] %s Level 2: got new IPv6 %s", instance_name, new_ip)
+
+            return await self._restart_chrome_instance(instance_name, new_ipv6=new_ip)
+        except Exception as e:
+            logger.warning("[Recovery] %s Level 2 error: %s", instance_name, e)
             return False
-        new_ip = self._rotate_ipv6(instance_name, "403_L2")
-        if not new_ip:
-            return False
-        return await self._restart_chrome_instance(instance_name, new_ipv6=new_ip)
 
     async def _level3_restart_chrome(self, instance_name: str) -> bool:
-        """Level 3: Get NEW IPv6 + full restart from scratch."""
-        new_ip = self._rotate_ipv6(instance_name, "403_L3")
-        if not new_ip:
-            new_ip = self.states[instance_name].current_ipv6 or ""
-        logger.info("[Recovery] %s Level 3: full restart (%s)",
-                    instance_name, f"IPv6={new_ip}" if new_ip else "fingerprint-only")
-        return await self._restart_chrome_instance(instance_name, new_ipv6=new_ip)
+        """Level 3: Kill Chrome, generate new fingerprint, restart."""
+        state = self.states[instance_name]
+        new_ipv6 = state.current_ipv6 or ""
+        logger.info("[Recovery] %s Level 3: full Chrome restart (fingerprint + %s)",
+                    instance_name, f"IPv6={new_ipv6}" if new_ipv6 else "no IPv6")
+
+        return await self._restart_chrome_instance(instance_name, new_ipv6=new_ipv6)
 
     async def _restart_chrome_instance(self, instance_name: str, new_ipv6: str = "") -> bool:
-        """Restart Chrome from scratch — y hệt startup.
-
-        Flow: kill Chrome → update IPv6 → setup_chrome (login+Flow+project) →
-              start Chrome subprocess → wait extension → apply CDP
-        """
+        """Restart Chrome with new fingerprint (and optionally new IPv6)."""
         cfg = self.instances_config.get(instance_name)
         if not cfg:
             return False
 
         try:
-            from launcher import kill_chrome, resolve_path, start_chrome
+            from launcher import restart_chrome as _restart_chrome
             loop = asyncio.get_running_loop()
-
-            api_port = cfg["api_port"]
-            chrome_dir = resolve_path(cfg["chrome_path"]).parent.parent.parent
-            ext_dir = resolve_path(cfg["extension_dir"])
-            debug_port = 19200 + (api_port - 8100)
-            proxy_port = 1081 + (api_port - 8100)
-
-            # Step 1: Kill Chrome
-            await loop.run_in_executor(None, lambda: kill_chrome(instance_name))
-            await asyncio.sleep(3)
-
-            # Step 2: Update IPv6 → SOCKS proxy picks up via override file
-            proxy_arg = ""
-            if new_ipv6:
-                import subprocess as _sp
-                try:
-                    _sp.run(f'netsh interface ipv6 add address "Ethernet" {new_ipv6}',
-                            shell=True, capture_output=True, timeout=10)
-                except Exception:
-                    pass
-                try:
-                    Path(f".ipv6_override_{proxy_port}").write_text(new_ipv6)
-                except Exception:
-                    pass
-                proxy_arg = f"socks5://127.0.0.1:{proxy_port}"
-            elif cfg.get("ipv6"):
-                proxy_arg = f"socks5://127.0.0.1:{proxy_port}"
-
-            # Step 3: setup_chrome — y hệt startup (DrissionPage login + Flow + project + kill)
-            account = self._get_account(instance_name)
-            from chrome_setup import setup_chrome
-            ok = await loop.run_in_executor(
-                None,
-                lambda: setup_chrome(
-                    chrome_dir=chrome_dir, ext_dir=ext_dir, port=debug_port,
-                    account=account, proxy_arg=proxy_arg,
-                    log_func=lambda msg: logger.info("[Recovery] %s: %s", instance_name, msg),
-                    instance_name=instance_name,
-                ),
-            )
-            if not ok:
-                logger.warning("[Recovery] %s: setup_chrome FAILED", instance_name)
-                return False
-
-            # Step 4: Start Chrome subprocess (extension connects to agent)
-            cfg_start = {**cfg, "ipv6": new_ipv6} if new_ipv6 else cfg
             proc = await loop.run_in_executor(
                 None,
-                lambda: start_chrome(cfg_start, new_fingerprint=False, clean=False),
+                lambda: _restart_chrome(cfg, new_ipv6=new_ipv6),
             )
-            if not proc:
-                logger.warning("[Recovery] %s: Chrome subprocess failed", instance_name)
-                return False
-            logger.info("[Recovery] %s: Chrome started (PID %d)", instance_name, proc.pid)
 
-            # Step 5: Wait for extension
+            if not proc:
+                logger.warning("[Recovery] %s: Chrome restart returned no process", instance_name)
+                return False
+
+            logger.info("[Recovery] %s: Chrome restarted (PID %d), waiting for extension...",
+                        instance_name, proc.pid)
+
             await asyncio.sleep(self.restart_delay)
+
+            api_port = cfg["api_port"]
             connected = await self._wait_extension_connect(api_port, timeout=self.reconnect_timeout)
-            if not connected:
-                logger.warning("[Recovery] %s: extension not connected within %ds",
+
+            if connected:
+                from launcher import get_instance_seed
+                seed = get_instance_seed(instance_name)
+                self.states[instance_name].current_seed = seed
+                logger.info("[Recovery] %s: extension reconnected, new seed=%d", instance_name, seed)
+                return True
+            else:
+                logger.warning("[Recovery] %s: extension did not reconnect within %ds",
                                instance_name, self.reconnect_timeout)
                 return False
 
-            # Step 6: Apply CDP (zoom + fingerprint + tab guard)
-            try:
-                from chrome_setup import apply_chrome_cdp
-                await loop.run_in_executor(
-                    None,
-                    lambda: apply_chrome_cdp(
-                        debug_port=debug_port, ext_dir=ext_dir,
-                        instance_name=instance_name,
-                        log_func=lambda msg: logger.info("[Recovery] %s: %s", instance_name, msg),
-                    ),
-                )
-            except Exception as e:
-                logger.warning("[Recovery] %s: CDP error: %s", instance_name, e)
-
-            logger.info("[Recovery] %s: READY", instance_name)
-            return True
-
         except Exception as e:
-            logger.exception("[Recovery] %s restart error: %s", instance_name, e)
-            return False
-
-    async def _ensure_project(self, api_port: int) -> bool:
-        """Ask extension to click 'Dự án mới' if not already in a project."""
-        try:
-            async with httpx.AsyncClient(timeout=65) as client:
-                resp = await client.post(f"http://127.0.0.1:{api_port}/api/ensure-project")
-                result = resp.json()
-            if result.get("success"):
-                logger.info("[Recovery] ensure_project OK: %s", result.get("data", {}))
-                return True
-            error = result.get("error", "unknown")
-            logger.warning("[Recovery] ensure_project failed: %s", error)
-            return False
-        except Exception as e:
-            logger.warning("[Recovery] ensure_project error: %s", e)
+            logger.exception("[Recovery] %s Chrome restart error: %s", instance_name, e)
             return False
 
     async def _check_extension_connected(self, api_port: int) -> bool:
