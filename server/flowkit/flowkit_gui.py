@@ -498,22 +498,8 @@ class FlowKitGUI(tk.Tk):
             except Exception:
                 pass
 
-        # Phase 1: Login accounts (skip if no accounts entered)
-        if accounts:
-            self._log(f"Phase 1: Login {len(accounts)} accounts into {len(instances)} Chrome copies...", "INFO")
-            for i, inst in enumerate(instances):
-                if not inst.get('enabled', True) or i >= len(self._chrome_dirs):
-                    continue
-                chrome_dir = self._chrome_dirs[i]
-                account = accounts[i % len(accounts)]
-                proxy_arg = f"socks5://127.0.0.1:{proxy_port_map[i]}" if i in proxy_port_map else ""
-                self._log(f"[{inst['name']}] Login: {account['email']}...", "INFO")
-                self._do_chrome_login(chrome_dir, account, inst, proxy_arg)
-        else:
-            self._log("Phase 1: Skipped login (no accounts configured)", "INFO")
-
-        # Phase 2: Start agents
-        self._log("Phase 2: Starting FlowKit agents...", "INFO")
+        # Phase 1: Start agents first (so extension can connect when Chrome opens)
+        self._log("Phase 1: Starting FlowKit agents...", "INFO")
         for i, inst in enumerate(instances):
             if not inst.get('enabled', True) or i >= len(self._chrome_dirs):
                 continue
@@ -522,27 +508,66 @@ class FlowKitGUI(tk.Tk):
 
         time.sleep(3)
 
-        # Phase 3: Start Chrome with extensions
-        self._log("Phase 3: Starting Chrome instances...", "INFO")
+        # Phase 2: Open Chrome via DrissionPage (login + navigate + create project)
+        # Same as old server: DrissionPage opens Chrome, checks account, auto-login,
+        # navigates to Flow, clicks "Dự án mới", then disconnects — extension takes over.
+        self._log("Phase 2: Setting up Chrome (DrissionPage)...", "INFO")
         for i, inst in enumerate(instances):
             if not inst.get('enabled', True) or i >= len(self._chrome_dirs):
                 continue
+
+            chrome_dir = self._chrome_dirs[i]
+            ext_dir = BASE_DIR / inst['extension_dir']
+            debug_port = 19200 + (inst['api_port'] - 8100)
+
+            account_info = None
+            if accounts:
+                acc = accounts[i % len(accounts)]
+                account_info = {
+                    'id': acc['email'],
+                    'password': acc['password'],
+                    'totp_secret': acc.get('totp_secret', ''),
+                }
+
             proxy_arg = f"socks5://127.0.0.1:{proxy_port_map[i]}" if i in proxy_port_map else ""
-            self._start_chrome(self._chrome_dirs[i], inst, proxy_arg)
+
+            # Window layout
+            win_args = []
+            try:
+                from launcher import _calc_chrome_layout, _resolve_chrome_slot, CONFIG as _lcfg
+                instances_cfg = [ii for ii in _lcfg.get("instances", []) if ii.get("enabled", True)]
+                slot = _resolve_chrome_slot(inst["name"])
+                x, y, w, h = _calc_chrome_layout(slot, len(instances_cfg))
+                win_args = [f"--window-position={x},{y}", f"--window-size={w},{h}"]
+            except Exception:
+                pass
+
+            self._log(f"[{inst['name']}] DrissionPage setup...", "INFO")
+            try:
+                from chrome_setup import setup_chrome
+                ok = setup_chrome(
+                    chrome_dir=chrome_dir,
+                    ext_dir=ext_dir,
+                    port=debug_port,
+                    account=account_info,
+                    proxy_arg=proxy_arg,
+                    window_args=win_args,
+                    log_func=lambda msg, n=inst['name']: self._log(f"[{n}] {msg}", "INFO"),
+                    instance_name=inst['name'],
+                )
+                if ok:
+                    self._log(f"[{inst['name']}] Chrome ready (login + project OK)", "OK")
+                else:
+                    self._log(f"[{inst['name']}] Chrome setup failed — trying subprocess fallback", "WARN")
+                    self._start_chrome(chrome_dir, inst, proxy_arg)
+            except Exception as e:
+                self._log(f"[{inst['name']}] DrissionPage error: {e} — subprocess fallback", "WARN")
+                self._start_chrome(chrome_dir, inst, proxy_arg)
+
             time.sleep(2)
 
-        time.sleep(5)
-
-        # Phase 3.5: Arrange Chrome windows in grid
-        try:
-            from launcher import arrange_chrome_windows
-            self._log("Arranging Chrome windows...", "INFO")
-            arrange_chrome_windows(instances)
-        except Exception as e:
-            self._log(f"Window arrange error: {e}", "WARN")
-
-        # Phase 4: Start gateway
-        self._log("Phase 4: Starting Gateway...", "INFO")
+        # Phase 3: Start gateway
+        self._log("Phase 3: Starting Gateway...", "INFO")
         self._start_gateway(gateway_port)
 
         time.sleep(3)
