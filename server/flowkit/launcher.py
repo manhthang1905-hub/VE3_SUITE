@@ -141,17 +141,26 @@ def start_chrome(instance: dict, new_fingerprint: bool = True) -> Optional[subpr
         print(f"[ERROR] ChromePortable not found: {portable_exe}")
         return None
 
-    # Clear "crashed" state to suppress "Restore pages?" dialog
+    # Clear "crashed" state and prevent session restore
     import json as _json
+    import shutil as _shutil
     prefs_file = chrome_dir / "Data" / "profile" / "Default" / "Preferences"
     if prefs_file.exists():
         try:
             prefs = _json.loads(prefs_file.read_text(encoding="utf-8"))
             prefs.setdefault("profile", {})["exit_type"] = "Normal"
             prefs["profile"]["exited_cleanly"] = True
+            prefs.setdefault("session", {})["restore_on_startup"] = 5
             prefs_file.write_text(_json.dumps(prefs, ensure_ascii=False), encoding="utf-8")
         except Exception:
             pass
+    for _sess_dir in ("Sessions", "Session Storage"):
+        _sess_path = chrome_dir / "Data" / "profile" / "Default" / _sess_dir
+        if _sess_path.exists():
+            try:
+                _shutil.rmtree(_sess_path)
+            except Exception:
+                pass
 
     if new_fingerprint:
         seed = generate_fingerprint(ext_dir, name)
@@ -179,6 +188,8 @@ def start_chrome(instance: dict, new_fingerprint: bool = True) -> Optional[subpr
 
     if ipv6:
         args.append(f"--proxy-server=socks5://[{ipv6}]:1080")
+
+    args.append("https://labs.google/fx/tools/flow")
 
     print(f"[{name}] Starting Chrome: {portable_exe.name}")
     print(f"  Dir: {chrome_dir}")
