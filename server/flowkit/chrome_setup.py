@@ -274,39 +274,44 @@ def _dismiss_popups(page):
         pass
 
 
-def _click_new_project(page) -> bool:
+def _click_new_project(page, log=None) -> bool:
     """Click 'Du an moi' — y nguyen server cu."""
     try:
         result = page.run_js("""
             (function() {
-                var btns = document.querySelectorAll('button');
+                var elems = document.querySelectorAll('button, a, [role="button"]');
                 var newTexts = ['add_2','New project','Dự án mới','Novo projeto','Proyek baru',
                     'Neues Projekt','Nouveau projet','Nuevo proyecto','Nuovo progetto',
                     'Новый проект','新しいプロジェクト','新建项目','새 프로젝트','Yeni proje'];
                 var createTexts = ['Create with Flow','Tạo với Flow','Criar com o Flow',
                     'Buat dengan Flow','Mit Flow erstellen','Créer avec Flow',
                     'Crear con Flow','Crea con Flow','Создать в Flow'];
-                for (var b of btns) {
+                for (var b of elems) {
                     var t = (b.textContent || '').trim();
-                    for (var k of newTexts) { if (t.indexOf(k) >= 0) { b.click(); return 'CLICKED_NEW'; } }
+                    for (var k of newTexts) { if (t.indexOf(k) >= 0) { b.click(); return 'CLICKED_NEW:' + t.substring(0, 40); } }
                 }
-                for (var b of btns) {
+                for (var b of elems) {
                     var t = (b.textContent || '').trim();
-                    for (var k of createTexts) { if (t.indexOf(k) >= 0) { b.click(); return 'CLICKED_CREATE'; } }
+                    for (var k of createTexts) { if (t.indexOf(k) >= 0) { b.click(); return 'CLICKED_CREATE:' + t.substring(0, 40); } }
                 }
-                var spans = document.querySelectorAll('span');
-                for (var s of spans) {
-                    var t = (s.textContent || '').trim();
-                    for (var k of createTexts) {
-                        if (t.indexOf(k) >= 0) {
-                            var btn = s.closest('button');
-                            if (btn) { btn.click(); return 'CLICKED_SPAN'; }
-                        }
+                var all = document.querySelectorAll('*');
+                for (var el of all) {
+                    var ar = el.getAttribute('aria-label') || '';
+                    if (ar.indexOf('New project') >= 0 || ar.indexOf('new project') >= 0 ||
+                        ar.indexOf('Dự án mới') >= 0 || ar.indexOf('add_2') >= 0) {
+                        el.click(); return 'CLICKED_ARIA:' + ar.substring(0, 40);
                     }
                 }
-                return 'NOT_FOUND';
+                var debug = [];
+                for (var b of elems) {
+                    var t = (b.textContent || '').trim().substring(0, 50);
+                    if (t) debug.push(b.tagName + ':' + t);
+                }
+                return 'NOT_FOUND|' + debug.slice(0, 15).join(';;');
             })();
         """)
+        if log and result and 'NOT_FOUND' in str(result):
+            log("Button scan: %s" % str(result)[:200])
         return result and "CLICKED" in str(result)
     except Exception:
         return False
@@ -325,7 +330,7 @@ def _create_new_project(page, log) -> bool:
 
         _dismiss_popups(page)
 
-        if _click_new_project(page):
+        if _click_new_project(page, log):
             log("Clicked new project (attempt %d)" % (attempt + 1))
             time.sleep(3)
             for w in range(30):
