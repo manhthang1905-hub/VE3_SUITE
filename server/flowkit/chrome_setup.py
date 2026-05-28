@@ -82,14 +82,21 @@ def _apply_zoom(page, log):
     try:
         page.run_cdp('Page.addScriptToEvaluateOnNewDocument', source=zoom_bootstrap_js)
         page.run_cdp('Emulation.setPageScaleFactor', pageScaleFactor=scale)
-        page.run_js(zoom_js)
+        try:
+            page.run_cdp('Runtime.evaluate', expression=zoom_js)
+        except Exception:
+            page.run_js(zoom_js)
         log("Zoom %s applied (CDP + JS)" % target)
     except Exception as e:
         try:
-            page.run_js(zoom_js)
-            log("Zoom %s applied (JS only, CDP failed: %s)" % (target, e))
+            page.run_cdp('Runtime.evaluate', expression=zoom_js)
+            log("Zoom %s applied (Runtime.evaluate, CDP partial fail: %s)" % (target, e))
         except Exception:
-            log("Zoom failed: %s" % e)
+            try:
+                page.run_js(zoom_js)
+                log("Zoom %s applied (JS fallback)" % target)
+            except Exception:
+                log("Zoom failed: %s" % e)
 
 
 def _inject_fingerprint(page, ext_dir, instance_name, log):
