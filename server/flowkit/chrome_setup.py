@@ -717,6 +717,26 @@ def apply_chrome_cdp(
         return False
 
     try:
+        # Wait for Flow page to load (not chrome:// or blank)
+        flow_ready = False
+        for _ in range(20):
+            try:
+                url = page.url or ""
+                if "labs.google" in url and "flow" in url:
+                    flow_ready = True
+                    break
+            except Exception:
+                pass
+            time.sleep(2)
+
+        if not flow_ready:
+            log("Flow page not loaded — navigating...")
+            try:
+                page.get(FLOW_URL)
+                time.sleep(8)
+            except Exception:
+                pass
+
         _close_extra_tabs(page, log)
         _enforce_window_layout(page, window_args, log)
         _apply_zoom(page, log)
@@ -813,25 +833,28 @@ def ensure_chrome_ready(
             pass
         return False
 
-    # Create project
+    # Xac nhan Flow page da load (thay add_2 = OK)
     if "/project/" in (page.url or ""):
-        log("Da vao project: %s" % page.url)
+        log("READY — da o trong project: %s" % page.url)
     else:
-        log("Tao project moi...")
-        if not _create_new_project(page, log):
-            log("Khong tao duoc project!")
+        page_ok = False
+        for wait_attempt in range(15):
+            try:
+                btn = page.ele('tag:button@@text():add_2', timeout=2)
+                if btn:
+                    log("READY — Flow page loaded (add_2 visible)")
+                    page_ok = True
+                    break
+            except Exception:
+                pass
+            time.sleep(1)
+        if not page_ok:
+            log("Flow page khong load duoc!")
             try:
                 page.disconnect()
             except Exception:
                 pass
             return False
-
-    _apply_zoom(page, log)
-
-    if _wait_for_textarea(page):
-        log("Chrome READY — textarea visible")
-    else:
-        log("Textarea not found (may still work)")
 
     try:
         page.disconnect()
