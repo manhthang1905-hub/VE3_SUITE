@@ -614,6 +614,10 @@ class FlowKitGUI(tk.Tk):
             self._log("Starting Gateway (timeout — no instances ready yet)...", "WARN")
         self._start_gateway(gateway_port)
 
+        # Start monitoring immediately so GUI shows instance status during startup
+        self._poll_thread = threading.Thread(target=self._poll_loop, daemon=True)
+        self._poll_thread.start()
+
         # Wait for remaining pipelines
         for t in pipeline_threads:
             t.join(timeout=180)
@@ -621,10 +625,6 @@ class FlowKitGUI(tk.Tk):
         with ready_lock:
             total_ready = ready_count[0]
         self._log(f"FlowKit Server READY — {total_ready}/{len(enabled)} instances, gateway on port {gateway_port}", "OK")
-
-        # Start monitoring
-        self._poll_thread = threading.Thread(target=self._poll_loop, daemon=True)
-        self._poll_thread.start()
 
     def _clear_chrome_profile(self, chrome_dir: Path, inst_name: str):
         """Xoa toan bo du lieu Chrome profile de login lai tu dau.
