@@ -603,22 +603,26 @@ class FlowKitGUI(tk.Tk):
             except Exception:
                 pass
 
-        # Clear "crashed" state so Chrome won't show "Restore pages?" dialog
+        # Clear "crashed" state and prevent session restore (extra tabs)
         prefs_file = profile_dir / "Default" / "Preferences"
         if prefs_file.exists():
             try:
                 prefs = json.loads(prefs_file.read_text(encoding="utf-8"))
-                changed = False
-                if prefs.get("profile", {}).get("exit_type") != "Normal":
-                    prefs.setdefault("profile", {})["exit_type"] = "Normal"
-                    changed = True
-                if prefs.get("profile", {}).get("exited_cleanly") is not True:
-                    prefs["profile"]["exited_cleanly"] = True
-                    changed = True
-                if changed:
-                    prefs_file.write_text(json.dumps(prefs, ensure_ascii=False), encoding="utf-8")
+                prefs.setdefault("profile", {})["exit_type"] = "Normal"
+                prefs["profile"]["exited_cleanly"] = True
+                prefs.setdefault("session", {})["restore_on_startup"] = 5
+                prefs_file.write_text(json.dumps(prefs, ensure_ascii=False), encoding="utf-8")
             except Exception:
                 pass
+
+        # Clear session restore data (prevents Chrome restoring old tabs)
+        for sess_dir in ("Sessions", "Session Storage"):
+            sess_path = profile_dir / "Default" / sess_dir
+            if sess_path.exists():
+                try:
+                    shutil.rmtree(sess_path)
+                except Exception:
+                    pass
 
         # Regenerate fingerprint (includes zoom CSS) before launch
         try:

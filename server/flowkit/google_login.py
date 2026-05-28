@@ -1711,6 +1711,10 @@ def login_google_chrome(account_info: dict, chrome_portable: str = None, profile
         log(f"Login error: {e}", "ERROR")
         import traceback
         traceback.print_exc()
+        try:
+            driver.quit()
+        except Exception:
+            pass
         return False
 
 
