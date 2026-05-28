@@ -332,10 +332,10 @@ async function handleResetCaptcha(msg) {
   try {
     console.log('[FlowAgent] Resetting reCAPTCHA: clearing cookies + refreshing Flow tab...');
 
-    // Clear ALL site data for Flow domains (cookies, cache, localStorage, etc.)
+    // Clear site data for Flow domains — NOT serviceWorkers (kills extension SW)
     await chrome.browsingData.remove(
       { origins: ['https://labs.google', 'https://aisandbox-pa.googleapis.com'] },
-      { cookies: true, cache: true, localStorage: true, serviceWorkers: true, indexedDB: true }
+      { cookies: true, cache: true, localStorage: true, indexedDB: true }
     );
     console.log('[FlowAgent] Site data cleared');
 
