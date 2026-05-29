@@ -2145,6 +2145,25 @@ foreach ($pid in $children) {{
             with open(VE3_DIR/"config"/"settings.yaml","w",encoding="utf-8") as f:
                 yaml.dump(self.config_data, f, default_flow_style=False, allow_unicode=True)
         except: pass
+        # Sync API keys to srt-to-excel (headless Excel process reads from there)
+        try:
+            import yaml
+            srt_cfg_path = VE3_DIR.parent / "srt-to-excel" / "config" / "settings.yaml"
+            if srt_cfg_path.exists():
+                srt_cfg = yaml.safe_load(srt_cfg_path.read_text(encoding="utf-8")) or {}
+            else:
+                srt_cfg = {}
+            for key in ("deepseek_api_key", "deepseek_api_keys", "deepseek_model",
+                        "deepseek_thinking_type", "vov_direct_base_url", "vov_direct_api_key",
+                        "vov_direct_model", "vov_direct_model_chain",
+                        "claude_pool_base_url", "claude_pool_api_key", "claude_pool_model",
+                        "claude_pool_model_chain"):
+                if key in self.config_data:
+                    srt_cfg[key] = self.config_data[key]
+            srt_cfg_path.parent.mkdir(parents=True, exist_ok=True)
+            with open(srt_cfg_path, "w", encoding="utf-8") as f:
+                yaml.dump(srt_cfg, f, default_flow_style=False, allow_unicode=True)
+        except: pass
 
     def _music_workspace_mode_enabled(self):
         return bool(self.config_data.get("music_workspace_mode_enabled", True))
