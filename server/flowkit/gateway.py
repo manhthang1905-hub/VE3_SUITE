@@ -781,6 +781,7 @@ async def _poll_video_by_media_id(task_id: str, inst, bearer_token: str, media_i
     start_time = time.time()
     timeout_at = start_time + VIDEO_POLL_TIMEOUT
     poll_count = 0
+    direct_poll_failed = False
 
     while time.time() < timeout_at:
         await asyncio.sleep(VIDEO_POLL_INTERVAL)
@@ -788,20 +789,25 @@ async def _poll_video_by_media_id(task_id: str, inst, bearer_token: str, media_i
 
         media_data = None
 
-        # Method 1: Direct Google API (no captcha needed for GET)
-        try:
-            check_url = f"{GOOGLE_API}/v1/media/{media_id}?key={API_KEY}&clientContext.tool=PINHOLE"
-            async with httpx.AsyncClient(timeout=30) as client:
-                resp = await client.get(check_url, headers={
-                    "Authorization": f"Bearer {bearer_token}",
-                })
-                if resp.status_code == 200:
-                    media_data = resp.json()
-                elif poll_count <= 2:
-                    logger.info("[Gateway] Video %s: direct poll HTTP %d", task_id[:8], resp.status_code)
-        except Exception as e:
-            if poll_count <= 2:
-                logger.info("[Gateway] Video %s: direct poll error: %s", task_id[:8], e)
+        # Method 1: Direct Google API — skip if already failed (avoids log spam)
+        if not direct_poll_failed:
+            try:
+                check_url = f"{GOOGLE_API}/v1/media/{media_id}?key={API_KEY}&clientContext.tool=PINHOLE"
+                async with httpx.AsyncClient(timeout=30) as client:
+                    resp = await client.get(check_url, headers={
+                        "Authorization": f"Bearer {bearer_token}",
+                    })
+                    if resp.status_code == 200:
+                        media_data = resp.json()
+                    elif resp.status_code in (403, 401):
+                        direct_poll_failed = True
+                        logger.info("[Gateway] Video %s: direct poll %d, switching to extension poll",
+                                    task_id[:8], resp.status_code)
+                    elif poll_count <= 2:
+                        logger.info("[Gateway] Video %s: direct poll HTTP %d", task_id[:8], resp.status_code)
+            except Exception as e:
+                if poll_count <= 2:
+                    logger.info("[Gateway] Video %s: direct poll error: %s", task_id[:8], e)
 
         # Method 2: Via extension (uses extension's own flowKey)
         if media_data is None:
