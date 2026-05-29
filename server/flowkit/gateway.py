@@ -498,14 +498,45 @@ async def _process_image_task(task_id: str, data: dict):
                     except Exception:
                         pass
 
-                # Step 3: All models + retries failed = confirmed quota exhausted
+                # Step 3: All retries failed → trigger recovery (clear cache + rotate IPv6)
                 if quota_confirmed:
                     inst.mark_quota_exhausted()
+                    logger.warning("[Gateway] Image %s: 429 persists on %s → recovery + retry after",
+                                   task_id[:8], inst.name)
+
+                    # Step 4: Wait for recovery to complete, then retry once
+                    for _rw in range(12):  # 12 × 10s = 120s max
+                        await asyncio.sleep(10)
+                        if inst.available or (not inst.is_quota_exhausted and not inst.is_cooling):
+                            break
+                    if inst.available or inst.healthy:
+                        logger.info("[Gateway] Image %s: post-recovery retry on %s", task_id[:8], inst.name)
+                        try:
+                            inst.processing_count += 1
+                            async with httpx.AsyncClient(timeout=IMAGE_TIMEOUT + 10) as client3:
+                                resp3 = await client3.post(f"{inst.base_url}/api/generate-image", json={
+                                    "bearer_token": bearer_token,
+                                    "project_id": project_id,
+                                    "body_json": body_json,
+                                    "flow_url": flow_url,
+                                })
+                                r3 = resp3.json()
+                            inst.processing_count -= 1
+                            if r3.get("success"):
+                                inst.mark_success()
+                                tasks[task_id]["status"] = "completed"
+                                tasks[task_id]["result"] = r3.get("result")
+                                stats["total_completed"] += 1
+                                logger.info("[Gateway] Image %s DONE after 429 recovery via %s",
+                                            task_id[:8], inst.name)
+                                return
+                        except Exception:
+                            inst.processing_count -= 1
+
+                    # Still failing after recovery
                     tasks[task_id]["status"] = "failed"
                     tasks[task_id]["error"] = f"[429_QUOTA] {error}"
                     stats["total_failed"] += 1
-                    logger.warning("[Gateway] Image %s: QUOTA EXHAUSTED on %s (all models), cooldown %ds",
-                                   task_id[:8], inst.name, QUOTA_COOLDOWN_SECONDS)
                     return
 
             # Non-403/429 failure → don't retry
@@ -650,14 +681,38 @@ async def _process_video_task(task_id: str, data: dict):
                         inst.processing_count -= 1
                 if quota_confirmed:
                     inst.mark_quota_exhausted()
+                    logger.warning("[Gateway] Video %s: 429 persists on %s → recovery + retry",
+                                   task_id[:8], inst.name)
+
+                    # Wait for recovery, then retry once
+                    for _rw in range(12):
+                        await asyncio.sleep(10)
+                        if inst.available or (not inst.is_quota_exhausted and not inst.is_cooling):
+                            break
+                    if inst.available or inst.healthy:
+                        logger.info("[Gateway] Video %s: post-recovery retry on %s", task_id[:8], inst.name)
+                        try:
+                            inst.processing_count += 1
+                            async with httpx.AsyncClient(timeout=VIDEO_SUBMIT_TIMEOUT + 10) as client3:
+                                resp3 = await client3.post(f"{inst.base_url}/api/generate-video", json={
+                                    "bearer_token": bearer_token,
+                                    "body_json": body_json,
+                                    "flow_url": flow_url,
+                                })
+                                r3 = resp3.json()
+                            inst.processing_count -= 1
+                            if r3.get("success"):
+                                result = r3
+                                inst.mark_success()
+                                break
+                        except Exception:
+                            inst.processing_count -= 1
+
                     tasks[task_id]["status"] = "failed"
                     tasks[task_id]["error"] = f"[429_QUOTA] {error}"
                     stats["total_failed"] += 1
-                    logger.warning("[Gateway] Video %s: QUOTA EXHAUSTED on %s, cooldown %ds",
-                                   task_id[:8], inst.name, QUOTA_COOLDOWN_SECONDS)
                     return
                 if not quota_confirmed and result.get("success"):
-                    # 429 retry succeeded — continue to polling
                     inst.mark_success()
                     break
             else:
