@@ -1,14 +1,28 @@
 """
-FlowKit Recovery Manager — autonomous 403 recovery with escalation levels.
+FlowKit Recovery Manager — autonomous 403/429 recovery with escalation levels.
 
-Levels:
-  0: Gateway rotates to another instance (handled by gateway.py)
-  1: Extension reset captcha (clear cookies/cache, reload, re-capture token)
-  2: Rotate IPv6 + restart Chrome with new proxy
-  3: Kill Chrome + new fingerprint + restart Chrome (+ optional new IPv6)
+Triggered by:
+  - 403 reCAPTCHA / IP block: consecutive_403 >= 3 → cooling → trigger_recovery
+  - 429 rate limit: retries exhausted → mark_quota_exhausted → trigger_recovery
+  - Self-heal: extension disconnected / Chrome dead → trigger_self_heal
 
-Each instance tracks its own recovery state independently.
-Recovery is triggered when an instance enters cooldown (consecutive 403 >= threshold).
+Recovery Levels (escalation chain, runs in ONE call):
+  L1: Reset captcha — clear cookies/cache + reload Flow + re-capture token (~45s)
+      Fixes: stale session, captcha cache, cookie corruption
+  L2: Rotate IPv6 — get new IP from pool + restart Chrome with new proxy (~60s)
+      Fixes: IP-based rate limit / block by Google
+  L3: Full restart — clean profile (keep extension) + restart Chrome + re-login (~90s)
+      Fixes: deep session corruption, Chrome state issues
+
+If L1 fails → escalate to L2. If L2 fails → escalate to L3.
+If ALL fail → log "manual intervention needed".
+State persists: next trigger_recovery starts at last failed level.
+On success at ANY level → clear cooldown, reset counters, instance back online.
+
+Account for re-login read from (in order):
+  1. _accounts (set by GUI via set_accounts)
+  2. config/.flow_accounts.json (saved by GUI on startup)
+  3. config/flowkit_gui.json accounts field (gateway standalone mode)
 """
 import asyncio
 import logging

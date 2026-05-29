@@ -420,7 +420,26 @@ async def _process_image_task(task_id: str, data: dict):
                 logger.info("[Gateway] Image %s DONE via %s", task_id[:8], inst.name)
                 return
 
-            # Check if 403 → rotate
+            # ─── ERROR HANDLING: 403 / 429 ─────────────────────────
+            #
+            # 403 = reCAPTCHA / account block / IP block
+            #   → Rotate to next instance immediately
+            #   → After MAX_CONSECUTIVE_403 (3): cooling + recovery (L1→L2→L3)
+            #   → L1: clear cache/cookies + reload Flow
+            #   → L2: rotate IPv6 + restart Chrome
+            #   → L3: full restart + re-login
+            #
+            # 429 = rate limit (NOT permanent quota)
+            #   → Step 1: Try fallback model (NARWHAL ↔ GEM_PIX_2)
+            #   → Step 2: Retry 3x with 15s delay
+            #   → Step 3: Recovery (same as 403: clear cache + rotate IPv6 + restart)
+            #   → Step 4: Retry once after recovery
+            #   → Step 5: Rotate to another instance
+            #   → If ALL fail: task fails, VE3 retries later
+            #
+            # Update 2026-05-29: 429 triggers full recovery chain (L1→L2→L3)
+            # vì 429 là rate limit tạm — clear cache + đổi IP + restart ~40s là hết
+            # ──────────────────────────────────────────────────────
             error = result.get("error", "")
             status_code = result.get("status", 500)
 
@@ -640,6 +659,12 @@ async def _process_video_task(task_id: str, data: dict):
         inst.processing_count -= 1
 
         if not result.get("success"):
+            # ─── VIDEO ERROR HANDLING: 403 / 429 ─────────────────
+            # Same strategy as image — see comments in _process_image_task
+            # 403: mark_403 → cooling → recovery L1→L2→L3
+            # 429: retry → recovery → retry → rotate to other instance
+            # 404: retry (Google eventual consistency)
+            # ──────────────────────────────────────────────────────
             error = result.get("error", "")
             detail = result.get("detail", "")
             status_code = result.get("status", 500)
