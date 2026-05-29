@@ -28,6 +28,7 @@ INSTANCE_NAME = os.environ.get("INSTANCE_NAME", f"flowkit-{API_PORT - 8099}")
 
 _client = FlowClient(instance_name=INSTANCE_NAME)
 _CALLBACK_SECRET = secrets.token_urlsafe(32)
+_ws_task = None
 
 # Track processing state
 _processing_count = 0
@@ -68,8 +69,8 @@ async def run_ws_server():
         try:
             server = await websockets.serve(
                 ws_handler, WS_HOST, WS_PORT,
-                ping_interval=None,
-                ping_timeout=None,
+                ping_interval=30,
+                ping_timeout=10,
             )
             logger.info("[%s] WS server on ws://%s:%d", INSTANCE_NAME, WS_HOST, WS_PORT)
             await asyncio.Future()
@@ -95,7 +96,8 @@ app.add_middleware(
 
 @app.on_event("startup")
 async def startup():
-    asyncio.create_task(run_ws_server())
+    global _ws_task
+    _ws_task = asyncio.create_task(run_ws_server())
     logger.info("[%s] Agent starting on %s:%d", INSTANCE_NAME, API_HOST, API_PORT)
 
 
@@ -179,17 +181,20 @@ async def generate_image(request: Request):
         if result.get("error"):
             _total_failed += 1
             error_msg = result["error"]
-            if "CAPTCHA_FAILED" in str(error_msg) or result.get("status") == 403:
+            err_class = _classify_403(result) if result.get("status") == 403 else ""
+            if "CAPTCHA_FAILED" in str(error_msg) or err_class == "RECAPTCHA_403":
                 _consecutive_403 += 1
                 _last_403_time = time.time()
             return {"success": False, "error": error_msg, "status": result.get("status", 500)}
 
         status = result.get("status", 200)
         if isinstance(status, int) and status == 403:
-            _consecutive_403 += 1
-            _last_403_time = time.time()
+            err_class = _classify_403(result)
+            if err_class in ("RECAPTCHA_403", "CAPTCHA_FAILED"):
+                _consecutive_403 += 1
+                _last_403_time = time.time()
             _total_failed += 1
-            return {"success": False, "error": "RECAPTCHA_403", "status": 403}
+            return {"success": False, "error": err_class, "status": 403}
 
         if isinstance(status, int) and status >= 400:
             _total_failed += 1
@@ -231,7 +236,8 @@ async def generate_video(request: Request):
     if not flow_url:
         flow_url = f"{GOOGLE_FLOW_API}/v1/video:batchAsyncGenerateVideoReferenceImages"
 
-    _ensure_recaptcha_context(body_json)
+    # Video API uses recaptchaToken (string), NOT recaptchaContext (object).
+    # Do NOT call _ensure_recaptcha_context — extension injects recaptchaToken.
 
     _processing_count += 1
     try:
@@ -246,17 +252,20 @@ async def generate_video(request: Request):
 
         if result.get("error"):
             _total_failed += 1
-            if "CAPTCHA_FAILED" in str(result["error"]) or result.get("status") == 403:
+            err_class = _classify_403(result) if result.get("status") == 403 else ""
+            if "CAPTCHA_FAILED" in str(result["error"]) or err_class == "RECAPTCHA_403":
                 _consecutive_403 += 1
                 _last_403_time = time.time()
             return {"success": False, "error": result["error"], "status": result.get("status", 500)}
 
         status = result.get("status", 200)
         if isinstance(status, int) and status == 403:
-            _consecutive_403 += 1
-            _last_403_time = time.time()
+            err_class = _classify_403(result)
+            if err_class in ("RECAPTCHA_403", "CAPTCHA_FAILED"):
+                _consecutive_403 += 1
+                _last_403_time = time.time()
             _total_failed += 1
-            return {"success": False, "error": "RECAPTCHA_403", "status": 403}
+            return {"success": False, "error": err_class, "status": 403}
 
         if isinstance(status, int) and status >= 400:
             _total_failed += 1
@@ -419,6 +428,20 @@ async def ensure_project():
     return {"success": True, "data": result.get("data", {})}
 
 
+# ─── Extract Project ID ───────────────────────────────────────
+
+@app.post("/api/extract-project-id")
+async def extract_project_id():
+    if not _client.connected:
+        return {"success": False, "error": "EXTENSION_NOT_CONNECTED"}
+
+    result = await _client.extract_project_id()
+    if result.get("error"):
+        return {"success": False, "error": result["error"]}
+
+    return {"success": True, "data": result.get("data", {})}
+
+
 # ─── Helpers ─────────────────────────────────────────────────
 
 import random
@@ -435,6 +458,28 @@ def _random_headers() -> dict:
         "user-agent": random.choice(_USER_AGENTS),
         "x-goog-api-client": "genai-js/0.29.0",
     }
+
+
+def _classify_403(result: dict) -> str:
+    """Classify 403 error: RECAPTCHA vs MODEL_ACCESS vs other."""
+    data = result.get("data", {})
+    if isinstance(data, dict):
+        details = data.get("error", {}).get("details", [])
+        for d in details:
+            reason = d.get("reason", "")
+            if "MODEL_ACCESS" in reason:
+                return "MODEL_ACCESS_DENIED"
+            if "UNUSUAL_ACTIVITY" in reason:
+                return "RECAPTCHA_403"
+        msg = data.get("error", {}).get("message", "")
+        if "recaptcha" in msg.lower() or "captcha" in msg.lower():
+            return "RECAPTCHA_403"
+        if "permission" in msg.lower() or "access" in msg.lower():
+            return "PERMISSION_DENIED"
+    error_str = str(result.get("error", ""))
+    if "CAPTCHA_FAILED" in error_str:
+        return "CAPTCHA_FAILED"
+    return "RECAPTCHA_403"
 
 
 def _ensure_recaptcha_context(body: dict):

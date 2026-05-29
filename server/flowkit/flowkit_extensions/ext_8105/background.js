@@ -582,12 +582,17 @@ async function handleApiRequest(msg) {
       }
     }
 
-    // Step 2: Inject captcha token into body
+    // Step 2: Inject captcha token into body (image + video formats)
     let finalBody = body;
     if (captchaToken && finalBody) {
       finalBody = JSON.parse(JSON.stringify(finalBody)); // deep clone
-      if (finalBody.clientContext?.recaptchaContext) {
-        finalBody.clientContext.recaptchaContext.token = captchaToken;
+      if (finalBody.clientContext) {
+        // Image format: clientContext.recaptchaContext.token
+        if (finalBody.clientContext.recaptchaContext) {
+          finalBody.clientContext.recaptchaContext.token = captchaToken;
+        }
+        // Video format: clientContext.recaptchaToken (always set for compat)
+        finalBody.clientContext.recaptchaToken = captchaToken;
       }
       if (finalBody.requests && Array.isArray(finalBody.requests)) {
         for (const req of finalBody.requests) {
@@ -612,9 +617,9 @@ async function handleApiRequest(msg) {
     const fetchHeaders = { ...(headers || {}) };
     fetchHeaders['authorization'] = `Bearer ${activeFlowKey}`;
 
-    // When using external bearerToken (from main machine), omit browser cookies
-    // to avoid conflicting auth (server Chrome is logged into a different account)
-    const credMode = params.bearerToken ? 'omit' : 'include';
+    // Always include cookies — video API requires browser cookies for reCAPTCHA
+    // validation. Bearer token header takes precedence for auth over cookies.
+    const credMode = 'include';
 
     // Step 4: Make the API call from browser context
     const response = await fetch(url, {
