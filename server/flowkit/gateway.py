@@ -207,7 +207,8 @@ def _clear_cooldown(instance_name: str):
         if inst.name == instance_name:
             inst.cooling_until = 0
             inst.consecutive_403 = 0
-            logger.info("[Gateway] %s: cooldown CLEARED by recovery manager", instance_name)
+            inst.quota_exhausted_until = 0
+            logger.info("[Gateway] %s: cooldown + quota CLEARED by recovery", instance_name)
             break
 
 
@@ -254,7 +255,8 @@ async def health_check_loop():
                         inst.healthy = True
                         inst.extension_connected = data.get("extension_connected", False)
                         inst.flow_key_present = data.get("flow_key_present", False)
-                        inst.consecutive_403 = data.get("consecutive_403", 0)
+                        agent_403 = data.get("consecutive_403", 0)
+                        inst.consecutive_403 = max(inst.consecutive_403, agent_403)
                     else:
                         inst.healthy = False
                 except Exception:
@@ -531,7 +533,6 @@ async def _process_image_task(task_id: str, data: dict):
                     if inst.available or inst.healthy:
                         logger.info("[Gateway] Image %s: post-recovery retry on %s", task_id[:8], inst.name)
                         try:
-                            inst.processing_count += 1
                             async with httpx.AsyncClient(timeout=IMAGE_TIMEOUT + 10) as client3:
                                 resp3 = await client3.post(f"{inst.base_url}/api/generate-image", json={
                                     "bearer_token": bearer_token,
@@ -540,7 +541,6 @@ async def _process_image_task(task_id: str, data: dict):
                                     "flow_url": flow_url,
                                 })
                                 r3 = resp3.json()
-                            inst.processing_count -= 1
                             if r3.get("success"):
                                 inst.mark_success()
                                 tasks[task_id]["status"] = "completed"
@@ -550,7 +550,7 @@ async def _process_image_task(task_id: str, data: dict):
                                             task_id[:8], inst.name)
                                 return
                         except Exception:
-                            inst.processing_count -= 1
+                            pass
 
                     # Still failing after recovery → try another instance
                     logger.warning("[Gateway] Image %s: 429 still after recovery on %s, rotating...",
@@ -677,6 +677,29 @@ async def _process_video_task(task_id: str, data: dict):
 
             if status_code == 403:
                 inst.mark_403()
+                # Try another instance (like image does)
+                other = _pick_instance_for_retry([inst.name])
+                if other:
+                    logger.warning("[Gateway] Video %s: 403 from %s, trying %s",
+                                   task_id[:8], inst.name, other.name)
+                    other.processing_count += 1
+                    try:
+                        async with httpx.AsyncClient(timeout=VIDEO_SUBMIT_TIMEOUT + 10) as client_r:
+                            resp_r = await client_r.post(f"{other.base_url}/api/generate-video", json={
+                                "bearer_token": bearer_token,
+                                "body_json": body_json,
+                                "flow_url": flow_url,
+                            })
+                            r_r = resp_r.json()
+                        other.processing_count -= 1
+                        if r_r.get("success"):
+                            result = r_r
+                            other.mark_success()
+                            tasks[task_id]["worker"] = other.name
+                            break  # → polling
+                    except Exception:
+                        other.processing_count -= 1
+                # If no other instance or rotation failed, fall through to fail
             elif status_code == 429 or "QUOTA" in error.upper():
                 quota_confirmed = True
                 for q_retry in range(QUOTA_RETRY_COUNT):
@@ -716,7 +739,6 @@ async def _process_video_task(task_id: str, data: dict):
                     if inst.available or inst.healthy:
                         logger.info("[Gateway] Video %s: post-recovery retry on %s", task_id[:8], inst.name)
                         try:
-                            inst.processing_count += 1
                             async with httpx.AsyncClient(timeout=VIDEO_SUBMIT_TIMEOUT + 10) as client3:
                                 resp3 = await client3.post(f"{inst.base_url}/api/generate-video", json={
                                     "bearer_token": bearer_token,
@@ -724,13 +746,12 @@ async def _process_video_task(task_id: str, data: dict):
                                     "flow_url": flow_url,
                                 })
                                 r3 = resp3.json()
-                            inst.processing_count -= 1
                             if r3.get("success"):
                                 result = r3
                                 inst.mark_success()
                                 break
                         except Exception:
-                            inst.processing_count -= 1
+                            pass
 
                     # Try another instance after recovery
                     other = _pick_instance_for_retry([inst.name])
