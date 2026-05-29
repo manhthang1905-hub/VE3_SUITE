@@ -1,3 +1,8 @@
+chrome_layout:
+  cols: 2
+  gui_width: 700
+  rows: 0
+  zoom: 50
 gateway_host: 0.0.0.0
 gateway_port: 5100
 instances:
@@ -43,48 +48,6 @@ instances:
   name: flowkit-6
   profile_dir: GoogleChromePortable - Copy (6)/Data/profile
   ws_port: 9227
-- api_port: 8106
-  chrome_path: GoogleChromePortable - Copy (7)/App/Chrome-bin/chrome.exe
-  enabled: true
-  extension_dir: flowkit_extensions/ext_8106
-  name: flowkit-7
-  profile_dir: GoogleChromePortable - Copy (7)/Data/profile
-  ws_port: 9228
-- api_port: 8107
-  chrome_path: GoogleChromePortable - Copy (8)/App/Chrome-bin/chrome.exe
-  enabled: true
-  extension_dir: flowkit_extensions/ext_8107
-  name: flowkit-8
-  profile_dir: GoogleChromePortable - Copy (8)/Data/profile
-  ws_port: 9229
-- api_port: 8108
-  chrome_path: GoogleChromePortable - Copy (9)/App/Chrome-bin/chrome.exe
-  enabled: true
-  extension_dir: flowkit_extensions/ext_8108
-  name: flowkit-9
-  profile_dir: GoogleChromePortable - Copy (9)/Data/profile
-  ws_port: 9230
-- api_port: 8109
-  chrome_path: GoogleChromePortable - Copy (10)/App/Chrome-bin/chrome.exe
-  enabled: true
-  extension_dir: flowkit_extensions/ext_8109
-  name: flowkit-10
-  profile_dir: GoogleChromePortable - Copy (10)/Data/profile
-  ws_port: 9231
-- api_port: 8110
-  chrome_path: GoogleChromePortable - Copy (11)/App/Chrome-bin/chrome.exe
-  enabled: true
-  extension_dir: flowkit_extensions/ext_8110
-  name: flowkit-11
-  profile_dir: GoogleChromePortable - Copy (11)/Data/profile
-  ws_port: 9232
-- api_port: 8111
-  chrome_path: GoogleChromePortable - Copy (12)/App/Chrome-bin/chrome.exe
-  enabled: true
-  extension_dir: flowkit_extensions/ext_8111
-  name: flowkit-12
-  profile_dir: GoogleChromePortable - Copy (12)/Data/profile
-  ws_port: 9233
 ipv6:
   enabled: true
   interface_name: Ethernet
@@ -94,29 +57,24 @@ ipv6:
   prefix_length: 56
   socks_port: 1080
   subnet_prefix: ''
+quota:
+  cooldown_seconds: 300
+  retry_count: 5
+  retry_delay: 15
 rate_limit:
   cooldown_per_instance: 5
   max_concurrent_per_instance: 1
-rotation:
-  cooldown_seconds: 300
-  max_consecutive_403: 3
-  max_retries_per_request: 3
-quota:
-  retry_count: 2
-  retry_delay: 30
-  cooldown_seconds: 3600
 recovery:
+  chrome_restart_delay: 5
+  extension_reconnect_timeout: 30
   level1_max_attempts: 2
   level2_max_attempts: 2
   level3_max_attempts: 3
   min_recovery_interval: 30
-  extension_reconnect_timeout: 30
-  chrome_restart_delay: 5
-chrome_layout:
-  gui_width: 700
-  cols: 2
-  rows: 0
-  zoom: 50
+rotation:
+  cooldown_seconds: 300
+  max_consecutive_403: 3
+  max_retries_per_request: 3
 timeouts:
   health_check: 5
   image_generation: 120

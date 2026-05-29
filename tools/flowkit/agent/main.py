@@ -69,8 +69,8 @@ async def run_ws_server():
         try:
             server = await websockets.serve(
                 ws_handler, WS_HOST, WS_PORT,
-                ping_interval=30,
-                ping_timeout=10,
+                ping_interval=60,
+                ping_timeout=120,
             )
             logger.info("[%s] WS server on ws://%s:%d", INSTANCE_NAME, WS_HOST, WS_PORT)
             await asyncio.Future()
@@ -236,8 +236,7 @@ async def generate_video(request: Request):
     if not flow_url:
         flow_url = f"{GOOGLE_FLOW_API}/v1/video:batchAsyncGenerateVideoReferenceImages"
 
-    # Video API uses recaptchaToken (string), NOT recaptchaContext (object).
-    # Do NOT call _ensure_recaptcha_context — extension injects recaptchaToken.
+    _ensure_recaptcha_context(body_json)
 
     _processing_count += 1
     try:

@@ -51,9 +51,9 @@ COOLDOWN_PER_INSTANCE = RATE_LIMIT.get("cooldown_per_instance", 5)
 MAX_CONCURRENT = RATE_LIMIT.get("max_concurrent_per_instance", 1)
 
 QUOTA = CONFIG.get("quota", {})
-QUOTA_RETRY_COUNT = QUOTA.get("retry_count", 2)
-QUOTA_RETRY_DELAY = QUOTA.get("retry_delay", 30)
-QUOTA_COOLDOWN_SECONDS = QUOTA.get("cooldown_seconds", 3600)
+QUOTA_RETRY_COUNT = QUOTA.get("retry_count", 5)
+QUOTA_RETRY_DELAY = QUOTA.get("retry_delay", 15)
+QUOTA_COOLDOWN_SECONDS = QUOTA.get("cooldown_seconds", 300)
 
 IMAGE_MODEL_FALLBACK = {"GEM_PIX_2": "NARWHAL", "NARWHAL": "GEM_PIX_2"}
 
@@ -74,7 +74,7 @@ IMAGE_TIMEOUT = TIMEOUTS.get("image_generation", 120)
 VIDEO_SUBMIT_TIMEOUT = TIMEOUTS.get("video_submit", 60)
 VIDEO_POLL_TIMEOUT = TIMEOUTS.get("video_poll", 420)
 VIDEO_POLL_INTERVAL = TIMEOUTS.get("video_poll_interval", 10)
-TASK_WATCHDOG_TIMEOUT = TIMEOUTS.get("task_watchdog", 1800)
+TASK_WATCHDOG_TIMEOUT = TIMEOUTS.get("task_watchdog", 600)
 
 
 # ─── Instance State ──────────────────────────────────────────
@@ -641,6 +641,8 @@ async def _process_video_task(task_id: str, data: dict):
                                    task_id[:8], inst.name, QUOTA_COOLDOWN_SECONDS)
                     return
                 if not quota_confirmed and result.get("success"):
+                    # 429 retry succeeded — continue to polling
+                    inst.mark_success()
                     break
             else:
                 inst.mark_failed()

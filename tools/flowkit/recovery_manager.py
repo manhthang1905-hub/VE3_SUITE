@@ -39,6 +39,7 @@ class InstanceRecoveryState:
     def reset(self):
         self.recovery_level = 0
         self.level_attempts = {1: 0, 2: 0, 3: 0}
+        self.last_recovery_time = 0
 
     def next_level(self) -> int:
         if self.recovery_level >= 3:
@@ -222,35 +223,39 @@ class RecoveryManager:
         try:
             success = False
 
-            if level == 1:
-                if state.level_attempts[1] < self.level1_max:
-                    state.level_attempts[1] += 1
-                    success = await self._level1_reset_captcha(instance_name)
+            # Try current level, escalate on failure
+            if level <= 1 and state.level_attempts[1] < self.level1_max:
+                state.level_attempts[1] += 1
+                success = await self._level1_reset_captcha(instance_name)
+                if success:
+                    pass  # done
                 else:
-                    logger.info("[Recovery] %s Level 1 exhausted (%d attempts), escalating",
-                                instance_name, state.level_attempts[1])
-
-            if level == 2 or (level == 1 and not success):
-                if level == 1:
+                    logger.info("[Recovery] %s Level 1 failed, escalating to L2", instance_name)
                     state.recovery_level = 2
-                if state.level_attempts[2] < self.level2_max:
-                    state.level_attempts[2] += 1
-                    success = await self._level2_rotate_ipv6(instance_name)
-                else:
-                    logger.info("[Recovery] %s Level 2 exhausted (%d attempts), escalating",
-                                instance_name, state.level_attempts[2])
+                    level = 2
 
-            if level == 3 or (not success and state.recovery_level <= 3):
+            if not success and level <= 2 and state.level_attempts[2] < self.level2_max:
+                state.level_attempts[2] += 1
+                success = await self._level2_rotate_ipv6(instance_name)
+                if not success:
+                    logger.info("[Recovery] %s Level 2 failed, escalating to L3", instance_name)
+                    state.recovery_level = 3
+                    level = 3
+
+            if not success and state.level_attempts[3] < self.level3_max:
                 state.recovery_level = 3
-                if state.level_attempts[3] < self.level3_max:
-                    state.level_attempts[3] += 1
-                    success = await self._level3_restart_chrome(instance_name)
-                else:
-                    logger.warning(
-                        "[Recovery] %s ALL recovery levels exhausted. "
-                        "Instance needs manual intervention.",
-                        instance_name,
-                    )
+                state.level_attempts[3] += 1
+                success = await self._level3_restart_chrome(instance_name)
+
+            if not success and all(
+                state.level_attempts[lv] >= mx
+                for lv, mx in [(1, self.level1_max), (2, self.level2_max), (3, self.level3_max)]
+            ):
+                logger.warning(
+                    "[Recovery] %s ALL recovery levels exhausted. "
+                    "Instance needs manual intervention.",
+                    instance_name,
+                )
 
             if success:
                 logger.info("[Recovery] %s recovery DONE at level %d", instance_name, state.recovery_level)
@@ -320,7 +325,8 @@ class RecoveryManager:
         if not self._ipv6_client:
             logger.info("[Recovery] %s Level 2: no IPv6 pool, skip to Level 3", instance_name)
             return False
-        new_ip = self._rotate_ipv6(instance_name, "403_L2")
+        loop = asyncio.get_running_loop()
+        new_ip = await loop.run_in_executor(None, self._rotate_ipv6, instance_name, "403_L2")
         if not new_ip:
             return False
         return await self._restart_chrome_instance(instance_name, new_ipv6=new_ip)

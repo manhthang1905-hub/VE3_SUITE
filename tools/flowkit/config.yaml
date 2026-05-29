@@ -58,9 +58,9 @@ ipv6:
   socks_port: 1080
   subnet_prefix: ''
 quota:
-  cooldown_seconds: 3600
-  retry_count: 2
-  retry_delay: 30
+  cooldown_seconds: 300
+  retry_count: 5
+  retry_delay: 15
 rate_limit:
   cooldown_per_instance: 5
   max_concurrent_per_instance: 1
