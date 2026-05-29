@@ -1580,7 +1580,8 @@ class SettingsPage(ctk.CTkScrollableFrame):
 
         ctk.CTkLabel(ai, text="Pool model chain:", font=("",11), text_color=T2).grid(row=14, column=0, padx=(10,6), sticky="e")
         self.ent_claude_pool_chain = ctk.CTkEntry(ai, height=28, corner_radius=4, font=("Consolas",10), fg_color=EN, border_color=BD, placeholder_text="gpt-5.4, gpt-5.2, gpt-5.3-codex, gemini-3-flash-agent, gemini-3.1-pro-high")
-        self.ent_claude_pool_chain.grid(row=14, column=1, sticky="ew", padx=(0,10), pady=(2,10))
+        self.ent_claude_pool_chain.grid(row=14, column=1, sticky="ew", padx=(0,10), pady=2)
+        ctk.CTkButton(ai, text="Save AI settings", width=120, height=28, fg_color=AC, hover_color=AC2, text_color="#FFF", font=("",11,"bold"), corner_radius=6, command=self._save).grid(row=15, column=0, columnspan=2, padx=10, pady=(6,10))
 
         # NanoPic
         np = ctk.CTkFrame(self, fg_color=CD, corner_radius=8, border_width=1, border_color=BD)
