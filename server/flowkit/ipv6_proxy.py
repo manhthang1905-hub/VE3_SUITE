@@ -34,7 +34,6 @@ import threading
 import select
 import struct
 import time
-from pathlib import Path
 from typing import Optional, Tuple, Callable
 
 
@@ -66,7 +65,6 @@ class IPv6SocksProxy:
         # v1.0.635: Track connect failures de detect IPv6 chet
         self._connect_failures = 0
         self._connect_successes = 0
-        self._health_file = Path(__file__).parent / f".proxy_health_{listen_port}"
 
     def start(self) -> bool:
         """Start the proxy server in background thread."""
@@ -103,13 +101,6 @@ class IPv6SocksProxy:
                 pass
         self.log("[IPv6-Proxy] Stopped")
 
-    def _write_health(self):
-        """Write connect_failures to file so gateway can read proxy health."""
-        try:
-            self._health_file.write_text(str(self._connect_failures))
-        except Exception:
-            pass
-
     def set_ipv6(self, ipv6_address: str):
         """Update IPv6 address for outgoing connections."""
         self.ipv6_address = ipv6_address
@@ -117,7 +108,6 @@ class IPv6SocksProxy:
         self._connect_failures = 0
         self._connect_successes = 0
         self._connect_fail_logged = 0
-        self._write_health()
         self.log(f"[IPv6-Proxy] → Now using: {ipv6_address}")
 
     def _accept_loop(self):
@@ -224,21 +214,8 @@ class IPv6SocksProxy:
         except:
             return None
 
-    def _check_ipv6_override(self):
-        """Check if recovery wrote a new IPv6 to override file."""
-        try:
-            override = Path(f".ipv6_override_{self.listen_port}")
-            if override.exists():
-                new_ip = override.read_text().strip()
-                if new_ip and new_ip != self.ipv6_address:
-                    self.set_ipv6(new_ip)
-                override.unlink(missing_ok=True)
-        except Exception:
-            pass
-
     def _connect_via_ipv6(self, host: str, port: int) -> Optional[socket.socket]:
         """Connect to target - CHỈ dùng IPv6 và BIND vào source IPv6 cụ thể."""
-        self._check_ipv6_override()
         try:
             # Thử resolve IPv6 trước (AF_INET6)
             addrinfo = None
@@ -285,22 +262,33 @@ class IPv6SocksProxy:
                 pass
             # v1.0.635: Track success
             self._connect_successes += 1
-            if self._connect_failures > 0:
-                self._connect_failures = 0
-                self._write_health()
+            self._connect_failures = 0  # Reset failures on success
+            # Clear health file on success
+            try:
+                from pathlib import Path
+                health_file = Path(__file__).parent / f".proxy_health_{self.port}"
+                if health_file.exists():
+                    health_file.unlink()
+            except Exception:
+                pass
             return sock
 
         except Exception as e:
             # v1.0.635: Track failures
             self._connect_failures += 1
-            if self._connect_failures >= 5:
-                self._write_health()
             # v1.0.611: Log target de debug connectivity
             if not getattr(self, '_connect_fail_logged', 0) or getattr(self, '_connect_fail_logged', 0) < 3:
                 self.log(f"[IPv6-Proxy] IPv6 connect failed to {host}:{port}: {e}")
                 self._connect_fail_logged = getattr(self, '_connect_fail_logged', 0) + 1
             else:
                 self.log(f"[IPv6-Proxy] IPv6 connect failed: {e}")
+            # Write health file for gateway to detect dead IPv6
+            try:
+                from pathlib import Path
+                health_file = Path(__file__).parent / f".proxy_health_{self.port}"
+                health_file.write_text(str(self._connect_failures))
+            except Exception:
+                pass
             return None
 
     def _relay(self, client: socket.socket, remote: socket.socket):

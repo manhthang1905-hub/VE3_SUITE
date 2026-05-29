@@ -263,6 +263,14 @@ class IPv6SocksProxy:
             # v1.0.635: Track success
             self._connect_successes += 1
             self._connect_failures = 0  # Reset failures on success
+            # Clear health file on success
+            try:
+                from pathlib import Path
+                health_file = Path(__file__).parent / f".proxy_health_{self.port}"
+                if health_file.exists():
+                    health_file.unlink()
+            except Exception:
+                pass
             return sock
 
         except Exception as e:
@@ -274,6 +282,13 @@ class IPv6SocksProxy:
                 self._connect_fail_logged = getattr(self, '_connect_fail_logged', 0) + 1
             else:
                 self.log(f"[IPv6-Proxy] IPv6 connect failed: {e}")
+            # Write health file for gateway to detect dead IPv6
+            try:
+                from pathlib import Path
+                health_file = Path(__file__).parent / f".proxy_health_{self.port}"
+                health_file.write_text(str(self._connect_failures))
+            except Exception:
+                pass
             return None
 
     def _relay(self, client: socket.socket, remote: socket.socket):
