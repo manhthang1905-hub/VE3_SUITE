@@ -402,8 +402,14 @@ class RecoveryManager:
             debug_port = 19200 + (api_port - 8100)
             proxy_port = 1081 + (api_port - 8100)
 
-            # Step 1: Kill Chrome
-            await loop.run_in_executor(None, lambda: kill_chrome(instance_name))
+            # Step 1: Kill Chrome (with timeout to prevent hang)
+            try:
+                await asyncio.wait_for(
+                    loop.run_in_executor(None, lambda: kill_chrome(instance_name)),
+                    timeout=30,
+                )
+            except asyncio.TimeoutError:
+                logger.warning("[Recovery] %s: kill_chrome timeout (30s), forcing continue", instance_name)
             await asyncio.sleep(3)
 
             # Step 2: Update IPv6 → SOCKS proxy picks up via override file
@@ -423,18 +429,25 @@ class RecoveryManager:
             elif cfg.get("ipv6"):
                 proxy_arg = f"socks5://127.0.0.1:{proxy_port}"
 
-            # Step 3: setup_chrome — y hệt startup (DrissionPage login + Flow + project + kill)
+            # Step 3: setup_chrome — y hệt startup (with 180s timeout to prevent hang)
             account = self._get_account(instance_name)
             from chrome_setup import setup_chrome
-            ok = await loop.run_in_executor(
-                None,
-                lambda: setup_chrome(
-                    chrome_dir=chrome_dir, ext_dir=ext_dir, port=debug_port,
-                    account=account, proxy_arg=proxy_arg,
-                    log_func=lambda msg: logger.info("[Recovery] %s: %s", instance_name, msg),
-                    instance_name=instance_name,
-                ),
-            )
+            try:
+                ok = await asyncio.wait_for(
+                    loop.run_in_executor(
+                        None,
+                        lambda: setup_chrome(
+                            chrome_dir=chrome_dir, ext_dir=ext_dir, port=debug_port,
+                            account=account, proxy_arg=proxy_arg,
+                            log_func=lambda msg: logger.info("[Recovery] %s: %s", instance_name, msg),
+                            instance_name=instance_name,
+                        ),
+                    ),
+                    timeout=180,
+                )
+            except asyncio.TimeoutError:
+                logger.warning("[Recovery] %s: setup_chrome TIMEOUT (180s)", instance_name)
+                ok = False
             if not ok:
                 logger.warning("[Recovery] %s: setup_chrome FAILED", instance_name)
                 return False
