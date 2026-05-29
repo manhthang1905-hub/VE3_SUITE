@@ -51,9 +51,9 @@ COOLDOWN_PER_INSTANCE = RATE_LIMIT.get("cooldown_per_instance", 5)
 MAX_CONCURRENT = RATE_LIMIT.get("max_concurrent_per_instance", 1)
 
 QUOTA = CONFIG.get("quota", {})
-QUOTA_RETRY_COUNT = QUOTA.get("retry_count", 5)
+QUOTA_RETRY_COUNT = QUOTA.get("retry_count", 3)
 QUOTA_RETRY_DELAY = QUOTA.get("retry_delay", 15)
-QUOTA_COOLDOWN_SECONDS = QUOTA.get("cooldown_seconds", 300)
+QUOTA_COOLDOWN_SECONDS = QUOTA.get("cooldown_seconds", 120)
 
 IMAGE_MODEL_FALLBACK = {"GEM_PIX_2": "NARWHAL", "NARWHAL": "GEM_PIX_2"}
 
@@ -134,10 +134,11 @@ class AgentInstance:
 
     def mark_quota_exhausted(self):
         self.quota_exhausted_until = time.time() + QUOTA_COOLDOWN_SECONDS
-        self.active_image_model = ""  # reset — all models exhausted
-        logger.warning("[%s] QUOTA EXHAUSTED — cooling for %ds (until %s)",
-                       self.name, QUOTA_COOLDOWN_SECONDS,
-                       time.strftime("%H:%M:%S", time.localtime(self.quota_exhausted_until)))
+        self.active_image_model = ""
+        logger.warning("[%s] 429 RATE LIMITED — recovery + cooldown %ds",
+                       self.name, QUOTA_COOLDOWN_SECONDS)
+        if _recovery_manager:
+            _recovery_manager.trigger_recovery(self.name)
 
     def apply_model_override(self, body_json: dict):
         """If this instance has a fallback model active, apply it to the request."""
