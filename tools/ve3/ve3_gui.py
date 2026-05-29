@@ -1054,7 +1054,7 @@ class HomePage(ctk.CTkScrollableFrame):
                 border_color=border,
             )
             row.grid(row=i, column=0, padx=6, pady=(0,4), sticky="ew")
-            for col, weight in enumerate((0, 2, 2, 2, 1, 0, 0)):
+            for col, weight in enumerate((0, 2, 2, 2, 1, 0, 0, 0)):
                 row.grid_columnconfigure(col, weight=weight)
             row.grid_propagate(False)
             row.configure(height=40)
@@ -1140,7 +1140,22 @@ class HomePage(ctk.CTkScrollableFrame):
                 font=("",10),
                 state=btn_state,
                 command=btn_command,
-            ).grid(row=0, column=6, padx=(0,10), pady=6, sticky="e")
+            ).grid(row=0, column=6, padx=(0,4), pady=6, sticky="e")
+            is_running = bool(r.get("excel_running") or r.get("ve3_running"))
+            reset_state = "disabled" if is_running else "normal"
+            ctk.CTkButton(
+                row,
+                text="Reset",
+                width=50,
+                height=22,
+                corner_radius=4,
+                fg_color="#EF5350" if not is_running else "#BDBDBD",
+                hover_color="#D32F2F",
+                text_color="#FFFFFF",
+                font=("",10),
+                state=reset_state,
+                command=lambda p=r["path"], c=r["code"]: self.app.clean_project_excel(Path(p), c),
+            ).grid(row=0, column=7, padx=(0,10), pady=6, sticky="e")
 
     def _sanitize_log_text(self, msg):
         """Normalize logs to plain ASCII to avoid font/encoding glitches."""
@@ -2870,6 +2885,112 @@ Get-CimInstance Win32_Process |
         ).start()
 
         self._refresh_project_views()
+
+    def clean_project_excel(self, project_dir, code):
+        """Reset Excel data for a project: clear server/account/token/status/paths."""
+        project_dir = Path(project_dir)
+        ep = self._project_excel_path(project_dir)
+        if not ep.exists():
+            self._log(f"[RESET] {code}: khong tim thay Excel, bo qua", "WARN", "ve3")
+            return
+
+        with self.queue_lock:
+            if code in self.queue_active_ve3 or code in self.queue_active_excel:
+                self._log(f"[RESET] {code}: dang chay, khong the reset", "ERROR", "ve3")
+                return
+
+        from tkinter import messagebox
+        if not messagebox.askyesno("Xac nhan Reset",
+                f"Reset ma {code}?\n\n"
+                f"Se xoa: server, account, token,\n"
+                f"trang thai anh/video, duong dan, media_id.\n\n"
+                f"Giu nguyen: prompts, SRT, nhan vat, boi canh.\n\n"
+                f"Tiep tuc?",
+                parent=self):
+            return
+
+        def _do_clean():
+            try:
+                from modules.excel_manager import PromptWorkbook
+                CONFIG_CLEAR = {
+                    "ve3_bound_server_name", "ve3_bound_server_url",
+                    "ve3_bound_account_name", "flow_account_name",
+                    "flow_bearer_token", "flow_project_id",
+                    "flow_project_url", "flow_token_updated_at",
+                }
+                SCENES_RESET = {"img_path": "", "video_path": "", "media_id": "",
+                                "status_img": "pending", "status_vid": "pending"}
+                CHARS_RESET = {"status": "pending", "media_id": "", "reference_media_checked": ""}
+                THUMB_RESET = {"img_path": "", "img_path_portrait": "",
+                               "status_img": "pending", "status_portrait": "pending"}
+                LOCS_RESET = {"status": "pending", "media_id": ""}
+
+                wb = PromptWorkbook(str(ep))
+                wb.load_or_create()
+                changes = 0
+
+                if "config" in wb.workbook.sheetnames:
+                    ws = wb.workbook["config"]
+                    for row_idx in range(2, ws.max_row + 1):
+                        k = ws.cell(row=row_idx, column=1).value
+                        if k and str(k).strip() in CONFIG_CLEAR:
+                            v = ws.cell(row=row_idx, column=2).value
+                            if v and str(v).strip():
+                                ws.cell(row=row_idx, column=2, value="")
+                                changes += 1
+
+                def _reset_sheet(sheet_name, reset_map):
+                    nonlocal changes
+                    if sheet_name not in wb.workbook.sheetnames:
+                        return
+                    ws = wb.workbook[sheet_name]
+                    hdrs = {str(c.value): c.column for c in ws[1] if c.value}
+                    for row_idx in range(2, ws.max_row + 1):
+                        if ws.cell(row=row_idx, column=1).value is None:
+                            continue
+                        for col_name, new_val in reset_map.items():
+                            if col_name not in hdrs:
+                                continue
+                            col_idx = hdrs[col_name]
+                            old = ws.cell(row=row_idx, column=col_idx).value
+                            if new_val == "pending":
+                                need = old is None or str(old).strip() not in ("pending", "")
+                            else:
+                                need = old is not None and str(old).strip() != ""
+                            if need:
+                                ws.cell(row=row_idx, column=col_idx, value=new_val)
+                                changes += 1
+
+                _reset_sheet("scenes", SCENES_RESET)
+                _reset_sheet("characters", CHARS_RESET)
+                _reset_sheet("thumbnail", THUMB_RESET)
+                _reset_sheet("locations", LOCS_RESET)
+
+                if changes > 0:
+                    wb.save()
+
+                for pattern in ["*.xlsx.lock", "*.xlsx.tmp", "*.xlsx.bak",
+                                ".pending_writes_*", ".flowkit_quota_wait",
+                                ".progress_totals.json"]:
+                    for f in project_dir.glob(pattern):
+                        try:
+                            f.unlink()
+                        except Exception:
+                            pass
+
+                if code in self.project_progress_cache:
+                    del self.project_progress_cache[code]
+                cache_key = str(project_dir)
+                if cache_key in self._project_binding_cache:
+                    del self._project_binding_cache[cache_key]
+
+                self._log(f"[RESET] {code}: da xoa sach ({changes} thay doi)", "SUCCESS", "ve3")
+                self.after(0, self._refresh_project_views)
+
+            except Exception as e:
+                self._log(f"[RESET] {code}: LOI - {e}", "ERROR", "ve3")
+
+        threading.Thread(target=_do_clean, daemon=True).start()
 
     def _manual_complete_project(self, project_dir, code, timeout_sec=30):
         """Kill subprocess tree -> finalize -> endpoint. No race conditions."""
