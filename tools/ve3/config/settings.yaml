@@ -1,0 +1,124 @@
+accounts:
+- label: Acct 2
+  project_id: d024bae6-0475-4270-b43d-847083f2a74c
+  token: ''
+claude_pool_api_key: sk_cliproxy_local
+claude_pool_base_url: http://127.0.0.1:8318
+claude_pool_model: gpt-5.4
+claude_pool_model_chain:
+- gpt-5.4
+- gpt-5.2
+- gpt-5.3-codex
+- gemini-3-flash-agent
+- gemini-3.1-pro-high
+concurrent_per_server: 4
+deepseek_api_key: sk-9a0f488007e04fa5a7f5a6896a4872c8
+deepseek_api_keys: []
+deepseek_model: deepseek-v4-pro
+deepseek_parallel_slots: 4
+deepseek_thinking_type: disabled
+excel_ai_attempts_per_key: 3
+excel_ai_provider: deepseek
+excel_ai_timeout_seconds: 180
+excel_workers: 4
+flow_accounts:
+- email: dendalion41@gmail.com
+  enabled: true
+  name: dendalion41
+  password: Damuocmo212@
+  profile_dir: D:\VE3_SUITE\chrome_profiles\dendalion41
+  totp_secret: ag7b 35ne sdsx na3z xgkj kydl 3bmx 3fir
+flow_aspect_ratio: landscape
+flow_auth_auto_enabled: true
+flow_auth_chrome_path: D:\VE3_SUITE\GoogleChromePortable\GoogleChromePortable.exe
+flow_auth_default_account: dendalion41
+flow_bearer_token: ''
+flow_project_id: ''
+flow_project_url: ''
+flow_timeout: 120
+gemini_api_keys: []
+generation_backend: server
+generation_mode: server
+local_server_enabled: true
+local_server_list:
+- allowed_topics: ''
+  chrome_path: D:\VE3_SUITE\GoogleChromePortable - Copy (1)\GoogleChromePortable.exe
+  enabled: true
+  flow_account_bundle: dendalion41@gmail.com|Damuocmo212@|ag7b 35ne sdsx na3z xgkj
+    kydl 3bmx 3fir
+  flow_account_name: dendalion41
+  name: sv1
+  url: http://192.168.88.145:5100
+- allowed_topics: ''
+  chrome_path: D:\VE3_SUITE\GoogleChromePortable - Copy (2)\GoogleChromePortable.exe
+  enabled: true
+  flow_account_bundle: lua789001@gmail.com|ZKGdMeBOVTEexf|dcw3 v7ux 747r ibfg t6do
+    y4fk j4gv zsrr
+  name: sv2
+  url: http://192.168.88.111:5100
+- allowed_topics: ''
+  chrome_path: D:\VE3_SUITE\GoogleChromePortable - Copy (3)\GoogleChromePortable.exe
+  enabled: true
+  flow_account_bundle: ellazokarenkaren@gmail.com|YSx4PoELpc113U7|einz y5zm xa52 5xlm
+    5qyh ey7t bnui muem
+  name: sv3
+  url: http://192.168.88.131:5100
+- allowed_topics: ''
+  chrome_path: D:\VE3_SUITE\GoogleChromePortable - Copy (4)\GoogleChromePortable.exe
+  enabled: true
+  flow_account_bundle: reena.patel2024@gmail.com|reena.patel2024212@|imw6 36lh vv2d
+    6f5z boi6 xhgp mtos lf3w
+  name: sv4
+  url: http://192.168.88.144:5100
+- allowed_topics: ''
+  chrome_path: D:\VE3_SUITE\GoogleChromePortable - Copy (5)\GoogleChromePortable.exe
+  enabled: true
+  flow_account_bundle: lf177254@gmail.com|SxEZXowdENHjnQ|fdhu pr75 s6ms jcq4 5s4b
+    eik5 fsvh sjra
+  name: sv5
+  url: http://192.168.88.152:5100
+- allowed_topics: ''
+  chrome_path: D:\VE3_SUITE\GoogleChromePortable - Copy (6)\GoogleChromePortable.exe
+  enabled: true
+  flow_account_bundle: santaninaasaali@gmail.com|8Nn8i1CKnwcfSGJ|hniz jrqg poqg 6yzv
+    2kx3 u55l yhbw t5nj
+  name: sv6
+  url: http://192.168.88.140:5100
+- allowed_topics: ''
+  chrome_path: D:\VE3_SUITE\GoogleChromePortable - Copy (7)\GoogleChromePortable.exe
+  enabled: true
+  flow_account_bundle: lucaslira30y@gmail.com|kfWpjnTaAgLSxV|i74y ku75 ptdw lfcw 5mgw
+    4mio gbag tjb7
+  name: sv7
+  url: http://192.168.88.115:5100
+local_server_url: http://192.168.88.115:5100
+log_level: INFO
+max_concurrent: 3
+max_parallel_api: 4
+music_workspace_mode_enabled: true
+nanopic_access_token: ''
+nanopic_base_url: https://flow-api.nanoai.pics/api/v2
+nanopic_flow_auth_token: ''
+nanopic_flow_base_url: https://aisandbox-pa.googleapis.com
+nanopic_flow_project_id: ''
+nanopic_image_model: NARWHAL
+nanopic_poll_interval_seconds: 5
+nanopic_poll_timeout_seconds: 900
+nanopic_token: nano_5ND0UDFqlx4WohE1fIz6BVf1hqDw2XcXnVVuQmJVD1hSsNYmwvJtyUIk6FSgdIXe
+nanopic_use_flow_proxy: false
+nanopic_video_cookie: ''
+nanopic_video_model: VEO_3_FAST_LOWER
+nanopic_video_type: frame
+pipeline_workers: 3
+prompt_policy_rewrite_debug: true
+prompt_policy_rewrite_enabled: true
+prompt_policy_rewrite_max_rounds: 2
+retry_count: 3
+topic: story
+vov_direct_api_key: sk-6m5lfOmA6GdmbkZfWKXNYLtB6ouLfyfvf06obd7g3kZKdljB
+vov_direct_base_url: https://routerapi.vovantin.online/v1
+vov_direct_model: claude-sonnet-4-6
+vov_direct_model_chain:
+- claude-sonnet-4-6
+- claude-opus-4-6
+vov_direct_parallel_slots: 0
