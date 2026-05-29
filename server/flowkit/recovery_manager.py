@@ -119,13 +119,41 @@ class RecoveryManager:
     def _get_account(self, instance_name: str) -> Optional[dict]:
         if instance_name in self._accounts:
             return self._accounts[instance_name]
-        # Fallback: read from file saved by GUI
+        # Fallback 1: read from file saved by GUI
         try:
             import json as _json
             accounts_file = BASE_DIR / "config" / ".flow_accounts.json"
             if accounts_file.exists():
                 data = _json.loads(accounts_file.read_text(encoding="utf-8"))
-                return data.get(instance_name)
+                acc = data.get(instance_name)
+                if acc:
+                    return acc
+        except Exception:
+            pass
+        # Fallback 2: parse from flowkit_gui.json (gateway standalone mode)
+        try:
+            import json as _json
+            gui_file = BASE_DIR / "config" / "flowkit_gui.json"
+            if gui_file.exists():
+                gui_data = _json.loads(gui_file.read_text(encoding="utf-8"))
+                raw = gui_data.get("accounts", "")
+                if raw:
+                    accounts = []
+                    for line in raw.strip().split("\n"):
+                        parts = line.strip().split("|")
+                        if len(parts) >= 2:
+                            accounts.append({
+                                "id": parts[0].strip(),
+                                "password": parts[1].strip(),
+                                "totp_secret": parts[2].strip() if len(parts) >= 3 else "",
+                            })
+                    if accounts:
+                        instances_cfg = list(self.instances_config.keys())
+                        idx = instances_cfg.index(instance_name) if instance_name in instances_cfg else 0
+                        acc = accounts[idx % len(accounts)]
+                        logger.info("[Recovery] %s: account from flowkit_gui.json: %s",
+                                    instance_name, acc["id"])
+                        return acc
         except Exception:
             pass
         return None
