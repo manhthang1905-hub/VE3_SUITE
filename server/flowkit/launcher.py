@@ -47,7 +47,11 @@ def _get_screen_size() -> tuple[int, int]:
 
 
 def _calc_chrome_layout(slot: int, total_slots: int) -> tuple[int, int, int, int]:
-    """Calculate (x, y, width, height) for Chrome window at given slot."""
+    """Calculate (x, y, width, height) for Chrome window at given slot.
+
+    Layout: GUI occupies left column, Chrome windows fill remaining
+    space in a grid (cols x rows).
+    """
     scr_w, scr_h = _get_screen_size()
 
     layout = CONFIG.get("chrome_layout", {})
@@ -56,7 +60,7 @@ def _calc_chrome_layout(slot: int, total_slots: int) -> tuple[int, int, int, int
     rows = layout.get("rows", 0)
 
     if rows <= 0:
-        rows = max(1, -(-total_slots // cols))
+        rows = max(1, -(-total_slots // cols))  # ceil division
 
     usable_w = max(300, scr_w - gui_width)
     cell_w = max(320, usable_w // cols)
@@ -154,8 +158,8 @@ def _write_chrome_prefs(chrome_dir: Path):
     prefs.setdefault("profile", {})["exit_type"] = "Normal"
     prefs["profile"]["exited_cleanly"] = True
     prefs.setdefault("session", {})["restore_on_startup"] = 5
+    # Remove Chrome-level zoom — zoom is handled by CSS in fp_inject.js
     prefs.pop("partition", None)
-
     prefs_file.write_text(_json.dumps(prefs, ensure_ascii=False), encoding="utf-8")
 
 
@@ -212,6 +216,8 @@ def start_chrome(instance: dict, new_fingerprint: bool = True, clean: bool = Fal
     if ipv6:
         proxy_port = 1081 + (instance["api_port"] - 8100)
         args.append(f"--proxy-server=socks5://127.0.0.1:{proxy_port}")
+    else:
+        args.append("--no-proxy-server")
 
     args.append("https://labs.google/fx/tools/flow")
 

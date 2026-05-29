@@ -1,8 +1,8 @@
 """
-FlowKit Chrome Setup — ported from server/chrome_session.py setup().
+FlowKit Chrome Setup — be nguyen tu server/chrome_session.py setup().
 
 DrissionPage opens Chrome, check account, login if needed, navigate Flow,
-create project, wait textarea. Then kill Chrome for agent to restart.
+doi thay add_2 (Du an moi) xac nhan loaded. Then kill Chrome for agent to restart.
 """
 import os
 import sys
@@ -461,6 +461,8 @@ def _build_options(chrome_dir: Path, ext_dir: Path, port: int, proxy_arg: str = 
 
     if proxy_arg:
         co.set_argument(f"--proxy-server={proxy_arg}")
+    else:
+        co.set_argument("--no-proxy-server")
 
     if window_args:
         for arg in window_args:
@@ -487,8 +489,8 @@ def setup_chrome(
     1. Mo Chrome -> check account hien tai
     2. Neu sai account -> clear data + login dung account
     3. Vao labs.google/fx/tools/flow
-    4. Tao project moi
-    5. Doi textarea san sang
+    4. Check login redirect -> login lai neu bi redirect
+    5. Doi thay nut "Du an moi" (add_2) -> xac nhan Flow loaded
     6. Kill Chrome (agent se restart bang subprocess)
     """
     log = log_func or (lambda msg: logger.info("[Setup] %s", msg))
@@ -515,7 +517,6 @@ def setup_chrome(
         page = ChromiumPage(co)
         log("Chrome opened: %s" % (page.title or "(no title)"))
         _enforce_window_layout(page, window_args, log)
-        _apply_zoom(page, log)
     except Exception as e:
         log("Chrome failed: %s" % e)
         _kill_chrome_for_dir(chrome_dir)
@@ -524,15 +525,8 @@ def setup_chrome(
     # Chan mo tab moi truoc khi thao tac UI
     _inject_tab_guard(page, log)
 
-    # Inject fingerprint ngay sau khi mo Chrome
+    # Inject fingerprint ngay sau khi mo Chrome — y nguyen server cu
     _inject_fingerprint(page, ext_dir, instance_name, log)
-
-    # Verify fingerprint
-    try:
-        verify = page.run_js(JS_VERIFY_FINGERPRINT)
-        log("Fingerprint verify: %s" % verify)
-    except Exception:
-        pass
 
     # ── 2. Check account hien tai ──
     need_login = False
@@ -548,7 +542,7 @@ def setup_chrome(
             log("Account SAI hoac chua login -> clear data + login")
             need_login = True
 
-    # ── 3. Login neu can ──
+    # ── 3. Login neu can — y nguyen server cu ──
     if need_login:
         try:
             page.quit()
@@ -577,7 +571,6 @@ def setup_chrome(
             page = ChromiumPage(co2)
             log("Chrome mo lai: %s" % (page.title or "(no title)"))
             _enforce_window_layout(page, window_args, log)
-            _apply_zoom(page, log)
         except Exception as e:
             log("Chrome restart failed: %s" % e)
             _kill_chrome_for_dir(chrome_dir)
@@ -586,9 +579,115 @@ def setup_chrome(
         _inject_tab_guard(page, log)
         _inject_fingerprint(page, ext_dir, instance_name, log)
 
-    log("Login OK — ban giao cho FlowKit")
+    # ── 4. Vao Flow page — y nguyen server cu ──
+    log("Vao: %s" % FLOW_URL)
+    page.get(FLOW_URL)
+    time.sleep(5)
+    _apply_zoom(page, log)
+    _inject_fingerprint(page, ext_dir, instance_name, log)
 
-    # ── 4. Kill Chrome — ban giao cho FlowKit agent ──
+    current_url = page.url or ''
+    log("URL: %s" % current_url)
+
+    # Check login redirect — y nguyen server cu
+    if 'accounts.google.com' in current_url:
+        log("Chua dang nhap! Clear data truoc khi login...")
+
+        try:
+            page.quit()
+        except Exception:
+            pass
+        page = None
+        _kill_chrome_for_dir(chrome_dir)
+
+        _clear_chrome_data(chrome_dir, log)
+        login_ok = _do_login(chrome_dir, account, proxy_arg, _worker_id)
+        if not login_ok:
+            log("Login FAILED!")
+            return False
+
+        if instance_name:
+            try:
+                from launcher import generate_fingerprint
+                generate_fingerprint(ext_dir, instance_name)
+            except Exception:
+                pass
+        _write_chrome_prefs(chrome_dir)
+
+        co3 = _build_options(chrome_dir, ext_dir, port, proxy_arg, window_args)
+        try:
+            page = ChromiumPage(co3)
+            log("Chrome mo lai sau login: %s" % (page.title or "(no title)"))
+            _enforce_window_layout(page, window_args, log)
+        except Exception as e:
+            log("Chrome restart failed sau login fallback: %s" % e)
+            _kill_chrome_for_dir(chrome_dir)
+            return False
+
+        _inject_tab_guard(page, log)
+        _inject_fingerprint(page, ext_dir, instance_name, log)
+
+        page.get(FLOW_URL)
+        time.sleep(5)
+        _apply_zoom(page, log)
+        _inject_fingerprint(page, ext_dir, instance_name, log)
+        current_url = page.url or ''
+
+    # ── 5. Doi thay add_2 (Du an moi) — xac nhan Flow loaded + logged in ──
+    if '/project/' in current_url:
+        log("Da o trong project: %s" % current_url)
+    else:
+        page_ok = False
+        for wait_attempt in range(20):
+            _dismiss_popups(page)
+
+            # Tim button add_2 (material icon cua "Du an moi") — y nguyen server cu
+            try:
+                btn = page.ele('tag:button@@text():add_2', timeout=2)
+                if btn:
+                    log("Flow page loaded — add_2 (Du an moi) visible")
+                    page_ok = True
+                    break
+            except Exception:
+                pass
+
+            # Cung thu cac text khac
+            for text in ['New project', u'Dự án mới', 'Novo projeto', 'Proyek baru',
+                         'Neues Projekt', 'Nouveau projet', 'Nuevo proyecto']:
+                try:
+                    btn = page.ele('tag:button@@text():%s' % text, timeout=1)
+                    if btn:
+                        log("Flow page loaded — '%s' button visible" % text)
+                        page_ok = True
+                        break
+                except Exception:
+                    pass
+            if page_ok:
+                break
+
+            # Reload moi 5 lan — y nguyen server cu _create_new_project
+            if wait_attempt > 0 and wait_attempt % 5 == 0:
+                log("Reload Flow page (%d/20)..." % wait_attempt)
+                try:
+                    page.get(FLOW_URL)
+                    time.sleep(5)
+                    _apply_zoom(page, log)
+                except Exception:
+                    pass
+
+            time.sleep(2)
+
+        if not page_ok:
+            log("add_2 (Du an moi) khong xuat hien sau 20 lan thu!")
+            try:
+                page.quit()
+            except Exception:
+                pass
+            _kill_chrome_for_dir(chrome_dir)
+            return False
+
+    # ── 6. Kill Chrome — ban giao cho FlowKit agent/extension ──
+    log("Setup OK — Flow loaded, kill Chrome, ban giao cho agent/extension")
     try:
         page.quit()
     except Exception:
@@ -748,7 +847,47 @@ def ensure_chrome_ready(
             pass
         return False
 
-    log("Login OK — ready for FlowKit")
+    # Doi thay add_2 (Du an moi) — xac nhan Flow loaded
+    if '/project/' not in url:
+        page_ok = False
+        for wait_attempt in range(20):
+            _dismiss_popups(page)
+            try:
+                btn = page.ele('tag:button@@text():add_2', timeout=2)
+                if btn:
+                    log("Flow page loaded — add_2 (Du an moi) visible")
+                    page_ok = True
+                    break
+            except Exception:
+                pass
+            for text in ['New project', u'Dự án mới', 'Novo projeto']:
+                try:
+                    btn = page.ele('tag:button@@text():%s' % text, timeout=1)
+                    if btn:
+                        log("Flow page loaded — '%s' button visible" % text)
+                        page_ok = True
+                        break
+                except Exception:
+                    pass
+            if page_ok:
+                break
+            if wait_attempt > 0 and wait_attempt % 5 == 0:
+                log("Reload Flow page (%d/20)..." % wait_attempt)
+                try:
+                    page.get(FLOW_URL)
+                    time.sleep(5)
+                except Exception:
+                    pass
+            time.sleep(2)
+        if not page_ok:
+            log("add_2 (Du an moi) khong xuat hien!")
+            try:
+                page.disconnect()
+            except Exception:
+                pass
+            return False
+
+    log("Login OK — Flow loaded, ready for FlowKit")
     try:
         page.disconnect()
     except Exception:

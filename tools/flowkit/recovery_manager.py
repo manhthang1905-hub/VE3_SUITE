@@ -284,14 +284,14 @@ class RecoveryManager:
                 result = resp.json()
 
             if result.get("success"):
-                logger.info("[Recovery] %s Level 1: captcha reset OK, waiting for re-capture...", instance_name)
-                await asyncio.sleep(15)
-                connected = await self._check_extension_connected(api_port)
+                logger.info("[Recovery] %s Level 1: captcha reset OK, waiting for extension reconnect...", instance_name)
+                connected = await self._wait_extension_connect(api_port, timeout=45)
                 if connected:
-                    logger.info("[Recovery] %s Level 1: extension reconnected", instance_name)
+                    await asyncio.sleep(10)
+                    logger.info("[Recovery] %s Level 1: extension reconnected + stabilized", instance_name)
                     return True
                 else:
-                    logger.warning("[Recovery] %s Level 1: extension not connected after reset", instance_name)
+                    logger.warning("[Recovery] %s Level 1: extension not connected after 45s", instance_name)
                     return False
             else:
                 logger.warning("[Recovery] %s Level 1: reset failed: %s",
