@@ -533,11 +533,10 @@ async def _process_image_task(task_id: str, data: dict):
                         except Exception:
                             inst.processing_count -= 1
 
-                    # Still failing after recovery
-                    tasks[task_id]["status"] = "failed"
-                    tasks[task_id]["error"] = f"[429_QUOTA] {error}"
-                    stats["total_failed"] += 1
-                    return
+                    # Still failing after recovery → try another instance
+                    logger.warning("[Gateway] Image %s: 429 still after recovery on %s, rotating...",
+                                   task_id[:8], inst.name)
+                    continue  # outer loop tries next instance
 
             # Non-403/429 failure → don't retry
             inst.mark_failed()
@@ -707,6 +706,29 @@ async def _process_video_task(task_id: str, data: dict):
                                 break
                         except Exception:
                             inst.processing_count -= 1
+
+                    # Try another instance after recovery
+                    other = _pick_instance_for_retry([inst.name])
+                    if other:
+                        logger.info("[Gateway] Video %s: 429 recovery done, trying %s",
+                                    task_id[:8], other.name)
+                        other.processing_count += 1
+                        try:
+                            async with httpx.AsyncClient(timeout=VIDEO_SUBMIT_TIMEOUT + 10) as client4:
+                                resp4 = await client4.post(f"{other.base_url}/api/generate-video", json={
+                                    "bearer_token": bearer_token,
+                                    "body_json": body_json,
+                                    "flow_url": flow_url,
+                                })
+                                r4 = resp4.json()
+                            other.processing_count -= 1
+                            if r4.get("success"):
+                                result = r4
+                                other.mark_success()
+                                tasks[task_id]["worker"] = other.name
+                                break
+                        except Exception:
+                            other.processing_count -= 1
 
                     tasks[task_id]["status"] = "failed"
                     tasks[task_id]["error"] = f"[429_QUOTA] {error}"
