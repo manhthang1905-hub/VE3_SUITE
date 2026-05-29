@@ -378,17 +378,23 @@ async def _process_image_task(task_id: str, data: dict):
     tried_instances: list[str] = []
 
     for attempt in range(MAX_RETRIES):
-        # Pick instance
+        # Pick instance — wait up to 120s for one to become available
         if attempt == 0:
             inst = _pick_instance()
         else:
             inst = _pick_instance_for_retry(tried_instances)
 
         if not inst:
-            tasks[task_id]["status"] = "failed"
-            tasks[task_id]["error"] = "No available FlowKit instance"
-            stats["total_failed"] += 1
-            return
+            for wait_s in range(24):
+                await asyncio.sleep(5)
+                inst = _pick_instance() if attempt == 0 else _pick_instance_for_retry(tried_instances)
+                if inst:
+                    break
+            if not inst:
+                tasks[task_id]["status"] = "failed"
+                tasks[task_id]["error"] = "No available FlowKit instance (waited 120s)"
+                stats["total_failed"] += 1
+                return
 
         tried_instances.append(inst.name)
         tasks[task_id]["worker"] = inst.name
@@ -557,13 +563,19 @@ async def _process_video_task(task_id: str, data: dict):
     body_json = data["body_json"]
     flow_url = data.get("flow_url", "")
 
-    # Step 1: Submit
+    # Step 1: Submit — wait for available instance
     inst = _pick_instance()
     if not inst:
-        tasks[task_id]["status"] = "failed"
-        tasks[task_id]["error"] = "No available FlowKit instance"
-        stats["total_failed"] += 1
-        return
+        for wait_s in range(24):
+            await asyncio.sleep(5)
+            inst = _pick_instance()
+            if inst:
+                break
+        if not inst:
+            tasks[task_id]["status"] = "failed"
+            tasks[task_id]["error"] = "No available FlowKit instance (waited 120s)"
+            stats["total_failed"] += 1
+            return
 
     tasks[task_id]["worker"] = inst.name
 
@@ -961,14 +973,16 @@ async def create_image(request: Request):
         if not project_id:
             return {"success": False, "error": "No projectId found"}
 
-        # Check availability
+        # Check if any instance is healthy (even if busy)
+        healthy = [i for i in instances if i.enabled and i.healthy and i.extension_connected]
         available = [i for i in instances if i.available]
-        if not available:
+        if not healthy:
             cooling = [i for i in instances if i.is_cooling]
             if cooling:
                 return {"success": False, "error": "All instances cooling (403 rate limit). Retry later."}
             return {"success": False, "error": "No healthy FlowKit instances"}
 
+        queue_pos = sum(1 for t in tasks.values() if t["status"] in ("queued", "processing"))
         task_id = str(uuid.uuid4())
         tasks[task_id] = {
             "status": "queued",
@@ -990,10 +1004,10 @@ async def create_image(request: Request):
             "flow_url": flow_url,
         }))
 
-        logger.info("[Gateway] +Image %s | VM: %s | Avail: %d | %s",
-                    task_id[:8], vm_id, len(available), prompt[:50])
+        logger.info("[Gateway] +Image %s | VM: %s | Avail: %d Healthy: %d Queue: %d | %s",
+                    task_id[:8], vm_id, len(available), len(healthy), queue_pos, prompt[:50])
 
-        return {"success": True, "taskId": task_id, "queue_position": 0}
+        return {"success": True, "taskId": task_id, "queue_position": queue_pos}
 
     except Exception as e:
         return {"success": False, "error": str(e)}
@@ -1017,10 +1031,13 @@ async def create_video(request: Request):
         if not flow_auth_token:
             return {"success": False, "error": "Missing flow_auth_token"}
 
-        # Check availability
-        available = [i for i in instances if i.available]
-        if not available:
-            return {"success": False, "error": "No available FlowKit instances"}
+        # Check if any instance is healthy (queue even if busy)
+        healthy = [i for i in instances if i.enabled and i.healthy and i.extension_connected]
+        if not healthy:
+            cooling = [i for i in instances if i.is_cooling]
+            if cooling:
+                return {"success": False, "error": "All instances cooling (403 rate limit). Retry later."}
+            return {"success": False, "error": "No healthy FlowKit instances"}
 
         task_id = str(uuid.uuid4())
         tasks[task_id] = {
