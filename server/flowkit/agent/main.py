@@ -258,7 +258,8 @@ async def generate_video(request: Request):
             if "CAPTCHA_FAILED" in str(result["error"]) or err_class == "RECAPTCHA_403":
                 _consecutive_403 += 1
                 _last_403_time = time.time()
-            return {"success": False, "error": result["error"], "status": result.get("status", 500)}
+            return {"success": False, "error": result["error"], "status": result.get("status", 500),
+                    "detail": result.get("data", {})}
 
         status = result.get("status", 200)
         if isinstance(status, int) and status == 403:
@@ -267,7 +268,8 @@ async def generate_video(request: Request):
                 _consecutive_403 += 1
                 _last_403_time = time.time()
             _total_failed += 1
-            return {"success": False, "error": err_class, "status": 403}
+            return {"success": False, "error": err_class, "status": 403,
+                    "detail": result.get("data", {})}
 
         if isinstance(status, int) and status >= 400:
             _total_failed += 1

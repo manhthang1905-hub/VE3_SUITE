@@ -266,7 +266,7 @@ class IPv6SocksProxy:
             # Clear health file on success
             try:
                 from pathlib import Path
-                health_file = Path(__file__).parent / f".proxy_health_{self.port}"
+                health_file = Path(__file__).parent / f".proxy_health_{self.listen_port}"
                 if health_file.exists():
                     health_file.unlink()
             except Exception:
@@ -285,7 +285,7 @@ class IPv6SocksProxy:
             # Write health file for gateway to detect dead IPv6
             try:
                 from pathlib import Path
-                health_file = Path(__file__).parent / f".proxy_health_{self.port}"
+                health_file = Path(__file__).parent / f".proxy_health_{self.listen_port}"
                 health_file.write_text(str(self._connect_failures))
             except Exception:
                 pass
