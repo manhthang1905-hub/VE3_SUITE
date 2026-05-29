@@ -699,7 +699,7 @@ async def _process_video_task(task_id: str, data: dict):
                             break  # → polling
                     except Exception:
                         other.processing_count -= 1
-                # If no other instance or rotation failed, fall through to fail
+                # 403 rotation failed → fail task (fall through to failure section)
             elif status_code == 429 or "QUOTA" in error.upper():
                 quota_confirmed = True
                 for q_retry in range(QUOTA_RETRY_COUNT):
