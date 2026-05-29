@@ -185,7 +185,8 @@ async def generate_image(request: Request):
             if "CAPTCHA_FAILED" in str(error_msg) or err_class == "RECAPTCHA_403":
                 _consecutive_403 += 1
                 _last_403_time = time.time()
-            return {"success": False, "error": error_msg, "status": result.get("status", 500)}
+            return {"success": False, "error": error_msg, "status": result.get("status", 500),
+                    "detail": result.get("data", {})}
 
         status = result.get("status", 200)
         if isinstance(status, int) and status == 403:
@@ -194,7 +195,8 @@ async def generate_image(request: Request):
                 _consecutive_403 += 1
                 _last_403_time = time.time()
             _total_failed += 1
-            return {"success": False, "error": err_class, "status": 403}
+            return {"success": False, "error": err_class, "status": 403,
+                    "detail": result.get("data", {})}
 
         if isinstance(status, int) and status >= 400:
             _total_failed += 1
@@ -202,7 +204,8 @@ async def generate_image(request: Request):
             err_msg = ""
             if isinstance(response_data, dict):
                 err_msg = response_data.get("error", {}).get("message", f"HTTP {status}")
-            return {"success": False, "error": err_msg or f"HTTP {status}", "status": status}
+            return {"success": False, "error": err_msg or f"HTTP {status}", "status": status,
+                    "detail": response_data}
 
         # Success
         _consecutive_403 = 0

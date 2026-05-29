@@ -509,8 +509,11 @@ async def _process_image_task(task_id: str, data: dict):
 
             # Non-403/429 failure → don't retry
             inst.mark_failed()
+            detail = result.get("detail", {})
             tasks[task_id]["status"] = "failed"
             tasks[task_id]["error"] = f"[{status_code}] {error}" if status_code in (401,) else error
+            if detail:
+                tasks[task_id]["detail"] = detail
             stats["total_failed"] += 1
             logger.warning("[Gateway] Image %s FAILED via %s: [%s] %s", task_id[:8], inst.name, status_code, error[:100])
             return
@@ -1081,7 +1084,10 @@ async def task_status(taskId: str = ""):
     if task["status"] == "completed":
         return {"success": True, "result": task["result"]}
     elif task["status"] == "failed":
-        return {"success": False, "error": task.get("error", "Unknown")}
+        resp = {"success": False, "error": task.get("error", "Unknown")}
+        if task.get("detail"):
+            resp["detail"] = task["detail"]
+        return resp
     else:
         return {"success": True, "status": task["status"], "worker": task.get("worker")}
 
