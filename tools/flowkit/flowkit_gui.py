@@ -505,6 +505,17 @@ class FlowKitGUI(tk.Tk):
                         'gateway': result.get('gateway', ''),
                     }
                     self._log(f"[{inst['name']}] Got IPv6: {result['ip']}", "OK")
+                else:
+                    # Fallback: try existing IPv6 override file
+                    proxy_port = PROXY_BASE_PORT + (inst['api_port'] - 8100)
+                    override_file = BASE_DIR / f".ipv6_override_{proxy_port}"
+                    if override_file.exists():
+                        old_ip = override_file.read_text().strip()
+                        if old_ip:
+                            ipv6_map[i] = {'ip': old_ip, 'gateway': ''}
+                            self._log(f"[{inst['name']}] Pool no IP → fallback to old: {old_ip}", "WARN")
+                    if i not in ipv6_map:
+                        self._log(f"[{inst['name']}] No IPv6 available!", "ERROR")
 
             if ipv6_map:
                 self._log("Setting up SOCKS5 proxies for each IPv6...", "INFO")
