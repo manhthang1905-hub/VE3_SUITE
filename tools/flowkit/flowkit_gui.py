@@ -1121,6 +1121,27 @@ class FlowKitGUI(tk.Tk):
             self._processes.append(proc)
         self._log(f"Gateway started: port {port} (PID {proc.pid})", "INFO")
 
+        # Tail gateway.log to GUI (show recovery/self-heal/403 messages)
+        def _tail_gateway_log():
+            try:
+                with open(log_file, 'r', encoding='utf-8', errors='replace') as rf:
+                    rf.seek(0, 2)  # seek to end
+                    while self._started:
+                        line = rf.readline()
+                        if line:
+                            line = line.strip()
+                            if any(k in line.upper() for k in [
+                                'RECOVERY', 'SELFHEAL', 'SELF-HEAL', 'COOLING',
+                                'ROTATE', 'ACCOUNT', '403', '429', 'QUOTA',
+                                'FAILED', 'ERROR', 'DONE', 'WARNING'
+                            ]):
+                                self._log(f"[GW] {line}", "WARN" if 'ERROR' in line.upper() or 'FAIL' in line.upper() else "INFO")
+                        else:
+                            time.sleep(1)
+            except Exception:
+                pass
+        threading.Thread(target=_tail_gateway_log, daemon=True).start()
+
     def _on_stop(self):
         """Stop all processes."""
         self._log("Stopping FlowKit Server...", "WARN")
