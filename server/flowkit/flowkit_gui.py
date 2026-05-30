@@ -968,39 +968,17 @@ class FlowKitGUI(tk.Tk):
                 t.start()
                 self._ndp_threads.append(t)
 
-        # Step 4: Wait for NDP, then test + start proxy per instance
+        # Step 4: Wait for NDP then start proxy (NO pre-test — y het server cu)
+        # Server cu KHONG test connect truoc, chi start proxy roi de Chrome dung.
+        # Pre-test socket bind/connect co the pha IPv6 NDP state.
+        self._log("Waiting 3s for NDP to settle...", "INFO")
         time.sleep(3)
         if ipv6_map:
-            import socket
             for i, info in ipv6_map.items():
                 ipv6 = info['ip']
                 name = instances[i]['name'] if i < len(instances) else f"flowkit-{i}"
                 port = base_port + i
 
-                ip_ready = False
-                for attempt in range(8):
-                    time.sleep(1)
-                    try:
-                        s = socket.socket(socket.AF_INET6, socket.SOCK_STREAM)
-                        s.settimeout(5)
-                        s.bind((ipv6, 0))
-                        s.connect(("2607:f8b0:4004:800::200e", 80))
-                        s.close()
-                        ip_ready = True
-                        self._log(f"[{name}] IPv6 {ipv6} routable ({attempt+1}s)", "OK")
-                        break
-                    except OSError:
-                        try:
-                            s.close()
-                        except Exception:
-                            pass
-                        if attempt == 7:
-                            self._log(f"[{name}] IPv6 {ipv6} cannot route after 8s — skip proxy", "WARN")
-
-                if not ip_ready:
-                    continue
-
-                # Start SOCKS5 proxy with auto-rotate
                 proxy = IPv6SocksProxy(
                     listen_port=port,
                     ipv6_address=ipv6,
