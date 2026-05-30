@@ -916,9 +916,28 @@ class FlowKitGUI(tk.Tk):
                 log_func=lambda m, _n=name: self._log(f"[{_n}] {m}", "INFO")
             )
             if proxy.start():
-                proxy_port_map[i] = port
-                self._ipv6_proxies.append(proxy)
-                self._log(f"[{name}] SOCKS5 proxy on 127.0.0.1:{port} → {ipv6}", "OK")
+                # Verify proxy can actually connect outbound via IPv6
+                proxy_works = False
+                try:
+                    import socket
+                    test_sock = socket.socket(socket.AF_INET6, socket.SOCK_STREAM)
+                    test_sock.settimeout(5)
+                    test_sock.bind((ipv6, 0))
+                    test_sock.connect(("2607:f8b0:4004:800::200e", 80))  # Google IPv6
+                    test_sock.close()
+                    proxy_works = True
+                except Exception as e:
+                    self._log(f"[{name}] IPv6 {ipv6} cannot route — skip proxy, use direct", "WARN")
+                    try:
+                        proxy.stop()
+                    except Exception:
+                        pass
+
+                if proxy_works:
+                    proxy_port_map[i] = port
+                    self._ipv6_proxies.append(proxy)
+                    self._log(f"[{name}] SOCKS5 proxy on 127.0.0.1:{port} → {ipv6}", "OK")
+                # else: no proxy → Chrome uses direct connection
             else:
                 self._log(f"[{name}] Failed to start SOCKS5 proxy on port {port}", "ERROR")
 
