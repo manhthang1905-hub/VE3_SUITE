@@ -1561,9 +1561,12 @@ class FlowKitGUI(tk.Tk):
                         src = src_server_root / shared_file
                         if src.exists():
                             shutil.copy2(str(src), str(BASE_DIR / shared_file))
-                    src_ipv6 = src_server_root / "modules" / "ipv6_proxy.py"
-                    if src_ipv6.exists():
-                        shutil.copy2(str(src_ipv6), str(BASE_DIR / "ipv6_proxy.py"))
+                    # ipv6_proxy.py is in flowkit dir, not modules
+                    for ipv6_path in [src_flowkit / "ipv6_proxy.py",
+                                      src_server_root / "modules" / "ipv6_proxy.py"]:
+                        if ipv6_path.exists():
+                            shutil.copy2(str(ipv6_path), str(BASE_DIR / "ipv6_proxy.py"))
+                            break
 
                     if zip_path.exists():
                         zip_path.unlink()
