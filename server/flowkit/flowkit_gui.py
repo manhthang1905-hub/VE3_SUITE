@@ -1013,8 +1013,20 @@ class FlowKitGUI(tk.Tk):
             cur_gw = ipv6_map[i].get('gateway', '') or self._compute_ipv6_gateway(cur_ip)
             port = base_port + i
             if cur_gw:
-                from ipv6_proxy import start_ndp_keepalive
-                start_ndp_keepalive(cur_ip, cur_gw, port, lambda m: self._log(m, "INFO"))
+                try:
+                    from ipv6_proxy import start_ndp_keepalive
+                    start_ndp_keepalive(cur_ip, cur_gw, port, lambda m: self._log(m, "INFO"))
+                except ImportError:
+                    # Fallback: inline NDP keepalive if ipv6_proxy is old version
+                    def _ndp_loop(src=cur_ip, gw=cur_gw):
+                        while self._started:
+                            try:
+                                subprocess.run(f'ping -6 -n 1 -w 3000 -S {src} {gw}',
+                                               shell=True, capture_output=True, timeout=10)
+                            except Exception:
+                                pass
+                            time.sleep(20)
+                    threading.Thread(target=_ndp_loop, daemon=True).start()
 
         # Step 3: Start proxy for ready IPs
         for i, info in ipv6_map.items():
@@ -1516,7 +1528,8 @@ class FlowKitGUI(tk.Tk):
                     zip_path = BASE_DIR / "update_temp.zip"
                     extract_dir = BASE_DIR / "update_temp"
 
-                    cache_buster = f"?t={int(time.time())}"
+                    cache_buster = f"?nocache={int(time.time())}"
+                    self._log(f"Downloading: {GITHUB_ZIP_URL}", "INFO")
                     with urllib.request.urlopen(GITHUB_ZIP_URL + cache_buster, context=ssl_context) as response:
                         with open(str(zip_path), 'wb') as out_file:
                             out_file.write(response.read())
@@ -1527,8 +1540,11 @@ class FlowKitGUI(tk.Tk):
                     src_flowkit = extract_dir / "VE3_SUITE-main" / "server" / "flowkit"
 
                     if src_flowkit.exists():
+                        copied_files = []
                         for py_file in src_flowkit.glob("*.py"):
                             shutil.copy2(str(py_file), str(BASE_DIR / py_file.name))
+                            copied_files.append(py_file.name)
+                        self._log(f"Copied {len(copied_files)} .py files: {', '.join(sorted(copied_files)[:10])}...", "INFO")
                         for bat_file in src_flowkit.glob("*.bat"):
                             shutil.copy2(str(bat_file), str(BASE_DIR / bat_file.name))
                         for txt_file in ("VERSION.txt",):
