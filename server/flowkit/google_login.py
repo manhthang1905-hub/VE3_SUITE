@@ -1225,14 +1225,19 @@ def login_google_chrome(account_info: dict, chrome_portable: str = None, profile
                 # Cho page render + verify password input exists truoc khi tiep tuc
                 log("Waiting 5s for page to fully render...")
                 time.sleep(5)
-                # Double check: password input phai ton tai truoc khi buoc tiep
+                # Password input phai ton tai truoc khi buoc tiep
+                pw_found = False
                 for _pw_check in range(10):
                     has_pw = driver.run_js('return !!document.querySelector("input[type=password]");')
                     if has_pw:
+                        pw_found = True
                         break
                     time.sleep(1)
-                    if _pw_check == 9:
-                        log("Password input NOT found after 10s extra wait", "WARN")
+                if not pw_found:
+                    log("Password input NOT found — page chua chuyen. Reload va thu lai...", "WARN")
+                    driver.get("https://accounts.google.com/signin")
+                    time.sleep(3)
+                    return False
             else:
                 log("Email input not found!", "WARN")
         except Exception as e:
