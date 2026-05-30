@@ -580,7 +580,8 @@ class FlowKitGUI(tk.Tk):
 
             if ipv6_map:
                 self._log(f"Setting up SOCKS5 proxies ({len(ipv6_map)} IPs)...", "INFO")
-                self._setup_ipv6_proxies(ipv6_map, instances, PROXY_BASE_PORT, proxy_port_map)
+                self._setup_ipv6_proxies(ipv6_map, instances, PROXY_BASE_PORT, proxy_port_map,
+                                        pool_url=pool_url, pool_client=pool_client)
             else:
                 self._log("WARNING: No IPv6 for any instance — using direct connection", "WARN")
 
@@ -875,7 +876,8 @@ class FlowKitGUI(tk.Tk):
         log_extra = f" proxy={proxy_arg}" if proxy_arg else ""
         self._log(f"[{inst['name']}] Chrome started (PID {proc.pid}){log_extra}", "INFO")
 
-    def _setup_ipv6_proxies(self, ipv6_map: dict, instances: list, base_port: int, proxy_port_map: dict):
+    def _setup_ipv6_proxies(self, ipv6_map: dict, instances: list, base_port: int, proxy_port_map: dict,
+                            pool_url: str = "", pool_client=None):
         """Add IPv6 addresses to interface and start a SOCKS5 proxy per instance.
 
         ipv6_map: {index: {'ip': '2001:...', 'gateway': '2001:...:1'}}
@@ -893,39 +895,39 @@ class FlowKitGUI(tk.Tk):
         self._ipv6_proxies = []
         first_gateway = None
 
-        # Step 1: Add all IPv6 addresses to interface
+        # Step 1: Add addresses + per-subnet routes
         for i, info in ipv6_map.items():
             ipv6 = info['ip']
             gateway = info.get('gateway', '') or self._compute_ipv6_gateway(ipv6)
             name = instances[i]['name'] if i < len(instances) else f"flowkit-{i}"
             if not first_gateway and gateway:
                 first_gateway = gateway
-            cmd = f'netsh interface ipv6 add address "{iface}" {ipv6}'
+
+            # Add IPv6 address
             try:
-                subprocess.run(cmd, shell=True, capture_output=True, timeout=10)
+                subprocess.run(f'netsh interface ipv6 add address "{iface}" {ipv6}',
+                               shell=True, capture_output=True, timeout=10)
                 self._log(f"[{name}] Added {ipv6} to {iface}", "INFO")
             except Exception as e:
                 self._log(f"[{name}] netsh add address failed: {e}", "WARN")
 
-        # Step 2: Add on-link routes PER IP + default route ONCE (y het server cu)
-        for i, info in ipv6_map.items():
-            ipv6 = info['ip']
-            gateway = info.get('gateway', '') or self._compute_ipv6_gateway(ipv6)
-            name = instances[i]['name'] if i < len(instances) else f"flowkit-{i}"
+            # Add on-link route for THIS subnet (each instance needs its own)
             onlink_prefix = ':'.join(gateway.split(':')[:4]) + '::/64'
             try:
-                subprocess.run(f'netsh interface ipv6 add route {onlink_prefix} "{iface}"',
+                subprocess.run(f'netsh interface ipv6 add route {onlink_prefix} "{iface}" {gateway}',
                                shell=True, capture_output=True, timeout=10)
+                self._log(f"[{name}] Route {onlink_prefix} via {gateway}", "OK")
             except Exception:
                 pass
 
+        # Default route (once)
         if first_gateway:
             try:
                 subprocess.run(f'netsh interface ipv6 add route ::/0 "{iface}" {first_gateway}',
                                shell=True, capture_output=True, timeout=10)
                 self._log(f"Default route ::/0 via {first_gateway}", "OK")
-            except Exception as e:
-                self._log(f"Route setup error: {e}", "WARN")
+            except Exception:
+                pass
 
         # Firewall: allow ICMPv6 NDP
         try:
@@ -936,27 +938,81 @@ class FlowKitGUI(tk.Tk):
         except Exception:
             pass
 
-        # Step 3: NDP keepalive — ping gateway from each IPv6 to warm NDP cache
-        # (y het server cu: MikroTik xoa NDP entry sau 30-60s neu khong ping)
+        # Step 2: Wait for NDP — per-IP readiness check
+        import socket
+        self._ndp_threads = getattr(self, '_ndp_threads', [])
+        ready_ips = {}
+
         for i, info in ipv6_map.items():
             ipv6 = info['ip']
             gateway = info.get('gateway', '') or self._compute_ipv6_gateway(ipv6)
             name = instances[i]['name'] if i < len(instances) else f"flowkit-{i}"
+
+            # Ping gateway to force NDP resolve
             if gateway:
                 try:
                     subprocess.run(f'ping -6 -n 2 -w 3000 -S {ipv6} {gateway}',
                                    shell=True, capture_output=True, timeout=10)
-                    self._log(f"[{name}] NDP ping {gateway} from {ipv6}", "OK")
                 except Exception:
                     pass
 
-        # Start NDP keepalive threads (ping gateway every 20s, like old server)
-        self._ndp_threads = getattr(self, '_ndp_threads', [])
-        for i, info in ipv6_map.items():
-            ipv6 = info['ip']
-            gateway = info.get('gateway', '') or self._compute_ipv6_gateway(ipv6)
-            if gateway:
-                def _ndp_loop(src=ipv6, gw=gateway):
+            # Wait for address to become "Preferred" (DAD complete)
+            ip_ready = False
+            for attempt in range(15):
+                time.sleep(1)
+                try:
+                    result = subprocess.run(
+                        f'netsh interface ipv6 show address "{iface}"',
+                        shell=True, capture_output=True, text=True, timeout=5)
+                    if ipv6 in result.stdout and "Preferred" in result.stdout:
+                        # Test actual connectivity
+                        try:
+                            s = socket.socket(socket.AF_INET6, socket.SOCK_STREAM)
+                            s.settimeout(3)
+                            s.bind((ipv6, 0))
+                            s.connect(("2001:4860:4860::8888", 53))
+                            s.close()
+                            ip_ready = True
+                            self._log(f"[{name}] IPv6 ready ({attempt+1}s)", "OK")
+                            break
+                        except OSError:
+                            try: s.close()
+                            except: pass
+                except Exception:
+                    pass
+
+            if not ip_ready:
+                self._log(f"[{name}] IPv6 {ipv6} not ready after 15s — rotate", "WARN")
+                # Auto-rotate: ask pool for new IP
+                if pool_client:
+                    try:
+                        new_result = pool_client.rotate_ip(ipv6, reason="ndp_fail", worker=name)
+                        if new_result and new_result.get('ip') != ipv6:
+                            new_ip = new_result['ip']
+                            new_gw = new_result.get('gateway', '') or self._compute_ipv6_gateway(new_ip)
+                            subprocess.run(f'netsh interface ipv6 delete address "{iface}" {ipv6}',
+                                           shell=True, capture_output=True, timeout=10)
+                            subprocess.run(f'netsh interface ipv6 add address "{iface}" {new_ip}',
+                                           shell=True, capture_output=True, timeout=10)
+                            new_prefix = ':'.join(new_gw.split(':')[:4]) + '::/64'
+                            subprocess.run(f'netsh interface ipv6 add route {new_prefix} "{iface}" {new_gw}',
+                                           shell=True, capture_output=True, timeout=10)
+                            subprocess.run(f'ping -6 -n 2 -w 3000 -S {new_ip} {new_gw}',
+                                           shell=True, capture_output=True, timeout=10)
+                            time.sleep(2)
+                            ipv6_map[i] = {'ip': new_ip, 'gateway': new_gw}
+                            self._log(f"[{name}] Rotated: {ipv6} → {new_ip}", "OK")
+                            ip_ready = True
+                    except Exception as e:
+                        self._log(f"[{name}] Rotate failed: {e}", "WARN")
+
+            ready_ips[i] = ip_ready
+
+            # Start NDP keepalive thread
+            cur_ip = ipv6_map[i]['ip']
+            cur_gw = ipv6_map[i].get('gateway', '') or self._compute_ipv6_gateway(cur_ip)
+            if cur_gw:
+                def _ndp_loop(src=cur_ip, gw=cur_gw):
                     while self._started:
                         try:
                             subprocess.run(f'ping -6 -n 1 -w 3000 -S {src} {gw}',
@@ -968,30 +1024,30 @@ class FlowKitGUI(tk.Tk):
                 t.start()
                 self._ndp_threads.append(t)
 
-        # Step 4: Wait for NDP then start proxy (NO pre-test — y het server cu)
-        # Server cu KHONG test connect truoc, chi start proxy roi de Chrome dung.
-        # Pre-test socket bind/connect co the pha IPv6 NDP state.
-        self._log("Waiting 3s for NDP to settle...", "INFO")
-        time.sleep(3)
-        if ipv6_map:
-            for i, info in ipv6_map.items():
-                ipv6 = info['ip']
+        # Step 3: Start proxy for ready IPs
+        for i, info in ipv6_map.items():
+            if not ready_ips.get(i):
                 name = instances[i]['name'] if i < len(instances) else f"flowkit-{i}"
-                port = base_port + i
+                self._log(f"[{name}] Skip proxy — IPv6 not ready", "WARN")
+                continue
 
-                proxy = IPv6SocksProxy(
-                    listen_port=port,
-                    ipv6_address=ipv6,
-                    log_func=lambda m, _n=name: self._log(f"[{_n}] {m}", "INFO")
-                )
-                proxy.pool_url = pool_url
-                proxy.worker_name = name
-                if proxy.start():
-                    proxy_port_map[i] = port
-                    self._ipv6_proxies.append(proxy)
-                    self._log(f"[{name}] SOCKS5 proxy on 127.0.0.1:{port} → {ipv6}", "OK")
-                else:
-                    self._log(f"[{name}] Failed to start SOCKS5 proxy on port {port}", "ERROR")
+            ipv6 = info['ip']
+            name = instances[i]['name'] if i < len(instances) else f"flowkit-{i}"
+            port = base_port + i
+
+            proxy = IPv6SocksProxy(
+                listen_port=port,
+                ipv6_address=ipv6,
+                log_func=lambda m, _n=name: self._log(f"[{_n}] {m}", "INFO")
+            )
+            proxy.pool_url = pool_url
+            proxy.worker_name = name
+            if proxy.start():
+                proxy_port_map[i] = port
+                self._ipv6_proxies.append(proxy)
+                self._log(f"[{name}] SOCKS5 proxy on 127.0.0.1:{port} → {ipv6}", "OK")
+            else:
+                self._log(f"[{name}] Failed to start proxy on port {port}", "ERROR")
 
     def _compute_ipv6_gateway(self, ipv6: str) -> str:
         """Compute gateway address from IPv6 (::1 of the /64 prefix)."""
