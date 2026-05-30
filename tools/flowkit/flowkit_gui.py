@@ -907,30 +907,25 @@ class FlowKitGUI(tk.Tk):
             except Exception as e:
                 self._log(f"[{name}] netsh add address failed: {e}", "WARN")
 
-        # Step 2: Add routes BEFORE testing connectivity
+        # Step 2: Add on-link routes PER IP + default route ONCE (y het server cu)
+        for i, info in ipv6_map.items():
+            ipv6 = info['ip']
+            gateway = info.get('gateway', '') or self._compute_ipv6_gateway(ipv6)
+            name = instances[i]['name'] if i < len(instances) else f"flowkit-{i}"
+            onlink_prefix = ':'.join(gateway.split(':')[:4]) + '::/64'
+            try:
+                subprocess.run(f'netsh interface ipv6 add route {onlink_prefix} "{iface}"',
+                               shell=True, capture_output=True, timeout=10)
+            except Exception:
+                pass
+
         if first_gateway:
             try:
-                parts = first_gateway.split(':')
-                prefix = ':'.join(parts[:4]) + '::/64'
-                subprocess.run(
-                    f'netsh interface ipv6 add route {prefix} "{iface}"',
-                    shell=True, capture_output=True, timeout=10
-                )
-                subprocess.run(
-                    f'netsh interface ipv6 add route ::/0 "{iface}" {first_gateway}',
-                    shell=True, capture_output=True, timeout=10
-                )
+                subprocess.run(f'netsh interface ipv6 add route ::/0 "{iface}" {first_gateway}',
+                               shell=True, capture_output=True, timeout=10)
                 self._log(f"Default route ::/0 via {first_gateway}", "OK")
             except Exception as e:
                 self._log(f"Route setup error: {e}", "WARN")
-
-        # IPv6 prefix policy: prefer IPv6 over IPv4
-        try:
-            subprocess.run('netsh interface ipv6 set prefixpolicy ::1/128 50 0', shell=True, capture_output=True, timeout=5)
-            subprocess.run('netsh interface ipv6 set prefixpolicy ::/0 40 1', shell=True, capture_output=True, timeout=5)
-            subprocess.run('netsh interface ipv6 set prefixpolicy ::ffff:0:0/96 10 4', shell=True, capture_output=True, timeout=5)
-        except Exception:
-            pass
 
         # Firewall: allow ICMPv6 NDP
         try:
@@ -941,7 +936,40 @@ class FlowKitGUI(tk.Tk):
         except Exception:
             pass
 
-        # Step 3: Wait for NDP/DAD, then test + start proxy per instance
+        # Step 3: NDP keepalive — ping gateway from each IPv6 to warm NDP cache
+        # (y het server cu: MikroTik xoa NDP entry sau 30-60s neu khong ping)
+        for i, info in ipv6_map.items():
+            ipv6 = info['ip']
+            gateway = info.get('gateway', '') or self._compute_ipv6_gateway(ipv6)
+            name = instances[i]['name'] if i < len(instances) else f"flowkit-{i}"
+            if gateway:
+                try:
+                    subprocess.run(f'ping -6 -n 2 -w 3000 -S {ipv6} {gateway}',
+                                   shell=True, capture_output=True, timeout=10)
+                    self._log(f"[{name}] NDP ping {gateway} from {ipv6}", "OK")
+                except Exception:
+                    pass
+
+        # Start NDP keepalive threads (ping gateway every 20s, like old server)
+        self._ndp_threads = getattr(self, '_ndp_threads', [])
+        for i, info in ipv6_map.items():
+            ipv6 = info['ip']
+            gateway = info.get('gateway', '') or self._compute_ipv6_gateway(ipv6)
+            if gateway:
+                def _ndp_loop(src=ipv6, gw=gateway):
+                    while self._started:
+                        try:
+                            subprocess.run(f'ping -6 -n 1 -w 3000 -S {src} {gw}',
+                                           shell=True, capture_output=True, timeout=10)
+                        except Exception:
+                            pass
+                        time.sleep(20)
+                t = threading.Thread(target=_ndp_loop, daemon=True)
+                t.start()
+                self._ndp_threads.append(t)
+
+        # Step 4: Wait for NDP, then test + start proxy per instance
+        time.sleep(3)
         if ipv6_map:
             import socket
             for i, info in ipv6_map.items():
@@ -949,13 +977,12 @@ class FlowKitGUI(tk.Tk):
                 name = instances[i]['name'] if i < len(instances) else f"flowkit-{i}"
                 port = base_port + i
 
-                # Wait for IPv6 to become routable (NDP/DAD + outbound test)
                 ip_ready = False
                 for attempt in range(5):
                     time.sleep(1)
                     try:
                         s = socket.socket(socket.AF_INET6, socket.SOCK_STREAM)
-                        s.settimeout(3)
+                        s.settimeout(5)
                         s.bind((ipv6, 0))
                         s.connect(("2607:f8b0:4004:800::200e", 80))
                         s.close()
