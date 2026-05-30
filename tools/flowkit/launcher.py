@@ -216,8 +216,6 @@ def start_chrome(instance: dict, new_fingerprint: bool = True, clean: bool = Fal
     if ipv6:
         proxy_port = 1081 + (instance["api_port"] - 8100)
         args.append(f"--proxy-server=socks5://127.0.0.1:{proxy_port}")
-    else:
-        args.append("--no-proxy-server")
 
     args.append("https://labs.google/fx/tools/flow")
 

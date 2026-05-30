@@ -461,8 +461,6 @@ def _build_options(chrome_dir: Path, ext_dir: Path, port: int, proxy_arg: str = 
 
     if proxy_arg:
         co.set_argument(f"--proxy-server={proxy_arg}")
-    else:
-        co.set_argument("--no-proxy-server")
 
     if window_args:
         for arg in window_args:

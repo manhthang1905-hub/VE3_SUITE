@@ -823,8 +823,6 @@ class FlowKitGUI(tk.Tk):
 
         if proxy_arg:
             args.append(f"--proxy-server={proxy_arg}")
-        else:
-            args.append("--no-proxy-server")
         # Open directly to Flow page so extension can capture flow key
         args.append("https://labs.google/fx/tools/flow")
 
