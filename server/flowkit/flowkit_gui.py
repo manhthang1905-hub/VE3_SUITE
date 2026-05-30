@@ -281,6 +281,13 @@ class FlowKitGUI(tk.Tk):
             tk.Label(box, text=label, font=('Segoe UI', 8), fg=FG2, bg=BG2).pack(pady=(0, 4))
             self._stat_labels[key] = val
 
+        # Refresh button
+        rf = tk.Frame(p, bg=BG)
+        rf.pack(fill='x', padx=8, pady=(4, 0))
+        tk.Button(rf, text="⟳ Refresh", command=lambda: threading.Thread(target=self._poll_once, daemon=True).start(),
+                  bg=BG2, fg=FG, font=('Segoe UI', 8), relief='flat', cursor='hand2',
+                  bd=1, width=10).pack(side='right')
+
         # Workers grid
         wf = tk.LabelFrame(p, text=" Workers ", bg=BG2, fg=FG2,
                            font=('Segoe UI', 8, 'bold'), bd=1, relief='groove')
@@ -1131,28 +1138,29 @@ class FlowKitGUI(tk.Tk):
     # ============================================================
     # Monitoring
     # ============================================================
-    def _poll_loop(self):
-        """Poll gateway /api/instances + /api/accounts every 3s."""
+    def _poll_once(self):
+        """Single poll of gateway APIs."""
         import requests as req
         port = int(self._gateway_port.get() or 5100)
-        while self._started:
+        try:
+            r = req.get(f"http://127.0.0.1:{port}/api/instances", timeout=5)
+            self._workers = r.json().get('instances', [])
+            r2 = req.get(f"http://127.0.0.1:{port}/api/status", timeout=5)
+            self._stats = r2.json()
             try:
-                r = req.get(f"http://127.0.0.1:{port}/api/instances", timeout=3)
-                self._workers = r.json().get('instances', [])
-
-                r2 = req.get(f"http://127.0.0.1:{port}/api/status", timeout=3)
-                self._stats = r2.json()
-
-                try:
-                    r3 = req.get(f"http://127.0.0.1:{port}/api/accounts", timeout=3)
-                    self._account_stats = r3.json().get('accounts', [])
-                except Exception:
-                    pass
-
-                self.after(0, self._update_monitor)
+                r3 = req.get(f"http://127.0.0.1:{port}/api/accounts", timeout=5)
+                self._account_stats = r3.json().get('accounts', [])
             except Exception:
                 pass
-            time.sleep(3)
+            self.after(0, self._update_monitor)
+        except Exception:
+            pass
+
+    def _poll_loop(self):
+        """Poll gateway every 60s (light on resources)."""
+        while self._started:
+            self._poll_once()
+            time.sleep(60)
 
     def _update_monitor(self):
         """Update monitor UI from polled data."""
