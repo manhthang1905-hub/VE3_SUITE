@@ -509,19 +509,39 @@ class RecoveryManager:
                 logger.warning("[Recovery] %s: kill_chrome timeout (30s), forcing continue", instance_name)
             await asyncio.sleep(3)
 
-            # Step 2: Update IPv6 → SOCKS proxy picks up via override file
+            # Step 2: Full IPv6 setup + update proxy
             proxy_arg = ""
             if new_ipv6:
-                import subprocess as _sp
+                old_ipv6 = state.current_ipv6 if state.current_ipv6 != new_ipv6 else ""
+                gateway = ""
                 try:
-                    _sp.run(f'netsh interface ipv6 add address "Ethernet" {new_ipv6}',
-                            shell=True, capture_output=True, timeout=10)
+                    # Compute gateway from IP
+                    gateway = ':'.join(new_ipv6.split(':')[:4]) + '::1'
+                except Exception:
+                    pass
+                # Full setup: delete old → add new → route → NDP ping
+                try:
+                    from ipv6_proxy import setup_ipv6_on_interface, start_ndp_keepalive
+                    await loop.run_in_executor(None, lambda: setup_ipv6_on_interface(
+                        new_ipv6, gateway, "Ethernet", old_ipv6,
+                        lambda msg: logger.info("[Recovery] %s: %s", instance_name, msg)))
+                    start_ndp_keepalive(new_ipv6, gateway, proxy_port,
+                                       lambda msg: logger.info("[Recovery] %s: %s", instance_name, msg))
+                except Exception as e:
+                    logger.warning("[Recovery] %s: IPv6 setup error: %s", instance_name, e)
+                # Update proxy binding
+                try:
+                    for px in getattr(self, '_proxies', []):
+                        if hasattr(px, 'listen_port') and px.listen_port == proxy_port:
+                            px.set_ipv6(new_ipv6)
+                            break
                 except Exception:
                     pass
                 try:
                     Path(f".ipv6_override_{proxy_port}").write_text(new_ipv6)
                 except Exception:
                     pass
+                await asyncio.sleep(2)
                 proxy_arg = f"socks5://127.0.0.1:{proxy_port}"
             elif cfg.get("ipv6"):
                 proxy_arg = f"socks5://127.0.0.1:{proxy_port}"

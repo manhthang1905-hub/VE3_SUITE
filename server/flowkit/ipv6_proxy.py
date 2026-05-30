@@ -37,6 +37,70 @@ import time
 from typing import Optional, Tuple, Callable
 
 
+def setup_ipv6_on_interface(new_ip, gateway, iface="Ethernet", old_ip="", log_func=print):
+    """Full IPv6 setup: delete old → add new → route → NDP ping. Reusable."""
+    import subprocess as _sp
+    if old_ip:
+        try:
+            _sp.run(f'netsh interface ipv6 delete address "{iface}" {old_ip}',
+                    shell=True, capture_output=True, timeout=10)
+        except Exception:
+            pass
+    try:
+        _sp.run(f'netsh interface ipv6 add address "{iface}" {new_ip}',
+                shell=True, capture_output=True, timeout=10)
+    except Exception:
+        pass
+    if gateway:
+        onlink = ':'.join(gateway.split(':')[:4]) + '::/64'
+        try:
+            _sp.run(f'netsh interface ipv6 add route {onlink} "{iface}" {gateway}',
+                    shell=True, capture_output=True, timeout=10)
+        except Exception:
+            pass
+    gw = gateway or ':'.join(new_ip.split(':')[:4]) + '::1'
+    try:
+        _sp.run(f'ping -6 -n 2 -w 3000 -S {new_ip} {gw}',
+                shell=True, capture_output=True, timeout=10)
+    except Exception:
+        pass
+    log_func(f"[IPv6] Setup: {new_ip} via {gw}")
+
+
+# Global NDP keepalive threads — can be stopped/restarted per port
+_ndp_keepalive_threads = {}
+_ndp_keepalive_stop = {}
+
+
+def start_ndp_keepalive(ipv6, gateway, port_key, log_func=print):
+    """Start or restart NDP keepalive thread for an IP."""
+    stop_ndp_keepalive(port_key)
+    _ndp_keepalive_stop[port_key] = threading.Event()
+
+    def _loop():
+        gw = gateway or ':'.join(ipv6.split(':')[:4]) + '::1'
+        import subprocess as _sp
+        while not _ndp_keepalive_stop[port_key].is_set():
+            try:
+                _sp.run(f'ping -6 -n 1 -w 3000 -S {ipv6} {gw}',
+                        shell=True, capture_output=True, timeout=10)
+            except Exception:
+                pass
+            _ndp_keepalive_stop[port_key].wait(20)
+
+    t = threading.Thread(target=_loop, daemon=True)
+    t.start()
+    _ndp_keepalive_threads[port_key] = t
+
+
+def stop_ndp_keepalive(port_key):
+    """Stop NDP keepalive thread for a port."""
+    if port_key in _ndp_keepalive_stop:
+        _ndp_keepalive_stop[port_key].set()
+    _ndp_keepalive_threads.pop(port_key, None)
+    _ndp_keepalive_stop.pop(port_key, None)
+
+
 class IPv6SocksProxy:
     """Simple SOCKS5 proxy that routes traffic through IPv6."""
 
@@ -124,11 +188,11 @@ class IPv6SocksProxy:
         if self._rotating or not self.pool_url or not self.ipv6_address:
             return
         self._rotating = True
-        self.log(f"[IPv6-Proxy] AUTO ROTATE: {self.ipv6_address} dead, requesting new IP...")
+        old_ip = self.ipv6_address
+        self.log(f"[IPv6-Proxy] AUTO ROTATE: {old_ip} dead, requesting new IP...")
 
         try:
             import requests
-            old_ip = self.ipv6_address
             resp = requests.post(f"{self.pool_url}/api/rotate_ip", json={
                 "ip": old_ip,
                 "reason": "timeout",
@@ -143,46 +207,23 @@ class IPv6SocksProxy:
                 self._rotating = False
                 return
 
-            self.log(f"[IPv6-Proxy] Got new IP: {new_ip}")
-
-            import subprocess as _sp
-            # Remove old IP
-            try:
-                _sp.run(f'netsh interface ipv6 delete address "{self.iface}" {old_ip}',
-                        shell=True, capture_output=True, timeout=10)
-            except Exception:
-                pass
-            # Add new IP
-            try:
-                _sp.run(f'netsh interface ipv6 add address "{self.iface}" {new_ip}',
-                        shell=True, capture_output=True, timeout=10)
-            except Exception:
-                pass
-            # Update route
-            if new_gw:
-                onlink = ':'.join(new_gw.split(':')[:4]) + '::/64'
-                try:
-                    _sp.run(f'netsh interface ipv6 add route {onlink} "{self.iface}"',
-                            shell=True, capture_output=True, timeout=10)
-                except Exception:
-                    pass
-            # NDP ping
-            gw = new_gw or ':'.join(new_ip.split(':')[:4]) + '::1'
-            try:
-                _sp.run(f'ping -6 -n 2 -w 3000 -S {new_ip} {gw}',
-                        shell=True, capture_output=True, timeout=10)
-            except Exception:
-                pass
-
+            # Full IPv6 setup: delete old → add new → route → NDP
+            setup_ipv6_on_interface(new_ip, new_gw, self.iface, old_ip, self.log)
             time.sleep(2)
-            # Update proxy
+
+            # Update proxy binding
             self.set_ipv6(new_ip)
+
+            # Restart NDP keepalive for new IP
+            start_ndp_keepalive(new_ip, new_gw, self.listen_port, self.log)
+
             # Update override file
             try:
                 from pathlib import Path
                 Path(f".ipv6_override_{self.listen_port}").write_text(new_ip)
             except Exception:
                 pass
+
             self.log(f"[IPv6-Proxy] ROTATED: {old_ip} → {new_ip}")
 
         except Exception as e:

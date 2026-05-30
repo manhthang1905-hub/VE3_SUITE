@@ -1008,21 +1008,13 @@ class FlowKitGUI(tk.Tk):
 
             ready_ips[i] = ip_ready
 
-            # Start NDP keepalive thread
+            # Start NDP keepalive (shared module — restartable on rotate)
             cur_ip = ipv6_map[i]['ip']
             cur_gw = ipv6_map[i].get('gateway', '') or self._compute_ipv6_gateway(cur_ip)
+            port = base_port + i
             if cur_gw:
-                def _ndp_loop(src=cur_ip, gw=cur_gw):
-                    while self._started:
-                        try:
-                            subprocess.run(f'ping -6 -n 1 -w 3000 -S {src} {gw}',
-                                           shell=True, capture_output=True, timeout=10)
-                        except Exception:
-                            pass
-                        time.sleep(20)
-                t = threading.Thread(target=_ndp_loop, daemon=True)
-                t.start()
-                self._ndp_threads.append(t)
+                from ipv6_proxy import start_ndp_keepalive
+                start_ndp_keepalive(cur_ip, cur_gw, port, lambda m: self._log(m, "INFO"))
 
         # Step 3: Start proxy for ready IPs
         for i, info in ipv6_map.items():
