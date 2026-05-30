@@ -893,15 +893,13 @@ class FlowKitGUI(tk.Tk):
         self._ipv6_proxies = []
         first_gateway = None
 
+        # Step 1: Add all IPv6 addresses to interface
         for i, info in ipv6_map.items():
             ipv6 = info['ip']
             gateway = info.get('gateway', '') or self._compute_ipv6_gateway(ipv6)
             name = instances[i]['name'] if i < len(instances) else f"flowkit-{i}"
-            port = base_port + i
             if not first_gateway and gateway:
                 first_gateway = gateway
-
-            # Add IPv6 to Windows network interface
             cmd = f'netsh interface ipv6 add address "{iface}" {ipv6}'
             try:
                 subprocess.run(cmd, shell=True, capture_output=True, timeout=10)
@@ -909,39 +907,7 @@ class FlowKitGUI(tk.Tk):
             except Exception as e:
                 self._log(f"[{name}] netsh add address failed: {e}", "WARN")
 
-            # Start SOCKS5 proxy bound to this IPv6
-            proxy = IPv6SocksProxy(
-                listen_port=port,
-                ipv6_address=ipv6,
-                log_func=lambda m, _n=name: self._log(f"[{_n}] {m}", "INFO")
-            )
-            if proxy.start():
-                # Verify proxy can actually connect outbound via IPv6
-                proxy_works = False
-                try:
-                    import socket
-                    test_sock = socket.socket(socket.AF_INET6, socket.SOCK_STREAM)
-                    test_sock.settimeout(5)
-                    test_sock.bind((ipv6, 0))
-                    test_sock.connect(("2607:f8b0:4004:800::200e", 80))  # Google IPv6
-                    test_sock.close()
-                    proxy_works = True
-                except Exception as e:
-                    self._log(f"[{name}] IPv6 {ipv6} cannot route — skip proxy, use direct", "WARN")
-                    try:
-                        proxy.stop()
-                    except Exception:
-                        pass
-
-                if proxy_works:
-                    proxy_port_map[i] = port
-                    self._ipv6_proxies.append(proxy)
-                    self._log(f"[{name}] SOCKS5 proxy on 127.0.0.1:{port} → {ipv6}", "OK")
-                # else: no proxy → Chrome uses direct connection
-            else:
-                self._log(f"[{name}] Failed to start SOCKS5 proxy on port {port}", "ERROR")
-
-        # Add on-link route + default route (once, using first gateway)
+        # Step 2: Add routes BEFORE testing connectivity
         if first_gateway:
             try:
                 parts = first_gateway.split(':')
@@ -975,9 +941,43 @@ class FlowKitGUI(tk.Tk):
         except Exception:
             pass
 
-        if proxy_port_map:
-            self._log(f"Waiting 5s for IPv6 NDP to settle...", "INFO")
-            time.sleep(5)
+        # Step 3: Wait for NDP/DAD, then test + start proxy per instance
+        if ipv6_map:
+            import socket
+            for i, info in ipv6_map.items():
+                ipv6 = info['ip']
+                name = instances[i]['name'] if i < len(instances) else f"flowkit-{i}"
+                port = base_port + i
+
+                # Wait for IPv6 to become bindable (NDP/DAD takes 1-3s)
+                ip_ready = False
+                for attempt in range(5):
+                    time.sleep(1)
+                    try:
+                        s = socket.socket(socket.AF_INET6, socket.SOCK_STREAM)
+                        s.bind((ipv6, 0))
+                        s.close()
+                        ip_ready = True
+                        break
+                    except OSError:
+                        if attempt == 4:
+                            self._log(f"[{name}] IPv6 {ipv6} not ready after 5s — skip proxy", "WARN")
+
+                if not ip_ready:
+                    continue
+
+                # Start SOCKS5 proxy
+                proxy = IPv6SocksProxy(
+                    listen_port=port,
+                    ipv6_address=ipv6,
+                    log_func=lambda m, _n=name: self._log(f"[{_n}] {m}", "INFO")
+                )
+                if proxy.start():
+                    proxy_port_map[i] = port
+                    self._ipv6_proxies.append(proxy)
+                    self._log(f"[{name}] SOCKS5 proxy on 127.0.0.1:{port} → {ipv6}", "OK")
+                else:
+                    self._log(f"[{name}] Failed to start SOCKS5 proxy on port {port}", "ERROR")
 
     def _compute_ipv6_gateway(self, ipv6: str) -> str:
         """Compute gateway address from IPv6 (::1 of the /64 prefix)."""
