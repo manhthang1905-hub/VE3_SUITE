@@ -1027,7 +1027,7 @@ def get_account_info(machine_code: str, max_retries: int = 3) -> dict:
     return account
 
 
-def login_google_chrome(account_info: dict, chrome_portable: str = None, profile_dir: str = None, worker_id: int = 0, proxy_arg: str = "") -> bool:
+def login_google_chrome(account_info: dict, chrome_portable: str = None, profile_dir: str = None, worker_id: int = 0, proxy_arg: str = "", window_args: list = None) -> bool:
     """
     Má»Ÿ Chrome vÃ  Ä‘Äƒng nháº­p Google báº±ng JavaScript.
 
@@ -1091,8 +1091,13 @@ def login_google_chrome(account_info: dict, chrome_portable: str = None, profile
             if profile_dir:
                 log("Profile arg received but ignored (portable default mode)")
 
-        # Co dinh vi tri cua so Chrome de de quan sat nhieu worker
-        _apply_window_layout_args(options, chrome_exe, worker_id)
+        # Window layout — use passed args (from flowkit_gui) or fallback to internal calc
+        if window_args:
+            for arg in window_args:
+                options.set_argument(arg)
+            log(f"[LAYOUT] Using flowkit window args: {window_args}")
+        else:
+            _apply_window_layout_args(options, chrome_exe, worker_id)
 
         # v1.0.571: Proxy args - dam bao login dung cung proxy nhu tao anh
         if proxy_arg:
@@ -1115,7 +1120,14 @@ def login_google_chrome(account_info: dict, chrome_portable: str = None, profile
 
         # Má»Ÿ Chrome má»›i
         driver = ChromiumPage(options)
-        _enforce_window_layout(driver, chrome_exe, worker_id)
+        if window_args:
+            try:
+                from chrome_setup import _enforce_window_layout as _fw
+                _fw(driver, window_args, log)
+            except Exception:
+                _enforce_window_layout(driver, chrome_exe, worker_id)
+        else:
+            _enforce_window_layout(driver, chrome_exe, worker_id)
 
         # v1.0.650: Inject fingerprint NGAY SAU khi mo Chrome, TRUOC khi navigate
         # Dam bao login va tao anh dung CUNG fingerprint â†’ Google khong detect thay doi

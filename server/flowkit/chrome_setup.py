@@ -385,7 +385,8 @@ def _wait_for_textarea(page, timeout: int = 30) -> bool:
     return False
 
 
-def _do_login(chrome_dir: Path, account: dict, proxy_arg: str = "", worker_id: int = 0) -> bool:
+def _do_login(chrome_dir: Path, account: dict, proxy_arg: str = "", worker_id: int = 0,
+              window_args: list = None) -> bool:
     """Login Google — goi google_login.py y nguyen server cu _auto_login."""
     try:
         sys.path.insert(0, str(BASE_DIR))
@@ -396,6 +397,7 @@ def _do_login(chrome_dir: Path, account: dict, proxy_arg: str = "", worker_id: i
             chrome_portable=str(portable_exe),
             worker_id=worker_id,
             proxy_arg=proxy_arg,
+            window_args=window_args,
         )
     except Exception as e:
         logger.error("[Setup] Login error: %s", e)
@@ -550,7 +552,7 @@ def setup_chrome(
         _kill_chrome_for_dir(chrome_dir)
 
         _clear_chrome_data(chrome_dir, log)
-        login_ok = _do_login(chrome_dir, account, proxy_arg, _worker_id)
+        login_ok = _do_login(chrome_dir, account, proxy_arg, _worker_id, window_args)
         if not login_ok:
             log("Login FAILED: %s" % account['id'])
             return False
@@ -599,7 +601,7 @@ def setup_chrome(
         _kill_chrome_for_dir(chrome_dir)
 
         _clear_chrome_data(chrome_dir, log)
-        login_ok = _do_login(chrome_dir, account, proxy_arg, _worker_id)
+        login_ok = _do_login(chrome_dir, account, proxy_arg, _worker_id, window_args)
         if not login_ok:
             log("Login FAILED!")
             return False
@@ -812,7 +814,7 @@ def ensure_chrome_ready(
                     pass
                 _kill_chrome_for_dir(chrome_dir)
                 _clear_chrome_data(chrome_dir, log)
-                login_ok = _do_login(chrome_dir, account, proxy_arg, _worker_id)
+                login_ok = _do_login(chrome_dir, account, proxy_arg, _worker_id, window_args)
                 if not login_ok:
                     log("Login FAILED!")
                     return False
