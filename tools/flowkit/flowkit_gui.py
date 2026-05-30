@@ -1184,7 +1184,7 @@ class FlowKitGUI(tk.Tk):
         for i, w in enumerate(active_workers):
             card = tk.Frame(self._workers_frame, bg=BG, bd=1, relief='solid',
                             highlightbackground=BORDER)
-            card.pack(side='left', fill='y', padx=2, pady=2, expand=True)
+            card.pack(side='left', fill='both', padx=2, pady=2, expand=True)
 
             # Status color
             if w.get('cooling'):
@@ -1210,78 +1210,84 @@ class FlowKitGUI(tk.Tk):
 
             card.config(highlightbackground=border_color)
 
+            # Larger fonts when few workers
+            n_font = ('Segoe UI', 12, 'bold') if len(active_workers) <= 3 else ('Segoe UI', 9, 'bold')
+            s_font = ('Segoe UI', 11, 'bold') if len(active_workers) <= 3 else ('Segoe UI', 8, 'bold')
+            d_font = ('Consolas', 10) if len(active_workers) <= 3 else ('Consolas', 8)
+
             name = w.get('name', '?')
-            tk.Label(card, text=name, font=('Segoe UI', 9, 'bold'),
-                     fg=FG, bg=BG).pack(padx=6, pady=(4, 1))
-            tk.Label(card, text=status_text, font=('Segoe UI', 8, 'bold'),
-                     fg=status_fg, bg=BG).pack()
+            tk.Label(card, text=name, font=n_font,
+                     fg=FG, bg=BG).pack(padx=10, pady=(8, 2))
+            tk.Label(card, text=status_text, font=s_font,
+                     fg=status_fg, bg=BG).pack(pady=2)
 
             # Account email
             acc = account_map.get(name, {})
             email = acc.get('id', '')
             if email:
-                short = email.split('@')[0][:12]
-                tk.Label(card, text=short, font=('Consolas', 7),
-                         fg=BLUE, bg=BG).pack()
+                short = email.split('@')[0]
+                tk.Label(card, text=short, font=d_font,
+                         fg=BLUE, bg=BG).pack(pady=2)
 
             ext = "Ext: OK" if w.get('extension_connected') else "Ext: --"
             ext_fg = GREEN if w.get('extension_connected') else RED
-            tk.Label(card, text=ext, font=('Consolas', 8), fg=ext_fg, bg=BG).pack()
+            tk.Label(card, text=ext, font=d_font, fg=ext_fg, bg=BG).pack(pady=1)
+
+            key = "Key: OK" if w.get('flow_key_present') else "Key: --"
+            key_fg = GREEN if w.get('flow_key_present') else FG2
+            tk.Label(card, text=key, font=d_font, fg=key_fg, bg=BG).pack(pady=1)
 
             c403 = w.get('consecutive_403', 0)
             c403_fg = RED if c403 > 0 else FG2
             tk.Label(card, text=f"403: {c403}",
-                     font=('Consolas', 8), fg=c403_fg, bg=BG).pack()
-            tk.Label(card, text=f"OK:{w.get('total_completed', 0)} F:{w.get('total_failed', 0)}",
-                     font=('Consolas', 8), fg=FG2, bg=BG).pack(pady=(0, 4))
+                     font=d_font, fg=c403_fg, bg=BG).pack(pady=1)
+            tk.Label(card, text=f"OK: {w.get('total_completed', 0)}  Fail: {w.get('total_failed', 0)}",
+                     font=d_font, fg=FG2, bg=BG).pack(pady=(1, 8))
 
         # Accounts overview
         for widget in self._accounts_frame.winfo_children():
             widget.destroy()
 
         if self._account_stats:
-            # Header
-            hdr = tk.Frame(self._accounts_frame, bg=BG2)
-            hdr.pack(fill='x')
-            for text in ["Account", "Status", "Worker", "OK", "403", "Fail"]:
-                tk.Label(hdr, text=text, font=('Segoe UI', 8, 'bold'), fg=FG2, bg=BG2,
-                         anchor='w').pack(side='left', padx=4, expand=True)
+            # Use grid for aligned columns
+            grid = tk.Frame(self._accounts_frame, bg=BG2)
+            grid.pack(fill='x')
+            cols = [("Account", 20, 'w'), ("Status", 8, 'center'), ("Worker", 8, 'center'),
+                    ("OK", 6, 'center'), ("403", 6, 'center'), ("Fail", 6, 'center')]
+            for c, (text, width, anchor) in enumerate(cols):
+                tk.Label(grid, text=text, font=('Segoe UI', 8, 'bold'), fg=FG2, bg=BG2,
+                         width=width, anchor=anchor).grid(row=0, column=c, padx=2, pady=(2, 0))
+            grid.grid_columnconfigure(0, weight=1)
 
-            for acc in self._account_stats:
-                row = tk.Frame(self._accounts_frame, bg=BG, bd=0)
-                row.pack(fill='x', pady=1)
-
+            for r, acc in enumerate(self._account_stats):
                 email = acc.get('email', '?')
-                short_email = email.split('@')[0][:14]
+                short_email = email.split('@')[0]
                 status = acc.get('status', 'pool')
                 assigned = acc.get('assigned_to', '')
                 ok_count = acc.get('ok', 0)
                 fail_count = acc.get('fail', 0)
                 err_403 = acc.get('errors_403', 0)
 
-                if status == 'active':
-                    stat_text = "ACTIVE"
-                    stat_fg = GREEN
-                else:
-                    stat_text = "pool"
-                    stat_fg = FG2
+                row_bg = BG if r % 2 == 0 else BG2
+                stat_text = "ACTIVE" if status == 'active' else "pool"
+                stat_fg = GREEN if status == 'active' else FG2
 
-                tk.Label(row, text=short_email, font=('Consolas', 8), fg=FG, bg=BG,
-                         anchor='w').pack(side='left', padx=4, expand=True)
-                tk.Label(row, text=stat_text, font=('Consolas', 8, 'bold'), fg=stat_fg, bg=BG,
-                         width=7).pack(side='left', padx=2)
-                tk.Label(row, text=assigned.replace('flowkit-', 'fk') if assigned else "-",
-                         font=('Consolas', 8), fg=BLUE if assigned else FG2, bg=BG,
-                         width=5).pack(side='left', padx=2)
-                tk.Label(row, text=str(ok_count), font=('Consolas', 8),
-                         fg=GREEN if ok_count > 0 else FG2, bg=BG,
-                         width=4).pack(side='left', padx=2)
-                tk.Label(row, text=str(err_403), font=('Consolas', 8),
-                         fg=RED if err_403 > 0 else FG2, bg=BG,
-                         width=4).pack(side='left', padx=2)
-                tk.Label(row, text=str(fail_count), font=('Consolas', 8),
-                         fg=ORANGE if fail_count > 0 else FG2, bg=BG,
-                         width=4).pack(side='left', padx=2)
+                tk.Label(grid, text=short_email, font=('Consolas', 9), fg=FG, bg=row_bg,
+                         anchor='w').grid(row=r+1, column=0, padx=2, sticky='ew')
+                tk.Label(grid, text=stat_text, font=('Consolas', 9, 'bold'), fg=stat_fg, bg=row_bg,
+                         width=8).grid(row=r+1, column=1, padx=2)
+                tk.Label(grid, text=assigned.replace('flowkit-', 'fk-') if assigned else "-",
+                         font=('Consolas', 9), fg=BLUE if assigned else FG2, bg=row_bg,
+                         width=8).grid(row=r+1, column=2, padx=2)
+                tk.Label(grid, text=str(ok_count), font=('Consolas', 9, 'bold'),
+                         fg=GREEN if ok_count > 0 else FG2, bg=row_bg,
+                         width=6).grid(row=r+1, column=3, padx=2)
+                tk.Label(grid, text=str(err_403), font=('Consolas', 9, 'bold'),
+                         fg=RED if err_403 > 0 else FG2, bg=row_bg,
+                         width=6).grid(row=r+1, column=4, padx=2)
+                tk.Label(grid, text=str(fail_count), font=('Consolas', 9, 'bold'),
+                         fg=ORANGE if fail_count > 0 else FG2, bg=row_bg,
+                         width=6).grid(row=r+1, column=5, padx=2)
 
     # ============================================================
     # Logging
