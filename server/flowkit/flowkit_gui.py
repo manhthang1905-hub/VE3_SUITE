@@ -1125,19 +1125,17 @@ class FlowKitGUI(tk.Tk):
         def _tail_gateway_log():
             try:
                 with open(log_file, 'r', encoding='utf-8', errors='replace') as rf:
-                    rf.seek(0, 2)  # seek to end
+                    rf.seek(0, 2)
                     while self._started:
-                        line = rf.readline()
-                        if line:
+                        lines = rf.readlines()
+                        for line in lines[-10:]:  # max 10 lines per cycle
                             line = line.strip()
-                            if any(k in line.upper() for k in [
-                                'RECOVERY', 'SELFHEAL', 'SELF-HEAL', 'COOLING',
-                                'ROTATE', 'ACCOUNT', '403', '429', 'QUOTA',
-                                'FAILED', 'ERROR', 'DONE', 'WARNING'
+                            if line and any(k in line.upper() for k in [
+                                'RECOVERY', 'SELFHEAL', 'COOLING', 'ROTATE',
+                                'ACCOUNT', '403', '429', 'QUOTA', 'FAILED', 'ERROR'
                             ]):
                                 self._log(f"[GW] {line}", "WARN" if 'ERROR' in line.upper() or 'FAIL' in line.upper() else "INFO")
-                        else:
-                            time.sleep(1)
+                        time.sleep(5)
             except Exception:
                 pass
         threading.Thread(target=_tail_gateway_log, daemon=True).start()
@@ -1412,12 +1410,21 @@ class FlowKitGUI(tk.Tk):
         line = f"[{ts}] [{level}] {msg}"
         print(line)
         self._logs.append(line)
+        if len(self._logs) > 500:
+            self._logs = self._logs[-300:]
 
         def _append():
-            self._log_text.config(state='normal')
-            self._log_text.insert('end', line + '\n', level)
-            self._log_text.see('end')
-            self._log_text.config(state='disabled')
+            try:
+                self._log_text.config(state='normal')
+                self._log_text.insert('end', line + '\n', level)
+                # Trim log widget to 500 lines (prevent memory leak)
+                line_count = int(self._log_text.index('end-1c').split('.')[0])
+                if line_count > 500:
+                    self._log_text.delete('1.0', f'{line_count - 300}.0')
+                self._log_text.see('end')
+                self._log_text.config(state='disabled')
+            except Exception:
+                pass
 
         try:
             self.after(0, _append)
