@@ -627,15 +627,41 @@ class FlowKitGUI(tk.Tk):
                 pass
 
             # ── Step 1: DrissionPage setup (login + navigate + project) ──
+            # Retry with different accounts if login fails (like old server)
             setup_ok = False
-            max_setup_attempts = 3
+            tried_accounts = set()
+            attempt = 0
             with setup_sem:
-                for attempt in range(1, max_setup_attempts + 1):
+                while not setup_ok:
+                    attempt += 1
                     if attempt > 1:
                         from chrome_setup import _kill_chrome_for_dir
                         _kill_chrome_for_dir(chrome_dir)
+                        # Try different account on login failure
+                        if account_info and accounts and len(accounts) > 1:
+                            old_email = account_info['id']
+                            tried_accounts.add(old_email)
+                            # Find untried account
+                            new_acc = None
+                            for a in accounts:
+                                if a['email'] not in tried_accounts:
+                                    new_acc = a
+                                    break
+                            if new_acc:
+                                account_info = {
+                                    'id': new_acc['email'],
+                                    'password': new_acc['password'],
+                                    'totp_secret': new_acc.get('totp_secret', ''),
+                                }
+                                self._log(f"[{name}] Login fail → doi account: {old_email} → {new_acc['email']}", "WARN")
+                            elif len(tried_accounts) >= len(accounts):
+                                # All accounts tried, reset and wait longer
+                                tried_accounts.clear()
+                                self._log(f"[{name}] Het account, cho 60s roi thu lai tu dau...", "WARN")
+                                time.sleep(60)
+                                continue
                         delay = min(10 * attempt, 60)
-                        self._log(f"[{name}] Retry setup ({attempt}/{max_setup_attempts}), cho {delay}s...", "WARN")
+                        self._log(f"[{name}] Retry setup (lan {attempt}), cho {delay}s...", "WARN")
                         time.sleep(delay)
                     try:
                         from chrome_setup import setup_chrome
@@ -650,14 +676,10 @@ class FlowKitGUI(tk.Tk):
                             instance_name=name,
                         )
                         if ok:
-                            self._log(f"[{name}] Chrome setup OK", "OK")
+                            self._log(f"[{name}] Chrome setup OK (account: {account_info['id'] if account_info else '?'})", "OK")
                             setup_ok = True
-                            break
                     except Exception as e:
                         self._log(f"[{name}] Setup error: {e}", "ERROR")
-                if not setup_ok:
-                    self._log(f"[{name}] Setup FAILED after {max_setup_attempts} attempts — skipping instance", "ERROR")
-                    return
 
             # ── Step 2: Start agent (port 9222+i now free) ──
             self._start_agent(inst_cfg)

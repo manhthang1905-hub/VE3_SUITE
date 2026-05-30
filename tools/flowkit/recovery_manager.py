@@ -526,27 +526,42 @@ class RecoveryManager:
             elif cfg.get("ipv6"):
                 proxy_arg = f"socks5://127.0.0.1:{proxy_port}"
 
-            # Step 3: setup_chrome — y hệt startup (with 180s timeout to prevent hang)
+            # Step 3: setup_chrome — retry with different account if login fails
             account = self._get_account(instance_name)
             from chrome_setup import setup_chrome
-            try:
-                ok = await asyncio.wait_for(
-                    loop.run_in_executor(
-                        None,
-                        lambda: setup_chrome(
-                            chrome_dir=chrome_dir, ext_dir=ext_dir, port=debug_port,
-                            account=account, proxy_arg=proxy_arg,
-                            log_func=lambda msg: logger.info("[Recovery] %s: %s", instance_name, msg),
-                            instance_name=instance_name,
+            ok = False
+            for _login_try in range(3):
+                try:
+                    ok = await asyncio.wait_for(
+                        loop.run_in_executor(
+                            None,
+                            lambda: setup_chrome(
+                                chrome_dir=chrome_dir, ext_dir=ext_dir, port=debug_port,
+                                account=account, proxy_arg=proxy_arg,
+                                log_func=lambda msg: logger.info("[Recovery] %s: %s", instance_name, msg),
+                                instance_name=instance_name,
+                            ),
                         ),
-                    ),
-                    timeout=180,
-                )
-            except asyncio.TimeoutError:
-                logger.warning("[Recovery] %s: setup_chrome TIMEOUT (180s)", instance_name)
-                ok = False
+                        timeout=180,
+                    )
+                except asyncio.TimeoutError:
+                    logger.warning("[Recovery] %s: setup_chrome TIMEOUT (180s)", instance_name)
+                    ok = False
+                if ok:
+                    break
+                # Login failed → try different account
+                if account and self._all_accounts:
+                    old_email = account.get("id", "?")
+                    self._rotate_account_for_instance(instance_name)
+                    account = self._get_account(instance_name)
+                    logger.warning("[Recovery] %s: setup fail → doi account %s → %s",
+                                   instance_name, old_email, account.get("id", "?") if account else "?")
+                    await loop.run_in_executor(None, lambda: kill_chrome(instance_name))
+                    await asyncio.sleep(3)
+                else:
+                    break
             if not ok:
-                logger.warning("[Recovery] %s: setup_chrome FAILED", instance_name)
+                logger.warning("[Recovery] %s: setup_chrome FAILED after %d attempts", instance_name, _login_try + 1)
                 return False
 
             # Step 4: Start Chrome subprocess (extension connects to agent)
