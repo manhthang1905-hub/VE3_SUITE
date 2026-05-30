@@ -261,6 +261,7 @@ class RecoveryManager:
             return
 
         task = asyncio.create_task(self._run_recovery(instance_name))
+        task.add_done_callback(lambda t, n=instance_name: self._recovery_tasks.pop(n, None))
         self._recovery_tasks[instance_name] = task
 
     def trigger_self_heal(self, instance_name: str, rotate_ipv6: bool = False):
@@ -281,6 +282,7 @@ class RecoveryManager:
             return
 
         task = asyncio.create_task(self._run_self_heal(instance_name, rotate_ipv6))
+        task.add_done_callback(lambda t, n=instance_name: self._recovery_tasks.pop(n, None))
         self._recovery_tasks[instance_name] = task
 
     async def _run_self_heal(self, instance_name: str, rotate_ipv6: bool = False):

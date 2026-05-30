@@ -1275,6 +1275,9 @@ class FlowKitGUI(tk.Tk):
         """Poll gateway every 60s (light on resources)."""
         while self._started:
             self._poll_once()
+            # Cleanup dead processes (prevent zombie accumulation)
+            with self._proc_lock:
+                self._processes = [p for p in self._processes if p.poll() is None]
             time.sleep(60)
 
     def _update_monitor(self):
@@ -1285,9 +1288,17 @@ class FlowKitGUI(tk.Tk):
         self._stat_labels['failed'].config(text=str(self._stats.get('total_failed', 0)))
         self._stat_labels['cooling'].config(text=str(self._stats.get('instances_cooling', 0)))
 
-        # Workers — only show ENABLED instances (not disabled ones)
-        for widget in self._workers_frame.winfo_children():
-            widget.destroy()
+        # Workers — only rebuild if count changed (prevent widget leak)
+        active_count = len([w for w in self._workers if w.get('healthy') or w.get('available')
+                           or w.get('cooling') or w.get('extension_connected')])
+        prev_count = getattr(self, '_prev_worker_count', -1)
+        if active_count != prev_count:
+            for widget in self._workers_frame.winfo_children():
+                widget.destroy()
+            self._prev_worker_count = active_count
+        else:
+            # Update existing cards in-place (skip rebuild)
+            pass
 
         # Load current account mapping
         account_map = {}

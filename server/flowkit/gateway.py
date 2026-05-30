@@ -1466,8 +1466,8 @@ async def trigger_recovery(name: str):
 async def cleanup_loop():
     """Periodically clean old tasks to prevent memory leak."""
     while True:
-        await asyncio.sleep(600)  # every 10 min
-        cutoff = time.time() - 3600  # 1 hour old
+        await asyncio.sleep(300)  # every 5 min
+        cutoff = time.time() - 600  # 10 min old (was 1 hour — too long for 24/7)
         stale = [tid for tid, t in tasks.items()
                  if t.get("created_at", 0) < cutoff and t["status"] in ("completed", "failed")]
         # Also clean tasks stuck in processing/queued for > 30 min (watchdog missed)
