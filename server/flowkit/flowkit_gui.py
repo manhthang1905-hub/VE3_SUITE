@@ -949,19 +949,26 @@ class FlowKitGUI(tk.Tk):
                 name = instances[i]['name'] if i < len(instances) else f"flowkit-{i}"
                 port = base_port + i
 
-                # Wait for IPv6 to become bindable (NDP/DAD takes 1-3s)
+                # Wait for IPv6 to become routable (NDP/DAD + outbound test)
                 ip_ready = False
                 for attempt in range(5):
                     time.sleep(1)
                     try:
                         s = socket.socket(socket.AF_INET6, socket.SOCK_STREAM)
+                        s.settimeout(3)
                         s.bind((ipv6, 0))
+                        s.connect(("2607:f8b0:4004:800::200e", 80))
                         s.close()
                         ip_ready = True
+                        self._log(f"[{name}] IPv6 {ipv6} routable (attempt {attempt+1})", "OK")
                         break
                     except OSError:
+                        try:
+                            s.close()
+                        except Exception:
+                            pass
                         if attempt == 4:
-                            self._log(f"[{name}] IPv6 {ipv6} not ready after 5s — skip proxy", "WARN")
+                            self._log(f"[{name}] IPv6 {ipv6} cannot route after 5 attempts — skip proxy", "WARN")
 
                 if not ip_ready:
                     continue
