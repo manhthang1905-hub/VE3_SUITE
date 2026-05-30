@@ -117,6 +117,12 @@ class RecoveryManager:
         self._recovery_tasks: Dict[str, asyncio.Task] = {}
         self._accounts: Dict[str, dict] = {}
 
+        # Account pool for rotation (like chrome_pool.py get_next_account)
+        self._all_accounts: List[dict] = []
+        self._account_usage: Dict[str, int] = {}
+        self._account_last_assigned: Dict[str, int] = {}
+        self._account_assign_seq = 0
+
     def set_accounts(self, accounts: List[dict], instances: List[dict]):
         """Map accounts to instances for auto-login during recovery."""
         for i, inst in enumerate(instances):
@@ -129,6 +135,62 @@ class RecoveryManager:
                     "password": acc.get("password", ""),
                     "totp_secret": acc.get("totp_secret", ""),
                 }
+
+    def set_account_pool(self, accounts: List[dict]):
+        """Set full account pool for rotation on 403."""
+        self._all_accounts = []
+        for acc in accounts:
+            self._all_accounts.append({
+                "id": acc.get("email", acc.get("id", "")),
+                "password": acc.get("password", ""),
+                "totp_secret": acc.get("totp_secret", ""),
+            })
+        logger.info("[Recovery] Account pool: %d accounts", len(self._all_accounts))
+
+    def get_next_account(self, current_email: str) -> Optional[dict]:
+        """Pick least-used account, different from current. Like chrome_pool.py."""
+        if not self._all_accounts:
+            return None
+
+        # Get emails currently assigned to instances
+        in_use = {acc.get("id", "") for acc in self._accounts.values()}
+
+        best = None
+        best_score = None
+        for acc in self._all_accounts:
+            email = acc["id"]
+            if email == current_email:
+                continue
+            if email in in_use:
+                continue
+            usage = self._account_usage.get(email, 0)
+            last_assigned = self._account_last_assigned.get(email, -1)
+            score = (usage, last_assigned, email)
+            if best_score is None or score < best_score:
+                best_score = score
+                best = acc
+
+        # Fallback: allow in-use accounts (all accounts busy — rotate anyway)
+        if not best:
+            for acc in self._all_accounts:
+                email = acc["id"]
+                if email == current_email:
+                    continue
+                usage = self._account_usage.get(email, 0)
+                last_assigned = self._account_last_assigned.get(email, -1)
+                score = (usage, last_assigned, email)
+                if best_score is None or score < best_score:
+                    best_score = score
+                    best = acc
+
+        if best:
+            self._account_assign_seq += 1
+            self._account_usage[best["id"]] = self._account_usage.get(best["id"], 0) + 1
+            self._account_last_assigned[best["id"]] = self._account_assign_seq
+            logger.info("[Recovery] Next account: %s (used=%dx)",
+                        best["id"], self._account_usage[best["id"]])
+
+        return best
 
     def _get_account(self, instance_name: str) -> Optional[dict]:
         if instance_name in self._accounts:
@@ -235,6 +297,7 @@ class RecoveryManager:
             new_ip = ""
             if rotate_ipv6:
                 new_ip = self._rotate_ipv6(instance_name, "self_heal")
+                self._rotate_account_for_instance(instance_name)
 
             success = await self._restart_chrome_instance(instance_name, new_ipv6=new_ip)
 
@@ -278,6 +341,8 @@ class RecoveryManager:
 
             if not success and level <= 2 and state.level_attempts[2] < self.level2_max:
                 state.level_attempts[2] += 1
+                # Rotate account before L2 restart
+                self._rotate_account_for_instance(instance_name)
                 success = await self._level2_rotate_ipv6(instance_name)
                 if not success:
                     logger.info("[Recovery] %s Level 2 failed, escalating to L3", instance_name)
@@ -287,6 +352,8 @@ class RecoveryManager:
             if not success and state.level_attempts[3] < self.level3_max:
                 state.recovery_level = 3
                 state.level_attempts[3] += 1
+                # Rotate account before L3 restart
+                self._rotate_account_for_instance(instance_name)
                 success = await self._level3_restart_chrome(instance_name)
 
             if not success and all(
@@ -342,6 +409,31 @@ class RecoveryManager:
         except Exception as e:
             logger.warning("[Recovery] %s Level 1 error: %s", instance_name, e)
             return False
+
+    def _rotate_account_for_instance(self, instance_name: str):
+        """Rotate to a different account for this instance (on 403/429 recovery)."""
+        current = self._accounts.get(instance_name, {})
+        current_email = current.get("id", "")
+        new_acc = self.get_next_account(current_email)
+        if new_acc and new_acc["id"] != current_email:
+            logger.info("[Recovery] %s: ACCOUNT ROTATION %s → %s",
+                        instance_name, current_email, new_acc["id"])
+            self._accounts[instance_name] = new_acc
+            # Update .flow_accounts.json
+            try:
+                import json as _json
+                accounts_file = BASE_DIR / "config" / ".flow_accounts.json"
+                if accounts_file.exists():
+                    data = _json.loads(accounts_file.read_text(encoding="utf-8"))
+                else:
+                    data = {}
+                data[instance_name] = new_acc
+                accounts_file.write_text(_json.dumps(data), encoding="utf-8")
+            except Exception:
+                pass
+        else:
+            logger.info("[Recovery] %s: no other account available, keeping %s",
+                        instance_name, current_email)
 
     def _rotate_ipv6(self, instance_name: str, reason: str = "403_recovery") -> str:
         """Get new IPv6 from pool. Returns new IP or empty string."""

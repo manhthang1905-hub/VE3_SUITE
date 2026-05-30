@@ -210,6 +210,25 @@ class FlowKitGUI(tk.Tk):
                                      font=('Segoe UI', 9))
         self._chrome_info.pack(padx=6, pady=3, anchor='w')
 
+        chrome_row = tk.Frame(f, bg=BG2)
+        chrome_row.pack(fill='x', padx=6, pady=(0, 4))
+        tk.Label(chrome_row, text="So luong Chrome:", bg=BG2, fg=FG,
+                 font=('Segoe UI', 9)).pack(side='left')
+        self._chrome_count_var = tk.StringVar(value="Tat ca")
+        max_chromes = max(1, len(getattr(self, '_chrome_dirs', [])) or 6)
+        chrome_options = ["Tat ca"] + [str(i) for i in range(1, max_chromes + 1)]
+        self._chrome_count_combo = ttk.Combobox(
+            chrome_row, textvariable=self._chrome_count_var,
+            values=chrome_options, state='readonly', width=8)
+        self._chrome_count_combo.pack(side='left', padx=6)
+        # Load saved value
+        try:
+            saved = self._settings.get('chrome_count', 0)
+            if saved and saved > 0:
+                self._chrome_count_combo.set(str(saved))
+        except Exception:
+            pass
+
         # ── Google Accounts ──
         f = tk.LabelFrame(p, text=" Tai khoan Google (email|password|2fa_secret) ",
                           bg=BG2, fg=FG2, font=('Segoe UI', 8, 'bold'), bd=1, relief='groove')
@@ -498,6 +517,22 @@ class FlowKitGUI(tk.Tk):
                 accounts_file.write_text(json.dumps(account_map), encoding="utf-8")
             except Exception:
                 pass
+
+        # Chrome count limiting
+        chrome_count = 0
+        try:
+            val = self._chrome_count_combo.get()
+            if val != "Tat ca":
+                chrome_count = int(val)
+        except Exception:
+            pass
+        if chrome_count > 0:
+            for i, inst in enumerate(instances):
+                inst['enabled'] = (i < chrome_count)
+            self._log(f"Chrome count limited to {chrome_count}/{len(instances)}", "INFO")
+        # Save chrome_count
+        self._settings['chrome_count'] = chrome_count
+        self._save_gui_settings()
 
         # Per-instance pipeline: each instance independently does
         # setup_chrome → start_agent → wait_ready → start_chrome → apply_cdp

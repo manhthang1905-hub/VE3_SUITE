@@ -1062,7 +1062,36 @@ async def startup():
         instances_config=enabled_configs,
         on_cooldown_clear=_clear_cooldown,
     )
-    logger.info("Recovery manager initialized (IPv6: %s)", "yes" if _recovery_manager._ipv6_client else "no")
+    # Load account pool for rotation
+    try:
+        import json as _json
+        accounts_file = Path(__file__).parent / "config" / ".flow_accounts.json"
+        if accounts_file.exists():
+            acc_data = _json.loads(accounts_file.read_text(encoding="utf-8"))
+            all_accounts = list(acc_data.values())
+            _recovery_manager.set_account_pool(all_accounts)
+    except Exception:
+        pass
+    # Also try flowkit_gui.json accounts
+    try:
+        gui_file = Path(__file__).parent / "config" / "flowkit_gui.json"
+        if gui_file.exists():
+            gui_data = _json.loads(gui_file.read_text(encoding="utf-8"))
+            raw = gui_data.get("accounts", "")
+            if raw and not _recovery_manager._all_accounts:
+                pool = []
+                for line in raw.strip().split("\n"):
+                    parts = line.strip().split("|")
+                    if len(parts) >= 2:
+                        pool.append({"id": parts[0].strip(), "password": parts[1].strip(),
+                                     "totp_secret": parts[2].strip() if len(parts) >= 3 else ""})
+                if pool:
+                    _recovery_manager.set_account_pool(pool)
+    except Exception:
+        pass
+    logger.info("Recovery manager initialized (IPv6: %s, accounts: %d)",
+                "yes" if _recovery_manager._ipv6_client else "no",
+                len(_recovery_manager._all_accounts))
 
     # Start health checker
     asyncio.create_task(health_check_loop())
