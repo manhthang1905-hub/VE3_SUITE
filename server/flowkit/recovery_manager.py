@@ -512,7 +512,8 @@ class RecoveryManager:
             # Step 2: Full IPv6 setup + update proxy
             proxy_arg = ""
             if new_ipv6:
-                old_ipv6 = state.current_ipv6 if state.current_ipv6 != new_ipv6 else ""
+                _state = self.states.get(instance_name)
+                old_ipv6 = _state.current_ipv6 if _state and _state.current_ipv6 != new_ipv6 else ""
                 gateway = ""
                 try:
                     # Compute gateway from IP
