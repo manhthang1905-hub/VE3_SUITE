@@ -628,16 +628,14 @@ class FlowKitGUI(tk.Tk):
 
             # ── Step 1: DrissionPage setup (login + navigate + project) ──
             setup_ok = False
-            attempt = 0
+            max_setup_attempts = 3
             with setup_sem:
-                while not setup_ok:
-                    attempt += 1
+                for attempt in range(1, max_setup_attempts + 1):
                     if attempt > 1:
-                        # Kill zombie Chrome truoc khi retry
                         from chrome_setup import _kill_chrome_for_dir
                         _kill_chrome_for_dir(chrome_dir)
                         delay = min(10 * attempt, 60)
-                        self._log(f"[{name}] Retry setup (lan {attempt}), cho {delay}s...", "WARN")
+                        self._log(f"[{name}] Retry setup ({attempt}/{max_setup_attempts}), cho {delay}s...", "WARN")
                         time.sleep(delay)
                     try:
                         from chrome_setup import setup_chrome
@@ -654,8 +652,12 @@ class FlowKitGUI(tk.Tk):
                         if ok:
                             self._log(f"[{name}] Chrome setup OK", "OK")
                             setup_ok = True
+                            break
                     except Exception as e:
                         self._log(f"[{name}] Setup error: {e}", "ERROR")
+                if not setup_ok:
+                    self._log(f"[{name}] Setup FAILED after {max_setup_attempts} attempts — skipping instance", "ERROR")
+                    return
 
             # ── Step 2: Start agent (port 9222+i now free) ──
             self._start_agent(inst_cfg)
