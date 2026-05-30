@@ -1187,7 +1187,7 @@ def login_google_chrome(account_info: dict, chrome_portable: str = None, profile
                 '''
                 email_input.run_js(js_set_email)
                 log(f"Email filled via JS")
-                time.sleep(0.5)
+                time.sleep(2)
 
                 # Nháº¥n Enter hoáº·c click Next
                 log("Clicking Next button...")
@@ -1222,10 +1222,17 @@ def login_google_chrome(account_info: dict, chrome_portable: str = None, profile
                     log("Password page NOT detected after 20s, continuing anyway...", "WARN")
                     time.sleep(2)
 
-                # v1.0.651: Cho page render day du truoc khi tuong tac
-                # Du da detect password page, can cho JS/DOM on dinh
+                # Cho page render + verify password input exists truoc khi tiep tuc
                 log("Waiting 5s for page to fully render...")
                 time.sleep(5)
+                # Double check: password input phai ton tai truoc khi buoc tiep
+                for _pw_check in range(10):
+                    has_pw = driver.run_js('return !!document.querySelector("input[type=password]");')
+                    if has_pw:
+                        break
+                    time.sleep(1)
+                    if _pw_check == 9:
+                        log("Password input NOT found after 10s extra wait", "WARN")
             else:
                 log("Email input not found!", "WARN")
         except Exception as e:
