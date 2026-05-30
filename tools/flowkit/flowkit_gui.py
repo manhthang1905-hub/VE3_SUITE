@@ -1243,21 +1243,21 @@ class FlowKitGUI(tk.Tk):
             # Header
             hdr = tk.Frame(self._accounts_frame, bg=BG2)
             hdr.pack(fill='x')
-            for col, (text, w_pct) in enumerate([
-                ("Account", 30), ("Status", 12), ("Assigned", 15), ("Used", 8)
-            ]):
+            for text in ["Account", "Status", "Worker", "OK", "403", "Fail"]:
                 tk.Label(hdr, text=text, font=('Segoe UI', 8, 'bold'), fg=FG2, bg=BG2,
-                         anchor='w').pack(side='left', padx=4)
+                         anchor='w').pack(side='left', padx=4, expand=True)
 
             for acc in self._account_stats:
                 row = tk.Frame(self._accounts_frame, bg=BG, bd=0)
                 row.pack(fill='x', pady=1)
 
                 email = acc.get('email', '?')
-                short_email = email.split('@')[0][:16]
+                short_email = email.split('@')[0][:14]
                 status = acc.get('status', 'pool')
                 assigned = acc.get('assigned_to', '')
-                usage = acc.get('usage_count', 0)
+                ok_count = acc.get('ok', 0)
+                fail_count = acc.get('fail', 0)
+                err_403 = acc.get('errors_403', 0)
 
                 if status == 'active':
                     stat_text = "ACTIVE"
@@ -1267,13 +1267,21 @@ class FlowKitGUI(tk.Tk):
                     stat_fg = FG2
 
                 tk.Label(row, text=short_email, font=('Consolas', 8), fg=FG, bg=BG,
-                         anchor='w', width=18).pack(side='left', padx=4)
+                         anchor='w').pack(side='left', padx=4, expand=True)
                 tk.Label(row, text=stat_text, font=('Consolas', 8, 'bold'), fg=stat_fg, bg=BG,
-                         width=8).pack(side='left')
-                tk.Label(row, text=assigned or "-", font=('Consolas', 8), fg=BLUE if assigned else FG2,
-                         bg=BG, width=12).pack(side='left')
-                tk.Label(row, text=str(usage), font=('Consolas', 8), fg=FG2, bg=BG,
-                         width=5).pack(side='left')
+                         width=7).pack(side='left', padx=2)
+                tk.Label(row, text=assigned.replace('flowkit-', 'fk') if assigned else "-",
+                         font=('Consolas', 8), fg=BLUE if assigned else FG2, bg=BG,
+                         width=5).pack(side='left', padx=2)
+                tk.Label(row, text=str(ok_count), font=('Consolas', 8),
+                         fg=GREEN if ok_count > 0 else FG2, bg=BG,
+                         width=4).pack(side='left', padx=2)
+                tk.Label(row, text=str(err_403), font=('Consolas', 8),
+                         fg=RED if err_403 > 0 else FG2, bg=BG,
+                         width=4).pack(side='left', padx=2)
+                tk.Label(row, text=str(fail_count), font=('Consolas', 8),
+                         fg=ORANGE if fail_count > 0 else FG2, bg=BG,
+                         width=4).pack(side='left', padx=2)
 
     # ============================================================
     # Logging

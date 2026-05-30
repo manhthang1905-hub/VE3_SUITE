@@ -150,6 +150,7 @@ class AgentInstance:
 
     def mark_403(self):
         self.consecutive_403 += 1
+        _track_account(self.name, "403")
         if self.consecutive_403 >= MAX_CONSECUTIVE_403:
             self.cooling_until = time.time() + COOLDOWN_SECONDS
             logger.warning("[%s] Marked as COOLING for %ds (consecutive 403: %d)",
@@ -160,11 +161,13 @@ class AgentInstance:
     def mark_success(self):
         self.consecutive_403 = 0
         self.total_completed += 1
+        _track_account(self.name, "ok")
         if _recovery_manager:
             _recovery_manager.on_instance_success(self.name)
 
     def mark_failed(self):
         self.total_failed += 1
+        _track_account(self.name, "fail")
 
     def status_dict(self) -> dict:
         return {
@@ -199,6 +202,31 @@ stats = {
     "total_failed": 0,
     "start_time": time.time(),
 }
+# Per-account stats: email → {ok, fail, errors_403}
+_account_stats: dict[str, dict] = {}
+
+
+def _get_instance_account(instance_name: str) -> str:
+    """Get email of account currently assigned to instance."""
+    if _recovery_manager:
+        acc = _recovery_manager._accounts.get(instance_name, {})
+        return acc.get("id", "")
+    return ""
+
+
+def _track_account(instance_name: str, result_type: str):
+    """Track OK/fail/403 per account. result_type: 'ok', 'fail', '403'."""
+    email = _get_instance_account(instance_name)
+    if not email:
+        return
+    if email not in _account_stats:
+        _account_stats[email] = {"ok": 0, "fail": 0, "errors_403": 0}
+    if result_type == "ok":
+        _account_stats[email]["ok"] += 1
+    elif result_type == "fail":
+        _account_stats[email]["fail"] += 1
+    elif result_type == "403":
+        _account_stats[email]["errors_403"] += 1
 
 
 def _clear_cooldown(instance_name: str):
@@ -1379,17 +1407,20 @@ async def list_accounts():
     for acc in _recovery_manager._all_accounts:
         email = acc.get("id", "")
         usage = _recovery_manager._account_usage.get(email, 0)
-        # Find which instance currently uses this account
         assigned_to = ""
         for inst_name, inst_acc in _recovery_manager._accounts.items():
             if inst_acc.get("id") == email:
                 assigned_to = inst_name
                 break
+        acc_st = _account_stats.get(email, {})
         result.append({
             "email": email,
             "usage_count": usage,
             "assigned_to": assigned_to,
             "status": "active" if assigned_to else "pool",
+            "ok": acc_st.get("ok", 0),
+            "fail": acc_st.get("fail", 0),
+            "errors_403": acc_st.get("errors_403", 0),
         })
     return {"accounts": result}
 
