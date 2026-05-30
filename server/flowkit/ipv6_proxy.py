@@ -153,6 +153,10 @@ class IPv6SocksProxy:
             self._thread = threading.Thread(target=self._accept_loop, daemon=True)
             self._thread.start()
 
+            # Watch override file for IP changes (recovery writes here)
+            self._override_thread = threading.Thread(target=self._watch_override_file, daemon=True)
+            self._override_thread.start()
+
             self.log(f"[IPv6-Proxy] [v] Started on localhost:{self.listen_port}")
             if self.ipv6_address:
                 self.log(f"[IPv6-Proxy] → Routing via: {self.ipv6_address}")
@@ -229,6 +233,22 @@ class IPv6SocksProxy:
         except Exception as e:
             self.log(f"[IPv6-Proxy] Rotate error: {e}")
             self._rotating = False
+
+    def _watch_override_file(self):
+        """Poll .ipv6_override_{port} file every 10s for IP changes from recovery."""
+        from pathlib import Path
+        override_file = Path(__file__).parent / f".ipv6_override_{self.listen_port}"
+        while self._running:
+            try:
+                if override_file.exists():
+                    new_ip = override_file.read_text().strip()
+                    if new_ip and new_ip != self.ipv6_address:
+                        self.log(f"[IPv6-Proxy] Override detected: {self.ipv6_address} → {new_ip}")
+                        self.set_ipv6(new_ip)
+                        start_ndp_keepalive(new_ip, "", self.listen_port, self.log)
+            except Exception:
+                pass
+            time.sleep(10)
 
     def _accept_loop(self):
         """Accept incoming connections."""
