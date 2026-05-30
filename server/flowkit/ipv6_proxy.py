@@ -62,9 +62,16 @@ class IPv6SocksProxy:
         self._server_socket = None
         self._running = False
         self._thread = None
+        self._rotate_thread = None
         # v1.0.635: Track connect failures de detect IPv6 chet
         self._connect_failures = 0
         self._connect_successes = 0
+        self._last_fail_time = 0
+        self._fail_in_window = 0
+        self._rotating = False
+        self.worker_name = ""
+        self.pool_url = ""
+        self.iface = "Ethernet"
 
     def start(self) -> bool:
         """Start the proxy server in background thread."""
@@ -103,12 +110,84 @@ class IPv6SocksProxy:
 
     def set_ipv6(self, ipv6_address: str):
         """Update IPv6 address for outgoing connections."""
+        old_ip = self.ipv6_address
         self.ipv6_address = ipv6_address
-        # v1.0.635: Reset counters khi doi IPv6
         self._connect_failures = 0
         self._connect_successes = 0
         self._connect_fail_logged = 0
+        self._fail_in_window = 0
+        self._rotating = False
         self.log(f"[IPv6-Proxy] → Now using: {ipv6_address}")
+
+    def _auto_rotate_ipv6(self):
+        """Auto rotate IPv6 when connect timeout detected (3 fails in 30s)."""
+        if self._rotating or not self.pool_url or not self.ipv6_address:
+            return
+        self._rotating = True
+        self.log(f"[IPv6-Proxy] AUTO ROTATE: {self.ipv6_address} dead, requesting new IP...")
+
+        try:
+            import requests
+            old_ip = self.ipv6_address
+            resp = requests.post(f"{self.pool_url}/api/rotate_ip", json={
+                "ip": old_ip,
+                "reason": "timeout",
+                "worker": self.worker_name or f"flowkit_proxy_{self.listen_port}",
+            }, timeout=10)
+            data = resp.json()
+            new_ip = data.get("new_ip") or data.get("ip", "")
+            new_gw = data.get("gateway", "")
+
+            if not new_ip or new_ip == old_ip:
+                self.log(f"[IPv6-Proxy] Pool returned no new IP")
+                self._rotating = False
+                return
+
+            self.log(f"[IPv6-Proxy] Got new IP: {new_ip}")
+
+            import subprocess as _sp
+            # Remove old IP
+            try:
+                _sp.run(f'netsh interface ipv6 delete address "{self.iface}" {old_ip}',
+                        shell=True, capture_output=True, timeout=10)
+            except Exception:
+                pass
+            # Add new IP
+            try:
+                _sp.run(f'netsh interface ipv6 add address "{self.iface}" {new_ip}',
+                        shell=True, capture_output=True, timeout=10)
+            except Exception:
+                pass
+            # Update route
+            if new_gw:
+                onlink = ':'.join(new_gw.split(':')[:4]) + '::/64'
+                try:
+                    _sp.run(f'netsh interface ipv6 add route {onlink} "{self.iface}"',
+                            shell=True, capture_output=True, timeout=10)
+                except Exception:
+                    pass
+            # NDP ping
+            gw = new_gw or ':'.join(new_ip.split(':')[:4]) + '::1'
+            try:
+                _sp.run(f'ping -6 -n 2 -w 3000 -S {new_ip} {gw}',
+                        shell=True, capture_output=True, timeout=10)
+            except Exception:
+                pass
+
+            time.sleep(2)
+            # Update proxy
+            self.set_ipv6(new_ip)
+            # Update override file
+            try:
+                from pathlib import Path
+                Path(f".ipv6_override_{self.listen_port}").write_text(new_ip)
+            except Exception:
+                pass
+            self.log(f"[IPv6-Proxy] ROTATED: {old_ip} → {new_ip}")
+
+        except Exception as e:
+            self.log(f"[IPv6-Proxy] Rotate error: {e}")
+            self._rotating = False
 
     def _accept_loop(self):
         """Accept incoming connections."""
@@ -274,14 +353,21 @@ class IPv6SocksProxy:
             return sock
 
         except Exception as e:
-            # v1.0.635: Track failures
             self._connect_failures += 1
-            # v1.0.611: Log target de debug connectivity
             if not getattr(self, '_connect_fail_logged', 0) or getattr(self, '_connect_fail_logged', 0) < 3:
                 self.log(f"[IPv6-Proxy] IPv6 connect failed to {host}:{port}: {e}")
                 self._connect_fail_logged = getattr(self, '_connect_fail_logged', 0) + 1
             else:
                 self.log(f"[IPv6-Proxy] IPv6 connect failed: {e}")
+            # Track fails in 30s window → auto rotate after 3
+            now = time.time()
+            if now - self._last_fail_time > 30:
+                self._fail_in_window = 0
+            self._last_fail_time = now
+            self._fail_in_window += 1
+            if self._fail_in_window >= 3 and not self._rotating and self.pool_url:
+                t = threading.Thread(target=self._auto_rotate_ipv6, daemon=True)
+                t.start()
             # Write health file for gateway to detect dead IPv6
             try:
                 from pathlib import Path

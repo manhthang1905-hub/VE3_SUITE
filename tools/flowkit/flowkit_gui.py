@@ -978,7 +978,7 @@ class FlowKitGUI(tk.Tk):
                 port = base_port + i
 
                 ip_ready = False
-                for attempt in range(5):
+                for attempt in range(8):
                     time.sleep(1)
                     try:
                         s = socket.socket(socket.AF_INET6, socket.SOCK_STREAM)
@@ -987,25 +987,27 @@ class FlowKitGUI(tk.Tk):
                         s.connect(("2607:f8b0:4004:800::200e", 80))
                         s.close()
                         ip_ready = True
-                        self._log(f"[{name}] IPv6 {ipv6} routable (attempt {attempt+1})", "OK")
+                        self._log(f"[{name}] IPv6 {ipv6} routable ({attempt+1}s)", "OK")
                         break
                     except OSError:
                         try:
                             s.close()
                         except Exception:
                             pass
-                        if attempt == 4:
-                            self._log(f"[{name}] IPv6 {ipv6} cannot route after 5 attempts — skip proxy", "WARN")
+                        if attempt == 7:
+                            self._log(f"[{name}] IPv6 {ipv6} cannot route after 8s — skip proxy", "WARN")
 
                 if not ip_ready:
                     continue
 
-                # Start SOCKS5 proxy
+                # Start SOCKS5 proxy with auto-rotate
                 proxy = IPv6SocksProxy(
                     listen_port=port,
                     ipv6_address=ipv6,
                     log_func=lambda m, _n=name: self._log(f"[{_n}] {m}", "INFO")
                 )
+                proxy.pool_url = pool_url
+                proxy.worker_name = name
                 if proxy.start():
                     proxy_port_map[i] = port
                     self._ipv6_proxies.append(proxy)
