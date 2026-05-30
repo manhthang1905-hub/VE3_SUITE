@@ -386,26 +386,29 @@ def _wait_for_textarea(page, timeout: int = 30) -> bool:
 
 
 def _do_login(chrome_dir: Path, account: dict, proxy_arg: str = "", worker_id: int = 0,
-              window_args: list = None) -> bool:
+              window_args: list = None, debug_port: int = 0) -> bool:
     """Login Google — goi google_login.py y nguyen server cu _auto_login."""
     try:
         sys.path.insert(0, str(BASE_DIR))
         from google_login import login_google_chrome
         portable_exe = chrome_dir / "GoogleChromePortable.exe"
+        # Use debug_port if provided (FlowKit uses 19200+i, not 9222+i)
+        effective_worker_id = worker_id
+        if debug_port > 0:
+            effective_worker_id = debug_port - 9222  # google_login does 9222 + worker_id
         try:
             return login_google_chrome(
                 account_info=account,
                 chrome_portable=str(portable_exe),
-                worker_id=worker_id,
+                worker_id=effective_worker_id,
                 proxy_arg=proxy_arg,
                 window_args=window_args,
             )
         except TypeError:
-            # Fallback: old google_login without window_args
             return login_google_chrome(
                 account_info=account,
                 chrome_portable=str(portable_exe),
-                worker_id=worker_id,
+                worker_id=effective_worker_id,
                 proxy_arg=proxy_arg,
             )
     except Exception as e:
@@ -569,7 +572,7 @@ def setup_chrome(
         _kill_chrome_for_dir(chrome_dir)
 
         _clear_chrome_data(chrome_dir, log)
-        login_ok = _do_login(chrome_dir, account, proxy_arg, _worker_id, window_args)
+        login_ok = _do_login(chrome_dir, account, proxy_arg, _worker_id, window_args, debug_port=port)
         if not login_ok:
             log("Login FAILED: %s" % account['id'])
             return False
@@ -618,7 +621,7 @@ def setup_chrome(
         _kill_chrome_for_dir(chrome_dir)
 
         _clear_chrome_data(chrome_dir, log)
-        login_ok = _do_login(chrome_dir, account, proxy_arg, _worker_id, window_args)
+        login_ok = _do_login(chrome_dir, account, proxy_arg, _worker_id, window_args, debug_port=port)
         if not login_ok:
             log("Login FAILED!")
             return False
@@ -831,7 +834,7 @@ def ensure_chrome_ready(
                     pass
                 _kill_chrome_for_dir(chrome_dir)
                 _clear_chrome_data(chrome_dir, log)
-                login_ok = _do_login(chrome_dir, account, proxy_arg, _worker_id)
+                login_ok = _do_login(chrome_dir, account, proxy_arg, _worker_id, debug_port=debug_port)
                 if not login_ok:
                     log("Login FAILED!")
                     return False
