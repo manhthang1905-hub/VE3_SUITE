@@ -104,6 +104,7 @@ class FlowKitGUI(tk.Tk):
         self._workers = []
         self._stats = {}
         self._poll_thread = None
+        self._account_stats = []
         self._settings = self._load_gui_settings()
 
         self.protocol("WM_DELETE_WINDOW", self._on_close)
@@ -287,6 +288,13 @@ class FlowKitGUI(tk.Tk):
         self._workers_frame = tk.Frame(wf, bg=BG2)
         self._workers_frame.pack(fill='x', padx=4, pady=4)
         self._worker_cards = {}
+
+        # Accounts overview
+        af = tk.LabelFrame(p, text=" Accounts ", bg=BG2, fg=FG2,
+                           font=('Segoe UI', 8, 'bold'), bd=1, relief='groove')
+        af.pack(fill='x', padx=8, pady=2)
+        self._accounts_frame = tk.Frame(af, bg=BG2)
+        self._accounts_frame.pack(fill='x', padx=4, pady=4)
 
         # Logs
         lf = tk.LabelFrame(p, text=" Logs ", bg=BG2, fg=FG2,
@@ -1124,17 +1132,22 @@ class FlowKitGUI(tk.Tk):
     # Monitoring
     # ============================================================
     def _poll_loop(self):
-        """Poll gateway /api/instances every 3s."""
+        """Poll gateway /api/instances + /api/accounts every 3s."""
         import requests as req
         port = int(self._gateway_port.get() or 5100)
         while self._started:
             try:
                 r = req.get(f"http://127.0.0.1:{port}/api/instances", timeout=3)
-                data = r.json()
-                self._workers = data.get('instances', [])
+                self._workers = r.json().get('instances', [])
 
                 r2 = req.get(f"http://127.0.0.1:{port}/api/status", timeout=3)
                 self._stats = r2.json()
+
+                try:
+                    r3 = req.get(f"http://127.0.0.1:{port}/api/accounts", timeout=3)
+                    self._account_stats = r3.json().get('accounts', [])
+                except Exception:
+                    pass
 
                 self.after(0, self._update_monitor)
             except Exception:
@@ -1221,6 +1234,46 @@ class FlowKitGUI(tk.Tk):
                      font=('Consolas', 8), fg=c403_fg, bg=BG).pack()
             tk.Label(card, text=f"OK:{w.get('total_completed', 0)} F:{w.get('total_failed', 0)}",
                      font=('Consolas', 8), fg=FG2, bg=BG).pack(pady=(0, 4))
+
+        # Accounts overview
+        for widget in self._accounts_frame.winfo_children():
+            widget.destroy()
+
+        if self._account_stats:
+            # Header
+            hdr = tk.Frame(self._accounts_frame, bg=BG2)
+            hdr.pack(fill='x')
+            for col, (text, w_pct) in enumerate([
+                ("Account", 30), ("Status", 12), ("Assigned", 15), ("Used", 8)
+            ]):
+                tk.Label(hdr, text=text, font=('Segoe UI', 8, 'bold'), fg=FG2, bg=BG2,
+                         anchor='w').pack(side='left', padx=4)
+
+            for acc in self._account_stats:
+                row = tk.Frame(self._accounts_frame, bg=BG, bd=0)
+                row.pack(fill='x', pady=1)
+
+                email = acc.get('email', '?')
+                short_email = email.split('@')[0][:16]
+                status = acc.get('status', 'pool')
+                assigned = acc.get('assigned_to', '')
+                usage = acc.get('usage_count', 0)
+
+                if status == 'active':
+                    stat_text = "ACTIVE"
+                    stat_fg = GREEN
+                else:
+                    stat_text = "pool"
+                    stat_fg = FG2
+
+                tk.Label(row, text=short_email, font=('Consolas', 8), fg=FG, bg=BG,
+                         anchor='w', width=18).pack(side='left', padx=4)
+                tk.Label(row, text=stat_text, font=('Consolas', 8, 'bold'), fg=stat_fg, bg=BG,
+                         width=8).pack(side='left')
+                tk.Label(row, text=assigned or "-", font=('Consolas', 8), fg=BLUE if assigned else FG2,
+                         bg=BG, width=12).pack(side='left')
+                tk.Label(row, text=str(usage), font=('Consolas', 8), fg=FG2, bg=BG,
+                         width=5).pack(side='left')
 
     # ============================================================
     # Logging

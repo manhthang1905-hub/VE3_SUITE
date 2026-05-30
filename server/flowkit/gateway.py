@@ -1370,6 +1370,30 @@ async def list_instances():
     return {"instances": [i.status_dict() for i in instances]}
 
 
+@app.get("/api/accounts")
+async def list_accounts():
+    """Account pool stats for GUI display."""
+    if not _recovery_manager:
+        return {"accounts": []}
+    result = []
+    for acc in _recovery_manager._all_accounts:
+        email = acc.get("id", "")
+        usage = _recovery_manager._account_usage.get(email, 0)
+        # Find which instance currently uses this account
+        assigned_to = ""
+        for inst_name, inst_acc in _recovery_manager._accounts.items():
+            if inst_acc.get("id") == email:
+                assigned_to = inst_name
+                break
+        result.append({
+            "email": email,
+            "usage_count": usage,
+            "assigned_to": assigned_to,
+            "status": "active" if assigned_to else "pool",
+        })
+    return {"accounts": result}
+
+
 @app.post("/api/reset-instance/{name}")
 async def reset_instance(name: str):
     """Manually reset cooling state for an instance."""
