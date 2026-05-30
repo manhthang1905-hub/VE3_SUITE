@@ -426,9 +426,20 @@ class FlowKitGUI(tk.Tk):
         ipv6_cfg['pool_url'] = self._pool_url.get().strip()
         config['ipv6'] = ipv6_cfg
 
-        # Update instance count based on detected Chromes
+        # Update instance count based on detected Chromes + chrome_count limit
+        chrome_count = 0
+        try:
+            val = self._chrome_count_combo.get()
+            if val != "Tat ca":
+                chrome_count = int(val)
+        except Exception:
+            pass
+
         instances = []
         for i, chrome_dir in enumerate(self._chrome_dirs):
+            enabled = True
+            if chrome_count > 0 and i >= chrome_count:
+                enabled = False
             instances.append({
                 'name': f'flowkit-{i + 1}',
                 'chrome_path': f'{chrome_dir.name}/App/Chrome-bin/chrome.exe',
@@ -436,7 +447,7 @@ class FlowKitGUI(tk.Tk):
                 'extension_dir': f'flowkit_extensions/ext_{8100 + i}',
                 'api_port': 8100 + i,
                 'ws_port': 9222 + i,
-                'enabled': True,
+                'enabled': enabled,
             })
         config['instances'] = instances
 
