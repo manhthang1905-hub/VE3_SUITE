@@ -392,13 +392,22 @@ def _do_login(chrome_dir: Path, account: dict, proxy_arg: str = "", worker_id: i
         sys.path.insert(0, str(BASE_DIR))
         from google_login import login_google_chrome
         portable_exe = chrome_dir / "GoogleChromePortable.exe"
-        return login_google_chrome(
-            account_info=account,
-            chrome_portable=str(portable_exe),
-            worker_id=worker_id,
-            proxy_arg=proxy_arg,
-            window_args=window_args,
-        )
+        try:
+            return login_google_chrome(
+                account_info=account,
+                chrome_portable=str(portable_exe),
+                worker_id=worker_id,
+                proxy_arg=proxy_arg,
+                window_args=window_args,
+            )
+        except TypeError:
+            # Fallback: old google_login without window_args
+            return login_google_chrome(
+                account_info=account,
+                chrome_portable=str(portable_exe),
+                worker_id=worker_id,
+                proxy_arg=proxy_arg,
+            )
     except Exception as e:
         logger.error("[Setup] Login error: %s", e)
         return False
