@@ -297,6 +297,11 @@ class RecoveryManager:
             new_ip = ""
             if rotate_ipv6:
                 new_ip = self._rotate_ipv6(instance_name, "self_heal")
+                if not new_ip and self._ipv6_client:
+                    logger.warning("[SelfHeal] %s: NO IPv6 available from pool — PAUSING instance. "
+                                   "Will retry when pool has IPs.", instance_name)
+                    state.recovering = False
+                    return
                 self._rotate_account_for_instance(instance_name)
 
             success = await self._restart_chrome_instance(instance_name, new_ipv6=new_ip)

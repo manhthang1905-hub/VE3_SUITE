@@ -297,20 +297,29 @@ async def health_check_loop():
                     # Backoff check
                     if now < inst.next_self_heal_at:
                         continue
-                    # Trigger self-heal
+                    # Trigger self-heal — rotate IPv6+account from 2nd attempt
                     inst.self_heal_failures += 1
-                    rotate_ipv6 = (inst.self_heal_failures > 1
-                                   and inst.self_heal_failures % 3 == 0)
+                    if inst.self_heal_failures > 5:
+                        if inst.self_heal_failures == 6:
+                            logger.warning(
+                                "[SelfHeal] %s: 5 attempts failed — PAUSING 10min "
+                                "(possible: no IPv6, all accounts blocked, or Chrome crash)",
+                                inst.name)
+                        inst.next_self_heal_at = now + 600
+                        if inst.self_heal_failures > 8:
+                            inst.self_heal_failures = 0
+                        continue
+                    rotate_ipv6 = inst.self_heal_failures >= 2
                     logger.warning(
                         "[SelfHeal] %s down for %d checks (healthy=%s, ext=%s, flowKey=%s), "
                         "attempt #%d%s",
                         inst.name, inst.consecutive_unhealthy,
                         inst.healthy, inst.extension_connected,
                         inst.flow_key_present, inst.self_heal_failures,
-                        " + IPv6 rotate" if rotate_ipv6 else "",
+                        " + IPv6/account rotate" if rotate_ipv6 else "",
                     )
                     _recovery_manager.trigger_self_heal(inst.name, rotate_ipv6=rotate_ipv6)
-                    delay = min(30 * inst.self_heal_failures, 120)
+                    delay = min(60 * inst.self_heal_failures, 300)
                     inst.next_self_heal_at = now + delay
 
             # Proxy health check: detect dead IPv6 (y het chrome_pool.py lines 1017-1025)

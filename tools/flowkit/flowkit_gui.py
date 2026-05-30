@@ -489,16 +489,36 @@ class FlowKitGUI(tk.Tk):
             except Exception as e:
                 self._log(f"IPv6 Pool error: {e}", "ERROR")
 
+        # Chrome count limiting — BEFORE IPv6 to only request IPs we need
+        chrome_count = 0
+        try:
+            val = self._chrome_count_combo.get()
+            if val != "Tat ca":
+                chrome_count = int(val)
+        except Exception:
+            pass
+        if chrome_count > 0:
+            for i, inst in enumerate(instances):
+                inst['enabled'] = (i < chrome_count)
+            self._log(f"Chrome count limited to {chrome_count}/{len(instances)}", "INFO")
+        self._settings['chrome_count'] = chrome_count
+        self._save_settings()
+
         # Get IPv6 addresses and start per-instance SOCKS5 proxies
         ipv6_map = {}
         proxy_port_map = {}
         PROXY_BASE_PORT = 1081
         if pool_client:
-            self._log("Getting IPv6 addresses from pool...", "INFO")
+            enabled_names = [inst['name'] for inst in instances if inst.get('enabled', True)]
+            self._log(f"Getting IPv6 for {len(enabled_names)} instances: {', '.join(enabled_names)}", "INFO")
             for i, inst in enumerate(instances):
                 if not inst.get('enabled', True) or i >= len(self._chrome_dirs):
                     continue
-                result = pool_client.get_ip(worker=f"flowkit_{inst['name']}")
+                try:
+                    result = pool_client.get_ip(worker=f"flowkit_{inst['name']}")
+                except Exception as e:
+                    self._log(f"[{inst['name']}] IPv6 pool error: {e}", "ERROR")
+                    result = None
                 if result:
                     ipv6_map[i] = {
                         'ip': result['ip'],
@@ -510,18 +530,23 @@ class FlowKitGUI(tk.Tk):
                     proxy_port = PROXY_BASE_PORT + (inst['api_port'] - 8100)
                     override_file = BASE_DIR / f".ipv6_override_{proxy_port}"
                     if override_file.exists():
-                        old_ip = override_file.read_text().strip()
+                        try:
+                            old_ip = override_file.read_text().strip()
+                        except Exception:
+                            old_ip = ""
                         if old_ip:
                             ipv6_map[i] = {'ip': old_ip, 'gateway': ''}
-                            self._log(f"[{inst['name']}] Pool no IP → fallback to old: {old_ip}", "WARN")
+                            self._log(f"[{inst['name']}] Pool no IP → fallback: {old_ip}", "WARN")
                     if i not in ipv6_map:
-                        self._log(f"[{inst['name']}] No IPv6 available!", "ERROR")
+                        self._log(f"[{inst['name']}] No IPv6 available — will use direct connection", "WARN")
 
             if ipv6_map:
-                self._log("Setting up SOCKS5 proxies for each IPv6...", "INFO")
+                self._log(f"Setting up SOCKS5 proxies ({len(ipv6_map)} IPs)...", "INFO")
                 self._setup_ipv6_proxies(ipv6_map, instances, PROXY_BASE_PORT, proxy_port_map)
+            else:
+                self._log("WARNING: No IPv6 for any instance — using direct connection", "WARN")
 
-        # Save accounts mapping for recovery auto-login
+        # Save accounts mapping for recovery auto-login + account pool
         if accounts:
             account_map = {}
             for i, inst in enumerate(instances):
@@ -539,22 +564,6 @@ class FlowKitGUI(tk.Tk):
                 accounts_file.write_text(json.dumps(account_map), encoding="utf-8")
             except Exception:
                 pass
-
-        # Chrome count limiting
-        chrome_count = 0
-        try:
-            val = self._chrome_count_combo.get()
-            if val != "Tat ca":
-                chrome_count = int(val)
-        except Exception:
-            pass
-        if chrome_count > 0:
-            for i, inst in enumerate(instances):
-                inst['enabled'] = (i < chrome_count)
-            self._log(f"Chrome count limited to {chrome_count}/{len(instances)}", "INFO")
-        # Save chrome_count
-        self._settings['chrome_count'] = chrome_count
-        self._save_settings()
 
         # Per-instance pipeline: each instance independently does
         # setup_chrome → start_agent → wait_ready → start_chrome → apply_cdp
