@@ -1149,11 +1149,26 @@ class FlowKitGUI(tk.Tk):
         self._stat_labels['failed'].config(text=str(self._stats.get('total_failed', 0)))
         self._stat_labels['cooling'].config(text=str(self._stats.get('instances_cooling', 0)))
 
-        # Workers
+        # Workers — only show ENABLED instances (not disabled ones)
         for widget in self._workers_frame.winfo_children():
             widget.destroy()
 
-        for i, w in enumerate(self._workers):
+        # Load current account mapping
+        account_map = {}
+        try:
+            accounts_file = BASE_DIR / "config" / ".flow_accounts.json"
+            if accounts_file.exists():
+                account_map = json.loads(accounts_file.read_text(encoding="utf-8"))
+        except Exception:
+            pass
+
+        active_workers = [w for w in self._workers if w.get('healthy') or w.get('available')
+                          or w.get('cooling') or w.get('extension_connected')]
+        if not active_workers:
+            active_workers = [w for w in self._workers
+                              if w.get('name', '') in account_map or w.get('total_completed', 0) > 0]
+
+        for i, w in enumerate(active_workers):
             card = tk.Frame(self._workers_frame, bg=BG, bd=1, relief='solid',
                             highlightbackground=BORDER)
             card.pack(side='left', fill='y', padx=2, pady=2, expand=True)
@@ -1162,6 +1177,10 @@ class FlowKitGUI(tk.Tk):
             if w.get('cooling'):
                 border_color = ORANGE
                 status_text = f"COOL {w.get('cooling_remaining', 0)}s"
+                status_fg = ORANGE
+            elif w.get('quota_exhausted'):
+                border_color = ORANGE
+                status_text = f"429 {w.get('quota_remaining', 0)}s"
                 status_fg = ORANGE
             elif w.get('available'):
                 border_color = GREEN
@@ -1178,22 +1197,29 @@ class FlowKitGUI(tk.Tk):
 
             card.config(highlightbackground=border_color)
 
-            tk.Label(card, text=w.get('name', '?'), font=('Segoe UI', 9, 'bold'),
+            name = w.get('name', '?')
+            tk.Label(card, text=name, font=('Segoe UI', 9, 'bold'),
                      fg=FG, bg=BG).pack(padx=6, pady=(4, 1))
             tk.Label(card, text=status_text, font=('Segoe UI', 8, 'bold'),
                      fg=status_fg, bg=BG).pack()
+
+            # Account email
+            acc = account_map.get(name, {})
+            email = acc.get('id', '')
+            if email:
+                short = email.split('@')[0][:12]
+                tk.Label(card, text=short, font=('Consolas', 7),
+                         fg=BLUE, bg=BG).pack()
 
             ext = "Ext: OK" if w.get('extension_connected') else "Ext: --"
             ext_fg = GREEN if w.get('extension_connected') else RED
             tk.Label(card, text=ext, font=('Consolas', 8), fg=ext_fg, bg=BG).pack()
 
-            key = "Key: OK" if w.get('flow_key_present') else "Key: --"
-            key_fg = GREEN if w.get('flow_key_present') else FG2
-            tk.Label(card, text=key, font=('Consolas', 8), fg=key_fg, bg=BG).pack()
-
-            tk.Label(card, text=f"403: {w.get('consecutive_403', 0)}",
-                     font=('Consolas', 8), fg=FG2, bg=BG).pack()
-            tk.Label(card, text=f"Done: {w.get('total_completed', 0)} | Fail: {w.get('total_failed', 0)}",
+            c403 = w.get('consecutive_403', 0)
+            c403_fg = RED if c403 > 0 else FG2
+            tk.Label(card, text=f"403: {c403}",
+                     font=('Consolas', 8), fg=c403_fg, bg=BG).pack()
+            tk.Label(card, text=f"OK:{w.get('total_completed', 0)} F:{w.get('total_failed', 0)}",
                      font=('Consolas', 8), fg=FG2, bg=BG).pack(pady=(0, 4))
 
     # ============================================================
