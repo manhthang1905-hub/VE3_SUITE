@@ -1063,8 +1063,8 @@ async def startup():
         on_cooldown_clear=_clear_cooldown,
     )
     # Load account pool for rotation
+    import json as _json
     try:
-        import json as _json
         accounts_file = Path(__file__).parent / "config" / ".flow_accounts.json"
         if accounts_file.exists():
             acc_data = _json.loads(accounts_file.read_text(encoding="utf-8"))

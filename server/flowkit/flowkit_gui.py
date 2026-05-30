@@ -104,6 +104,7 @@ class FlowKitGUI(tk.Tk):
         self._workers = []
         self._stats = {}
         self._poll_thread = None
+        self._settings = self._load_gui_settings()
 
         self.protocol("WM_DELETE_WINDOW", self._on_close)
 
@@ -341,6 +342,14 @@ class FlowKitGUI(tk.Tk):
         except Exception:
             pass
 
+    def _load_gui_settings(self) -> dict:
+        try:
+            if SETTINGS_FILE.exists():
+                return json.loads(SETTINGS_FILE.read_text(encoding='utf-8'))
+        except Exception:
+            pass
+        return {}
+
     def _save_settings(self):
         SETTINGS_FILE.parent.mkdir(parents=True, exist_ok=True)
         data = {
@@ -350,7 +359,9 @@ class FlowKitGUI(tk.Tk):
             'max_403': int(self._max_403.get() or 3),
             'cooldown': int(self._cooldown.get() or 300),
             'accounts': self._accounts_text.get('1.0', 'end').strip(),
+            'chrome_count': self._settings.get('chrome_count', 0),
         }
+        self._settings = data
         SETTINGS_FILE.write_text(json.dumps(data, indent=2), encoding='utf-8')
 
     # ============================================================
@@ -532,7 +543,7 @@ class FlowKitGUI(tk.Tk):
             self._log(f"Chrome count limited to {chrome_count}/{len(instances)}", "INFO")
         # Save chrome_count
         self._settings['chrome_count'] = chrome_count
-        self._save_gui_settings()
+        self._save_settings()
 
         # Per-instance pipeline: each instance independently does
         # setup_chrome → start_agent → wait_ready → start_chrome → apply_cdp
