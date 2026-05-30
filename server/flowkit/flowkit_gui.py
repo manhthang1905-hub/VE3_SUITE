@@ -303,18 +303,36 @@ class FlowKitGUI(tk.Tk):
         self._accounts_frame = tk.Frame(af, bg=BG2)
         self._accounts_frame.pack(fill='x', padx=4, pady=4)
 
-        # Logs
-        lf = tk.LabelFrame(p, text=" Logs ", bg=BG2, fg=FG2,
+        # Logs — hidden by default, toggle with button
+        log_header = tk.Frame(p, bg=BG)
+        log_header.pack(fill='x', padx=8, pady=(2, 0))
+        self._log_visible = False
+        self._log_toggle_btn = tk.Button(
+            log_header, text="▶ Show Logs", command=self._toggle_logs,
+            bg=BG2, fg=FG2, font=('Segoe UI', 8), relief='flat', cursor='hand2', bd=0)
+        self._log_toggle_btn.pack(side='left')
+
+        self._log_frame = tk.LabelFrame(p, text=" Logs ", bg=BG2, fg=FG2,
                            font=('Segoe UI', 8, 'bold'), bd=1, relief='groove')
-        lf.pack(fill='both', expand=True, padx=8, pady=2)
+        # NOT packed — hidden by default
         self._log_text = scrolledtext.ScrolledText(
-            lf, bg=BG, fg=FG2, font=('Consolas', 8),
+            self._log_frame, bg=BG, fg=FG2, font=('Consolas', 8),
             bd=0, wrap='word', state='disabled')
         self._log_text.pack(fill='both', expand=True, padx=2, pady=2)
         self._log_text.tag_config('OK', foreground=GREEN)
         self._log_text.tag_config('WARN', foreground=YELLOW)
         self._log_text.tag_config('ERROR', foreground=RED)
         self._log_text.tag_config('INFO', foreground=FG2)
+
+    def _toggle_logs(self):
+        if self._log_visible:
+            self._log_frame.pack_forget()
+            self._log_toggle_btn.config(text="▶ Show Logs")
+            self._log_visible = False
+        else:
+            self._log_frame.pack(fill='both', expand=True, padx=8, pady=2)
+            self._log_toggle_btn.config(text="▼ Hide Logs")
+            self._log_visible = True
 
     # ============================================================
     # Chrome Detection
@@ -1424,11 +1442,14 @@ class FlowKitGUI(tk.Tk):
         if len(self._logs) > 500:
             self._logs = self._logs[-300:]
 
+        # Only update widget when logs are visible (save CPU/RAM)
+        if not getattr(self, '_log_visible', False):
+            return
+
         def _append():
             try:
                 self._log_text.config(state='normal')
                 self._log_text.insert('end', line + '\n', level)
-                # Trim log widget to 500 lines (prevent memory leak)
                 line_count = int(self._log_text.index('end-1c').split('.')[0])
                 if line_count > 500:
                     self._log_text.delete('1.0', f'{line_count - 300}.0')
