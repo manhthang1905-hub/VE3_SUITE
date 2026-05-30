@@ -740,6 +740,25 @@ class FlowKitGUI(tk.Tk):
             except Exception as e:
                 self._log(f"[{name}] CDP apply error: {e}", "WARN")
 
+            # Minimize Chrome to save GPU/RAM (extension works when minimized)
+            try:
+                from DrissionPage import ChromiumPage, ChromiumOptions
+                _co = ChromiumOptions()
+                _co.set_address(f"127.0.0.1:{debug_port}")
+                _p = ChromiumPage(_co)
+                _p.run_cdp('Browser.getWindowForTarget')
+                info = _p.run_cdp('Browser.getWindowForTarget')
+                wid = info.get('windowId')
+                if wid:
+                    _p.run_cdp('Browser.setWindowBounds', windowId=wid,
+                               bounds={'windowState': 'minimized'})
+                try:
+                    _p.disconnect()
+                except Exception:
+                    pass
+            except Exception:
+                pass
+
             self._log(f"[{name}] Instance READY", "OK")
             with ready_lock:
                 ready_count[0] += 1
