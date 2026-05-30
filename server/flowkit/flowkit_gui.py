@@ -367,7 +367,10 @@ class FlowKitGUI(tk.Tk):
 
     def _get_chrome_count(self) -> int:
         try:
-            val = self._chrome_count_combo.get()
+            combo = getattr(self, '_chrome_count_combo', None)
+            if not combo:
+                return self._settings.get('chrome_count', 0) if hasattr(self, '_settings') else 0
+            val = combo.get()
             if val == "Tat ca":
                 return 0
             return int(val)

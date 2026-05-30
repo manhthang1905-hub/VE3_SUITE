@@ -1120,14 +1120,7 @@ def login_google_chrome(account_info: dict, chrome_portable: str = None, profile
 
         # Má»Ÿ Chrome má»›i
         driver = ChromiumPage(options)
-        if window_args:
-            try:
-                from chrome_setup import _enforce_window_layout as _fw
-                _fw(driver, window_args, log)
-            except Exception:
-                _enforce_window_layout(driver, chrome_exe, worker_id)
-        else:
-            _enforce_window_layout(driver, chrome_exe, worker_id)
+        _enforce_window_layout(driver, chrome_exe, worker_id)
 
         # v1.0.650: Inject fingerprint NGAY SAU khi mo Chrome, TRUOC khi navigate
         # Dam bao login va tao anh dung CUNG fingerprint â†’ Google khong detect thay doi
