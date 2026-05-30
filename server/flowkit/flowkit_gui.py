@@ -350,6 +350,15 @@ class FlowKitGUI(tk.Tk):
             pass
         return {}
 
+    def _get_chrome_count(self) -> int:
+        try:
+            val = self._chrome_count_combo.get()
+            if val == "Tat ca":
+                return 0
+            return int(val)
+        except Exception:
+            return 0
+
     def _save_settings(self):
         SETTINGS_FILE.parent.mkdir(parents=True, exist_ok=True)
         data = {
@@ -359,7 +368,7 @@ class FlowKitGUI(tk.Tk):
             'max_403': int(self._max_403.get() or 3),
             'cooldown': int(self._cooldown.get() or 300),
             'accounts': self._accounts_text.get('1.0', 'end').strip(),
-            'chrome_count': self._settings.get('chrome_count', 0),
+            'chrome_count': self._get_chrome_count(),
         }
         self._settings = data
         SETTINGS_FILE.write_text(json.dumps(data, indent=2), encoding='utf-8')
@@ -814,6 +823,8 @@ class FlowKitGUI(tk.Tk):
 
         if proxy_arg:
             args.append(f"--proxy-server={proxy_arg}")
+        else:
+            args.append("--no-proxy-server")
         # Open directly to Flow page so extension can capture flow key
         args.append("https://labs.google/fx/tools/flow")
 
