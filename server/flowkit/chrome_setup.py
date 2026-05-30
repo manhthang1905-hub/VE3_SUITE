@@ -419,18 +419,26 @@ def _kill_chrome_for_dir(chrome_dir: Path):
         return
     import subprocess
     dir_name = chrome_dir.name
+    # First: force kill by matching command line
     for exe_name in ("chrome.exe", "GoogleChromePortable.exe"):
         try:
-            subprocess.run(
+            # Find PIDs matching this Chrome dir
+            result = subprocess.run(
                 ['wmic', 'process', 'where',
                  f"name='{exe_name}' and CommandLine like '%{dir_name}%'",
-                 'call', 'terminate'],
-                capture_output=True, timeout=10,
+                 'get', 'processid'],
+                capture_output=True, text=True, timeout=10,
                 creationflags=0x08000000,
             )
+            for line in result.stdout.split('\n'):
+                pid = line.strip()
+                if pid.isdigit():
+                    subprocess.run(['taskkill', '/F', '/T', '/PID', pid],
+                                   capture_output=True, timeout=10,
+                                   creationflags=0x08000000)
         except Exception:
             pass
-    time.sleep(3)
+    time.sleep(5)
     # Clean profile lock files so Chrome can start fresh
     profile_dir = chrome_dir / "Data" / "profile" / "Default"
     for lock_name in ("SingletonLock", "SingletonCookie", "SingletonSocket"):
@@ -823,7 +831,7 @@ def ensure_chrome_ready(
                     pass
                 _kill_chrome_for_dir(chrome_dir)
                 _clear_chrome_data(chrome_dir, log)
-                login_ok = _do_login(chrome_dir, account, proxy_arg, _worker_id, window_args)
+                login_ok = _do_login(chrome_dir, account, proxy_arg, _worker_id)
                 if not login_ok:
                     log("Login FAILED!")
                     return False

@@ -507,7 +507,7 @@ class RecoveryManager:
                 )
             except asyncio.TimeoutError:
                 logger.warning("[Recovery] %s: kill_chrome timeout (30s), forcing continue", instance_name)
-            await asyncio.sleep(3)
+            await asyncio.sleep(8)  # Windows needs 5-10s to release debug port
 
             # Step 2: Full IPv6 setup + update proxy
             proxy_arg = ""
