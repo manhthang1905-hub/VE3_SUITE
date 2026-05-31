@@ -373,11 +373,9 @@ class _ExtensionInstanceManager:
 
     @classmethod
     def get_agent_port_by_index(cls, server_index: int) -> Optional[int]:
-        """Compute port directly from index — no need for _instances dict."""
+        """Only return port if FULLY ready (extension connected + token)."""
         port = 8100 + server_index
         if cls.is_instance_ready(port):
-            return port
-        if cls._is_agent_alive(port):
             return port
         return None
 
