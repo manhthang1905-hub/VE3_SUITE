@@ -92,11 +92,12 @@ class FlowExtensionAuth:
         self._log("[ExtAuth] Auto-starting (login + agent + Chrome)...")
         sys.path.insert(0, str(flowkit_dir))
 
-        # Get account from VE3 settings
-        account = None
-        try:
-            import yaml
-            for sf in [suite / "tools" / "ve3" / "config" / "settings.yaml"]:
+        # Account: use _account if set by caller, else read from settings
+        account = getattr(self, '_account', None)
+        if not account:
+            try:
+                import yaml
+                sf = suite / "tools" / "ve3" / "config" / "settings.yaml"
                 if sf.exists():
                     cfg = yaml.safe_load(sf.read_text(encoding="utf-8"))
                     accs = cfg.get("flow_accounts", [])
@@ -104,9 +105,8 @@ class FlowExtensionAuth:
                         a = accs[0]
                         account = {"id": a.get("email", ""), "password": a.get("password", ""),
                                    "totp_secret": a.get("totp_secret", "")}
-                    break
-        except Exception:
-            pass
+            except Exception:
+                pass
 
         # Step 1: setup_chrome — login + verify Flow + kill (y het FlowKit)
         if not FlowExtensionAuth._chrome_started:
