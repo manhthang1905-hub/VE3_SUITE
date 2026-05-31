@@ -2313,9 +2313,8 @@ foreach ($pid in $children) {{
         return ""
 
     def _load_nguon_sheet(self):
-        """Load sheet NGUON from Google Sheets (cached, loaded once)."""
+        """Load sheet NGUON from Google Sheets with retry (network hay loi)."""
         import socket
-        # Force IPv4 to avoid IPv6 timeout issues
         _orig_getaddrinfo = socket.getaddrinfo
         def _ipv4_only(*args, **kwargs):
             return [r for r in _orig_getaddrinfo(*args, **kwargs) if r[0] == socket.AF_INET]
@@ -2347,11 +2346,21 @@ foreach ($pid in $children) {{
                 "https://www.googleapis.com/auth/drive.readonly",
             ]
             creds = Credentials.from_service_account_file(str(sa_file), scopes=scopes)
-            gc = gspread.authorize(creds)
-            ws = gc.open(spreadsheet_name).worksheet("NGUON")
-            data = ws.get_all_values()
-            self._log(f"[TOPIC] Loaded sheet NGUON: {len(data)} rows")
-            return data
+            # Retry 3 lan (network hay timeout/loi ket noi)
+            for attempt in range(1, 4):
+                try:
+                    gc = gspread.authorize(creds)
+                    ws = gc.open(spreadsheet_name).worksheet("NGUON")
+                    data = ws.get_all_values()
+                    self._log(f"[TOPIC] Loaded sheet NGUON: {len(data)} rows")
+                    return data
+                except Exception as e:
+                    if attempt < 3:
+                        self._log(f"[TOPIC] Sheet NGUON load failed (attempt {attempt}/3): {e}", "WARN")
+                        _time.sleep(3 * attempt)
+                    else:
+                        self._log(f"[TOPIC] Sheet NGUON load FAILED after 3 attempts: {e}", "ERROR")
+            return []
         except Exception as e:
             self._log(f"[TOPIC] Cannot load sheet NGUON: {e}", "WARN")
             return []
@@ -2363,7 +2372,7 @@ foreach ($pid in $children) {{
         import concurrent.futures
 
         def _do():
-            if self.__class__._nguon_sheet_cache is None:
+            if not self.__class__._nguon_sheet_cache:
                 self.__class__._nguon_sheet_cache = self._load_nguon_sheet()
             if not self.__class__._nguon_sheet_cache:
                 return ""
