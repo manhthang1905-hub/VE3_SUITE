@@ -408,28 +408,24 @@ class FlowRuntimeAuthService:
 
         servers = self.settings.get("local_server_list", [])
 
-        # Find server index — by server_name from worker (correct), NOT by account (wrong)
-        server_index = None
-        if server_name:
-            for i, srv in enumerate(servers):
-                if srv.get("name", "") == server_name:
-                    server_index = i
-                    break
-        if server_index is None:
-            # Fallback: match by account
-            for i, srv in enumerate(servers):
+        # Compute port from server NAME (sv1→0, sv2→1, ...) — NOT from list position
+        # Worker list may only have 1 entry, so enumerate gives wrong index
+        import re as _re
+        server_index = 0
+        if not server_name:
+            for srv in servers:
                 srv_account = srv.get("flow_account_name", "")
                 bundle = srv.get("flow_account_bundle", "")
                 if account and (
                     (srv_account and srv_account == account.name) or
                     (account.email and account.email in bundle)
                 ):
-                    server_index = i
-                    server_name = srv.get("name", f"sv{i+1}")
+                    server_name = srv.get("name", "")
                     break
-        if server_index is None:
-            server_index = 0
-            server_name = servers[0].get("name", "sv1") if servers else "sv1"
+        if server_name:
+            m = _re.match(r'[a-zA-Z]+(\d+)', server_name)
+            if m:
+                server_index = int(m.group(1)) - 1
 
         api_port = 8100 + server_index
 
