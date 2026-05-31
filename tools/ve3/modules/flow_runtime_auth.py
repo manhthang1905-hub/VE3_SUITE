@@ -404,11 +404,20 @@ class FlowRuntimeAuthService:
             from modules.flow_extension_auth import FlowExtensionAuth
 
         agent_url = str(self.settings.get("flow_extension_agent_url", "http://127.0.0.1:8100")).strip()
-        ext_auth = FlowExtensionAuth(agent_url, log_func=lambda m: self.log(m, "INFO"))
+        chrome_path = self.chrome_path()
+        ext_auth = FlowExtensionAuth(
+            agent_url,
+            log_func=lambda m: self.log(m, "INFO"),
+            chrome_path=chrome_path,
+            suite_root=str(self.suite_root),
+        )
 
-        if not ext_auth.wait_ready(timeout=15):
-            self.log("[AUTH] Extension agent not ready — falling back to Chrome UI", "WARN")
-            return {"ok": "", "error": "extension agent not ready"}
+        # Auto-start Chrome + agent if not running
+        if not ext_auth.is_ready(timeout=3):
+            self.log("[AUTH] Extension agent not running — auto-starting...", "INFO")
+            if not ext_auth.auto_start():
+                self.log("[AUTH] Extension auto-start failed", "WARN")
+                return {"ok": "", "error": "extension agent not ready"}
 
         token = ext_auth.get_token()
         if not token:

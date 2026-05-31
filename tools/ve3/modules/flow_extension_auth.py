@@ -32,9 +32,135 @@ logger = logging.getLogger(__name__)
 class FlowExtensionAuth:
     """Get Flow auth data via FlowKit Chrome extension API."""
 
-    def __init__(self, agent_url: str = "http://127.0.0.1:8100", log_func=None):
+    _agent_proc = None
+    _chrome_started = False
+
+    def __init__(self, agent_url: str = "http://127.0.0.1:8100", log_func=None,
+                 chrome_path: str = "", extension_dir: str = "", suite_root: str = ""):
         self.agent_url = agent_url.rstrip("/")
         self._log = log_func or (lambda msg, *a: logger.info(msg))
+        self.chrome_path = chrome_path
+        self.extension_dir = extension_dir
+        self.suite_root = suite_root
+
+    def auto_start(self) -> bool:
+        """Auto-start Chrome (login) + agent — same flow as FlowKit GUI."""
+        if self.is_ready(timeout=3):
+            return True
+
+        import subprocess, sys, os, time
+
+        suite = Path(self.suite_root) if self.suite_root else Path(__file__).parent.parent.parent
+        flowkit_dir = suite / "tools" / "flowkit"
+        if not flowkit_dir.exists():
+            flowkit_dir = suite / "server" / "flowkit"
+
+        # Find Chrome
+        chrome_exe = self.chrome_path
+        if not chrome_exe:
+            for d in sorted(suite.glob("GoogleChromePortable*")):
+                exe = d / "GoogleChromePortable.exe"
+                if exe.exists():
+                    chrome_exe = str(exe)
+                    break
+        if not chrome_exe or not Path(chrome_exe).exists():
+            self._log("[ExtAuth] Chrome not found")
+            return False
+
+        chrome_dir = Path(chrome_exe).parent
+        ext_dir = self.extension_dir
+        if not ext_dir:
+            for d in [suite / "server" / "flowkit" / "flowkit_extensions" / "ext_8100",
+                      flowkit_dir / "flowkit_extensions" / "ext_8100"]:
+                if d.exists():
+                    ext_dir = str(d)
+                    break
+        if not ext_dir:
+            self._log("[ExtAuth] Extension dir not found")
+            return False
+
+        self._log("[ExtAuth] Auto-starting (login + agent + Chrome)...")
+        sys.path.insert(0, str(flowkit_dir))
+
+        # Get account from VE3 settings
+        account = None
+        try:
+            import yaml
+            for sf in [suite / "tools" / "ve3" / "config" / "settings.yaml"]:
+                if sf.exists():
+                    cfg = yaml.safe_load(sf.read_text(encoding="utf-8"))
+                    accs = cfg.get("flow_accounts", [])
+                    if accs:
+                        a = accs[0]
+                        account = {"id": a.get("email", ""), "password": a.get("password", ""),
+                                   "totp_secret": a.get("totp_secret", "")}
+                    break
+        except Exception:
+            pass
+
+        # Step 1: setup_chrome — login + verify Flow + kill (y het FlowKit)
+        if not FlowExtensionAuth._chrome_started:
+            try:
+                from chrome_setup import setup_chrome
+                from launcher import _write_chrome_prefs
+
+                for lock in ("SingletonLock", "SingletonCookie", "SingletonSocket"):
+                    try: (chrome_dir / "Data" / "profile" / lock).unlink()
+                    except: pass
+                _write_chrome_prefs(chrome_dir)
+
+                ok = setup_chrome(
+                    chrome_dir=chrome_dir, ext_dir=Path(ext_dir), port=19200,
+                    account=account, proxy_arg="",
+                    log_func=lambda msg: self._log(f"[ExtAuth] {msg}"),
+                    instance_name="ve3-main",
+                )
+                if not ok:
+                    self._log("[ExtAuth] setup_chrome FAILED")
+                    return False
+                self._log("[ExtAuth] Login + Flow OK")
+                FlowExtensionAuth._chrome_started = True
+            except Exception as e:
+                self._log(f"[ExtAuth] Setup error: {e}")
+                return False
+
+        # Step 2: Start agent (y het FlowKit GUI _start_agent)
+        if FlowExtensionAuth._agent_proc is None or FlowExtensionAuth._agent_proc.poll() is not None:
+            env = os.environ.copy()
+            env.update({"API_PORT": "8100", "WS_PORT": "9222", "INSTANCE_NAME": "ve3-main"})
+            try:
+                FlowExtensionAuth._agent_proc = subprocess.Popen(
+                    [sys.executable, "-m", "uvicorn", "agent.main:app",
+                     "--host", "127.0.0.1", "--port", "8100", "--log-level", "warning"],
+                    cwd=str(flowkit_dir), env=env,
+                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                    creationflags=0x08000000)
+                self._log("[ExtAuth] Agent started: port 8100")
+                time.sleep(3)
+            except Exception as e:
+                self._log(f"[ExtAuth] Agent error: {e}")
+                return False
+
+        # Step 3: Start Chrome subprocess with extension (y het FlowKit GUI _start_chrome)
+        args = [
+            str(chrome_exe),
+            f"--load-extension={ext_dir}",
+            "--remote-debugging-port=19200",
+            "--no-first-run", "--no-default-browser-check",
+            "--disable-background-timer-throttling",
+            "--disable-renderer-backgrounding",
+            "https://labs.google/fx/tools/flow?hl=en",
+        ]
+        try:
+            subprocess.Popen(args, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                             creationflags=0x08000000)
+            self._log("[ExtAuth] Chrome started with extension")
+            time.sleep(8)
+        except Exception as e:
+            self._log(f"[ExtAuth] Chrome error: {e}")
+            return False
+
+        return self.wait_ready(timeout=30)
 
     def is_ready(self, timeout: int = 5) -> bool:
         """Check if extension is connected and has token."""
