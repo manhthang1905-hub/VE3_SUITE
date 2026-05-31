@@ -500,13 +500,6 @@ class FlowRuntimeAuthService:
         self._write_auth_back(project_dir, wb, token, pid, purl, account.name if account else "")
         self.log(f"[AUTH] {project_dir.name}: token via extension for project {pid[:8]}...", "SUCCESS")
 
-        # Release Chrome — agent keeps token, Chrome tốn RAM không cần nữa
-        try:
-            from .flow_extension_auth import _ExtensionInstanceManager
-        except ImportError:
-            from modules.flow_extension_auth import _ExtensionInstanceManager
-        _ExtensionInstanceManager.release_chrome(server_name, log=lambda m: self.log(m, "INFO"))
-
         return {
             "ok": "1",
             "error": "",
