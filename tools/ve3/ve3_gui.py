@@ -6103,6 +6103,14 @@ Get-CimInstance Win32_Process |
 
             # Write config JSON for subprocess
             pair_cfg = self._build_project_pair_cfg(cfg, pair)
+            # Inject nguon metadata (reference_channel, psychology_reference_image)
+            nguon_meta = self._load_project_nguon_metadata(pd, code)
+            if nguon_meta.get("reference_channel"):
+                pair_cfg["reference_channel"] = nguon_meta["reference_channel"]
+            if nguon_meta.get("psychology_reference_image"):
+                pair_cfg["psychology_reference_image"] = nguon_meta["psychology_reference_image"]
+            if nguon_meta.get("topic"):
+                pair_cfg.setdefault("topic", nguon_meta["topic"])
             config_file = pd / ".ve3_run_config.json"
             with open(config_file, "w", encoding="utf-8") as f:
                 json.dump(pair_cfg, f, ensure_ascii=False, indent=2)
