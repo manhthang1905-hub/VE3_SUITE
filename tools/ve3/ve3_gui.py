@@ -2050,7 +2050,10 @@ class VE3App(ctk.CTk):
         self.excel_path = None; self.project_dir = None; self.wb = None
         self._t0 = None
         self.protocol("WM_DELETE_WINDOW", self._on_close)
-        self._load_config(); self._build(); self.after(400, self._boot)
+        self._load_config(); self._build()
+        # Cleanup phien truoc (Chrome/agent con sot lai)
+        self._kill_extension_instances()
+        self.after(400, self._boot)
 
     def _clear_all_queue_markers(self):
         try:
@@ -2170,11 +2173,46 @@ foreach ($pid in $children) {{
                 if proc and proc.poll() is None:
                     self._kill_pid_tree(proc.pid)
             self._kill_own_child_processes()
+            # Kill extension Chrome + agents (y het FlowKit _on_stop)
+            self._kill_extension_instances()
         finally:
             try:
                 self.destroy()
             except Exception:
                 pass
+
+    def _kill_extension_instances(self):
+        """Kill all Chrome + agent started by extension mode."""
+        import subprocess as _sp
+        try:
+            _sp.run(['wmic', 'process', 'where',
+                     "name='chrome.exe' and CommandLine like '%GoogleChromePortable%'",
+                     'call', 'terminate'],
+                    capture_output=True, timeout=10, creationflags=0x08000000)
+        except Exception:
+            pass
+        try:
+            _sp.run(['taskkill', '/F', '/IM', 'GoogleChromePortable.exe'],
+                    capture_output=True, timeout=5, creationflags=0x08000000)
+        except Exception:
+            pass
+        # Kill agents on ports 8100-8129
+        markers = ("flowkit\\\\agent", "flowkit/agent")
+        try:
+            proc = _sp.run(['wmic', 'process', 'where',
+                           'name="python.exe" or name="pythonw.exe"',
+                           'get', 'ProcessId,CommandLine', '/FORMAT:CSV'],
+                          capture_output=True, text=True, timeout=8, creationflags=0x08000000)
+            for line in (proc.stdout or "").splitlines():
+                s = line.strip()
+                if not s or not any(m in s.lower() for m in markers):
+                    continue
+                parts = s.rsplit(',', 1)
+                if len(parts) == 2 and parts[1].strip().isdigit():
+                    _sp.run(['taskkill', '/F', '/T', '/PID', parts[1].strip()],
+                            capture_output=True, timeout=5, creationflags=0x08000000)
+        except Exception:
+            pass
 
     def _load_config(self):
         try:
