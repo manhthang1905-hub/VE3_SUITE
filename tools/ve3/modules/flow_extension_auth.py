@@ -108,11 +108,10 @@ class FlowExtensionAuth:
             except Exception:
                 pass
 
-        # Port slots — y het UI mode: _auth_worker_slot cho port rieng moi account
-        worker_id = getattr(self, '_worker_id', 0) or 0
-        debug_port = 19200 + worker_id % 100  # unique per account
-        api_port = 8100 + worker_id % 100
-        ws_port = 9222 + worker_id % 100
+        # Fixed ports — must match extension ext_8100 hardcoded ws://127.0.0.1:9222
+        debug_port = 19200
+        api_port = 8100
+        ws_port = 9222
 
         # Step 1: setup_chrome — login + verify Flow + kill (y het UI mode _bridge_for_account)
         if not FlowExtensionAuth._chrome_started:
