@@ -417,14 +417,18 @@ class FlowRuntimeAuthService:
         if not chrome_path:
             chrome_path = self.chrome_path()
 
-        # Pass account info for login
+        # Pass account info for login (y het UI mode _bridge_for_account)
         account_dict = None
+        profile_dir = ""
+        worker_id = 0
         if account:
             account_dict = {
                 "id": account.email,
                 "password": account.password,
                 "totp_secret": account.totp_secret,
             }
+            profile_dir = account.profile_dir or ""
+            worker_id = self._auth_worker_slot(account, project_dir)
 
         ext_auth = FlowExtensionAuth(
             agent_url,
@@ -433,6 +437,8 @@ class FlowRuntimeAuthService:
             suite_root=str(self.suite_root),
         )
         ext_auth._account = account_dict
+        ext_auth._profile_dir = profile_dir
+        ext_auth._worker_id = worker_id
 
         # Auto-start Chrome + agent if not running
         if not ext_auth.is_ready(timeout=3):

@@ -108,7 +108,13 @@ class FlowExtensionAuth:
             except Exception:
                 pass
 
-        # Step 1: setup_chrome — login + verify Flow + kill (y het FlowKit)
+        # Port slots — y het UI mode: _auth_worker_slot cho port rieng moi account
+        worker_id = getattr(self, '_worker_id', 0) or 0
+        debug_port = 19200 + worker_id % 100  # unique per account
+        api_port = 8100 + worker_id % 100
+        ws_port = 9222 + worker_id % 100
+
+        # Step 1: setup_chrome — login + verify Flow + kill (y het UI mode _bridge_for_account)
         if not FlowExtensionAuth._chrome_started:
             try:
                 from chrome_setup import setup_chrome
@@ -119,8 +125,9 @@ class FlowExtensionAuth:
                     except: pass
                 _write_chrome_prefs(chrome_dir)
 
+                self._log(f"[ExtAuth] Login {account.get('id','?') if account else '?'} via {chrome_dir.name} (port {debug_port})")
                 ok = setup_chrome(
-                    chrome_dir=chrome_dir, ext_dir=Path(ext_dir), port=19200,
+                    chrome_dir=chrome_dir, ext_dir=Path(ext_dir), port=debug_port,
                     account=account, proxy_arg="",
                     log_func=lambda msg: self._log(f"[ExtAuth] {msg}"),
                     instance_name="ve3-main",
@@ -134,28 +141,30 @@ class FlowExtensionAuth:
                 self._log(f"[ExtAuth] Setup error: {e}")
                 return False
 
-        # Step 2: Start agent (y het FlowKit GUI _start_agent)
+        # Step 2: Start agent
         if FlowExtensionAuth._agent_proc is None or FlowExtensionAuth._agent_proc.poll() is not None:
             env = os.environ.copy()
-            env.update({"API_PORT": "8100", "WS_PORT": "9222", "INSTANCE_NAME": "ve3-main"})
+            env.update({"API_PORT": str(api_port), "WS_PORT": str(ws_port), "INSTANCE_NAME": "ve3-main"})
             try:
                 FlowExtensionAuth._agent_proc = subprocess.Popen(
                     [sys.executable, "-m", "uvicorn", "agent.main:app",
-                     "--host", "127.0.0.1", "--port", "8100", "--log-level", "warning"],
+                     "--host", "127.0.0.1", "--port", str(api_port), "--log-level", "warning"],
                     cwd=str(flowkit_dir), env=env,
                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
                     creationflags=0x08000000)
-                self._log("[ExtAuth] Agent started: port 8100")
+                self._log(f"[ExtAuth] Agent started: port {api_port}")
+                # Update agent_url to match actual port
+                self.agent_url = f"http://127.0.0.1:{api_port}"
                 time.sleep(3)
             except Exception as e:
                 self._log(f"[ExtAuth] Agent error: {e}")
                 return False
 
-        # Step 3: Start Chrome subprocess with extension (y het FlowKit GUI _start_chrome)
+        # Step 3: Start Chrome subprocess with extension
         args = [
             str(chrome_exe),
             f"--load-extension={ext_dir}",
-            "--remote-debugging-port=19200",
+            f"--remote-debugging-port={debug_port}",
             "--no-first-run", "--no-default-browser-check",
             "--disable-background-timer-throttling",
             "--disable-renderer-backgrounding",
@@ -164,7 +173,7 @@ class FlowExtensionAuth:
         try:
             subprocess.Popen(args, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
                              creationflags=0x08000000)
-            self._log("[ExtAuth] Chrome started with extension")
+            self._log(f"[ExtAuth] Chrome started (debug={debug_port})")
             time.sleep(8)
         except Exception as e:
             self._log(f"[ExtAuth] Chrome error: {e}")
