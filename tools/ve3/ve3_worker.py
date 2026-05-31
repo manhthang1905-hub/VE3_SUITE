@@ -1541,25 +1541,6 @@ Generator/context error:
                 self.log(f"[PSY] Found reference image: {path}", "INFO")
                 return path
 
-        # Fallback: scan reference_characters/{topic}/{PREFIX}-T*/nv1.png
-        # When NGUON sheet doesn't have mapping, try to find channel by prefix
-        import re as _re
-        prefix_match = _re.match(r'^([A-Za-z]+\d+)-', self.project_dir.name)
-        if prefix_match:
-            prefix = prefix_match.group(1).upper()
-            scan_dir = self.reference_root / ref_dir
-            if scan_dir.exists():
-                matching_dirs = sorted(
-                    [d for d in scan_dir.iterdir() if d.is_dir() and d.name.upper().startswith(prefix + "-T")],
-                    key=lambda d: d.name,
-                )
-                for d in matching_dirs:
-                    for ext in ("png", "jpg", "jpeg", "webp"):
-                        ref_path = d / f"nv1.{ext}"
-                        if ref_path.exists():
-                            self.log(f"[PSY] Fallback: found {ref_path} (NGUON mapping missing)", "WARN")
-                            return ref_path
-
         # Not found - log detailed error
         self.log(f"[PSY] Reference image NOT FOUND for channel: {channel_candidates}", "ERROR")
         self.log(f"[PSY] Searched paths:", "ERROR")

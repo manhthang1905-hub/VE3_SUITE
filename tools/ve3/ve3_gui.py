@@ -2409,14 +2409,16 @@ foreach ($pid in $children) {{
                 "channel", "ma kenh", "mã kênh", "channel code",
             }
             channel_cols = [idx for idx, name in enumerate(headers) if name in channel_header_terms]
-            root = SUITE_ROOT / "tools" / "srt-to-excel" / "reference_characters" / "psychology"
+            ref_base = SUITE_ROOT / "tools" / "srt-to-excel" / "reference_characters"
 
             def valid_channel(text):
                 text = str(text or "").strip()
                 if not text:
                     return ""
-                if (root / text / "nv1.png").exists() or (root / text / "style.yaml").exists():
-                    return text
+                for topic_dir in ("psychology", "finance", "success"):
+                    root = ref_base / topic_dir
+                    if (root / text / "nv1.png").exists() or (root / text / "style.yaml").exists():
+                        return text
                 return ""
 
             for row in rows[1:] if rows else []:
