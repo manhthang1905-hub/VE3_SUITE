@@ -2346,8 +2346,9 @@ foreach ($pid in $children) {{
                 "https://www.googleapis.com/auth/drive.readonly",
             ]
             creds = Credentials.from_service_account_file(str(sa_file), scopes=scopes)
-            # Retry 3 lan (network hay timeout/loi ket noi)
-            for attempt in range(1, 4):
+            # Retry 5 lan (network hay timeout/loi ket noi — Google API hay loi)
+            max_attempts = 5
+            for attempt in range(1, max_attempts + 1):
                 try:
                     gc = gspread.authorize(creds)
                     ws = gc.open(spreadsheet_name).worksheet("NGUON")
@@ -2355,11 +2356,12 @@ foreach ($pid in $children) {{
                     self._log(f"[TOPIC] Loaded sheet NGUON: {len(data)} rows")
                     return data
                 except Exception as e:
-                    if attempt < 3:
-                        self._log(f"[TOPIC] Sheet NGUON load failed (attempt {attempt}/3): {e}", "WARN")
-                        _time.sleep(3 * attempt)
+                    if attempt < max_attempts:
+                        wait = min(5 * attempt, 30)
+                        self._log(f"[TOPIC] Sheet NGUON load failed ({attempt}/{max_attempts}): {e} — retry in {wait}s", "WARN")
+                        _time.sleep(wait)
                     else:
-                        self._log(f"[TOPIC] Sheet NGUON load FAILED after 3 attempts: {e}", "ERROR")
+                        self._log(f"[TOPIC] Sheet NGUON load FAILED after {max_attempts} attempts: {e}", "ERROR")
             return []
         except Exception as e:
             self._log(f"[TOPIC] Cannot load sheet NGUON: {e}", "WARN")
@@ -2388,9 +2390,9 @@ foreach ($pid in $children) {{
 
         executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
         try:
-            return executor.submit(_do).result(timeout=15)
+            return executor.submit(_do).result(timeout=120)
         except concurrent.futures.TimeoutError:
-            self._log(f"[TOPIC] Sheet NGUON timeout (15s) for {code}", "WARN")
+            self._log(f"[TOPIC] Sheet NGUON timeout (120s) for {code}", "WARN")
             executor.shutdown(wait=False)
             return ""
         except Exception:
@@ -2401,13 +2403,8 @@ foreach ($pid in $children) {{
         import concurrent.futures
 
         def _do():
-            if self.__class__._nguon_sheet_cache is None or not self.__class__._nguon_sheet_cache:
-                for attempt in range(1, 4):
-                    self.__class__._nguon_sheet_cache = self._load_nguon_sheet()
-                    if self.__class__._nguon_sheet_cache:
-                        break
-                    self._log(f"[TOPIC] Sheet NGUON retry {attempt}/3 for reference_channel {code}", "WARN")
-                    _time.sleep(1.5 * attempt)
+            if not self.__class__._nguon_sheet_cache:
+                self.__class__._nguon_sheet_cache = self._load_nguon_sheet()
             rows = self.__class__._nguon_sheet_cache or []
             if not rows:
                 return ""
@@ -2452,9 +2449,9 @@ foreach ($pid in $children) {{
 
         executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
         try:
-            return executor.submit(_do).result(timeout=15)
+            return executor.submit(_do).result(timeout=120)
         except concurrent.futures.TimeoutError:
-            self._log(f"[TOPIC] Sheet NGUON timeout (15s) for reference_channel {code}", "WARN")
+            self._log(f"[TOPIC] Sheet NGUON timeout (120s) for reference_channel {code}", "WARN")
             executor.shutdown(wait=False)
             return ""
         except Exception:
