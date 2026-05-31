@@ -404,7 +404,15 @@ class FlowRuntimeAuthService:
             from modules.flow_extension_auth import FlowExtensionAuth
 
         agent_url = str(self.settings.get("flow_extension_agent_url", "http://127.0.0.1:8100")).strip()
-        chrome_path = self.chrome_path()
+        # Find Chrome WITH extension: prefer server Chrome (Copy), then flow_auth_chrome_path
+        chrome_path = ""
+        for srv in self.settings.get("local_server_list", []):
+            cp = str(srv.get("chrome_path", "")).strip()
+            if cp and Path(cp).exists():
+                chrome_path = cp
+                break
+        if not chrome_path:
+            chrome_path = self.chrome_path()
         ext_auth = FlowExtensionAuth(
             agent_url,
             log_func=lambda m: self.log(m, "INFO"),
