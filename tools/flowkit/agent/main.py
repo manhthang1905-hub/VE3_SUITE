@@ -133,6 +133,17 @@ async def health():
     }
 
 
+# ─── Token Access (for VE3 main machine) ─────────────────────
+
+@app.get("/api/get-token")
+async def get_token():
+    """Return captured bearer token for VE3 to use."""
+    if _client._flow_key:
+        return {"success": True, "token": _client._flow_key,
+                "age_seconds": int(time.time() - (_client._ws_connected_at or time.time()))}
+    return {"success": False, "error": "NO_TOKEN"}
+
+
 # ─── Image Generation (called by Gateway) ───────────────────
 
 @app.post("/api/generate-image")
