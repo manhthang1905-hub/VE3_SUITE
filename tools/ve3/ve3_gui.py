@@ -1538,8 +1538,13 @@ class SettingsPage(ctk.CTkScrollableFrame):
         self.ent_vov_slots.grid(row=0, column=3)
 
         ctk.CTkLabel(ai, text="DeepSeek key:", font=("",11), text_color=T2).grid(row=3, column=0, padx=(10,6), sticky="e")
-        self.ent_deepseek_key = ctk.CTkEntry(ai, height=28, corner_radius=4, font=("Consolas",10), fg_color=EN, border_color=BD)
-        self.ent_deepseek_key.grid(row=3, column=1, sticky="ew", padx=(0,10), pady=2)
+        ds_key_frame = ctk.CTkFrame(ai, fg_color="transparent")
+        ds_key_frame.grid(row=3, column=1, sticky="ew", padx=(0,10), pady=2)
+        ds_key_frame.columnconfigure(0, weight=1)
+        self.ent_deepseek_key = ctk.CTkEntry(ds_key_frame, height=28, corner_radius=4, font=("Consolas",10), fg_color=EN, border_color=BD)
+        self.ent_deepseek_key.grid(row=0, column=0, sticky="ew")
+        self.btn_ds_balance = ctk.CTkButton(ds_key_frame, text="Check $", width=60, height=28, corner_radius=4, font=("",10), command=self._check_deepseek_balance)
+        self.btn_ds_balance.grid(row=0, column=1, padx=(4,0))
 
         ctk.CTkLabel(ai, text="DeepSeek extra keys:", font=("",11), text_color=T2).grid(row=4, column=0, padx=(10,6), sticky="e")
         self.ent_deepseek_keys = ctk.CTkEntry(ai, height=28, corner_radius=4, font=("Consolas",10), fg_color=EN, border_color=BD, placeholder_text="comma,separated,keys")
@@ -1774,6 +1779,41 @@ class SettingsPage(ctk.CTkScrollableFrame):
                     state = str(si.get("server_state", "offline") or "offline")
                     r["dot"].configure(text="", text_color=ER)
                     r["info"].configure(text=state, text_color=ER)
+
+    def _check_deepseek_balance(self):
+        key = self.ent_deepseek_key.get().strip()
+        if not key:
+            self.btn_ds_balance.configure(text="No key!")
+            self.after(2000, lambda: self.btn_ds_balance.configure(text="Check $"))
+            return
+        self.btn_ds_balance.configure(text="...", state="disabled")
+
+        def _do():
+            try:
+                import urllib.request, json
+                req = urllib.request.Request(
+                    "https://api.deepseek.com/user/balance",
+                    headers={"Authorization": f"Bearer {key}", "Accept": "application/json"},
+                )
+                with urllib.request.urlopen(req, timeout=10) as resp:
+                    data = json.loads(resp.read())
+                info = data.get("balance_infos", [{}])
+                if info:
+                    total = info[0].get("total_balance", "?")
+                    currency = info[0].get("currency", "CNY")
+                    result = f"${total} {currency}"
+                else:
+                    result = str(data)
+            except Exception as e:
+                result = f"Error: {e}"
+
+            def _update():
+                self.btn_ds_balance.configure(text=result, state="normal")
+                self.after(5000, lambda: self.btn_ds_balance.configure(text="Check $"))
+            self.after(0, _update)
+
+        import threading
+        threading.Thread(target=_do, daemon=True).start()
 
     def _on_excel_ai_provider_change(self, value=None):
         provider = self.excel_ai_provider_options.get((value or self.opt_excel_ai_provider.get()).strip(), "deepseek")
