@@ -29,11 +29,14 @@ except ImportError:
 logger = logging.getLogger(__name__)
 
 
+import threading as _threading
+
 class FlowExtensionAuth:
     """Get Flow auth data via FlowKit Chrome extension API."""
 
     _agent_proc = None
     _chrome_started = False
+    _start_lock = _threading.Lock()
 
     def __init__(self, agent_url: str = "http://127.0.0.1:8100", log_func=None,
                  chrome_path: str = "", extension_dir: str = "", suite_root: str = ""):
@@ -48,6 +51,13 @@ class FlowExtensionAuth:
         if self.is_ready(timeout=3):
             return True
 
+        with FlowExtensionAuth._start_lock:
+            # Re-check after acquiring lock (another thread may have started)
+            if self.is_ready(timeout=3):
+                return True
+            return self._do_auto_start()
+
+    def _do_auto_start(self) -> bool:
         import subprocess, sys, os, time
 
         suite = Path(self.suite_root) if self.suite_root else Path(__file__).parent.parent.parent
