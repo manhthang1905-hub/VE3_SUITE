@@ -348,6 +348,12 @@ class FlowRuntimeAuthService:
                 "INFO",
             )
 
+        # Mode: extension (FlowKit agent API) or chrome (UI automation)
+        auth_mode = str(self.settings.get("flow_auth_mode", "chrome")).strip().lower()
+        if auth_mode == "extension":
+            return self._ensure_auth_via_extension(project_dir, wb, existing_pid, existing_url, account)
+
+        # Mode: chrome (original UI automation)
         bridge = self._bridge_for_account(account, project_dir)
         if force_refresh and (existing_pid or existing_url):
             result = bridge.acquire_token(
@@ -388,4 +394,42 @@ class FlowRuntimeAuthService:
             "project_id": pid,
             "project_url": purl,
             "account_name": account.name,
+        }
+
+    def _ensure_auth_via_extension(self, project_dir, wb, existing_pid, existing_url, account):
+        """Get token/project via FlowKit extension API (no UI automation)."""
+        try:
+            from .flow_extension_auth import FlowExtensionAuth
+        except ImportError:
+            from modules.flow_extension_auth import FlowExtensionAuth
+
+        agent_url = str(self.settings.get("flow_extension_agent_url", "http://127.0.0.1:8100")).strip()
+        ext_auth = FlowExtensionAuth(agent_url, log_func=lambda m: self.log(m, "INFO"))
+
+        if not ext_auth.wait_ready(timeout=15):
+            self.log("[AUTH] Extension agent not ready — falling back to Chrome UI", "WARN")
+            return {"ok": "", "error": "extension agent not ready"}
+
+        token = ext_auth.get_token()
+        if not token:
+            return {"ok": "", "error": "extension: no token"}
+
+        pid = existing_pid
+        if not pid:
+            pid = ext_auth.get_project_id()
+        if not pid:
+            pid = ext_auth.ensure_project()
+        if not pid:
+            return {"ok": "", "error": "extension: no project"}
+
+        purl = self._normalize_project_url(pid, "")
+        self._write_auth_back(project_dir, wb, token, pid, purl, account.name if account else "")
+        self.log(f"[AUTH] {project_dir.name}: token via extension for project {pid[:8]}...", "SUCCESS")
+        return {
+            "ok": "1",
+            "error": "",
+            "token": token,
+            "project_id": pid,
+            "project_url": purl,
+            "account_name": account.name if account else "",
         }

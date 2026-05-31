@@ -1468,6 +1468,9 @@ class SettingsPage(ctk.CTkScrollableFrame):
         ctk.CTkLabel(top, text="Moi dong la 1 cap dung truc tiep: server + gmail|password|totp + chrome. Project da bind cap nao thi giu nguyen cap do.", font=("",10), text_color=T3).grid(row=0, column=0, sticky="w", columnspan=2)
         self.sw_flow_auto = ctk.CTkSwitch(top, text="Auto auth", progress_color=OK, button_color="#FFF", button_hover_color="#EEE")
         self.sw_flow_auto.grid(row=0, column=2, padx=(4,0))
+        ctk.CTkLabel(top, text="Mode:", font=("",10), text_color=T2).grid(row=0, column=3, padx=(8,2))
+        self.opt_flow_auth_mode = ctk.CTkOptionMenu(top, values=["Chrome UI", "Extension"], width=100, height=24, font=("",10))
+        self.opt_flow_auth_mode.grid(row=0, column=4, padx=(0,4))
         ar = ctk.CTkFrame(sc, fg_color="transparent")
         ar.grid(row=2, column=0, padx=10, pady=(0,4), sticky="ew", columnspan=6)
         ar.grid_columnconfigure(0, weight=1)
@@ -1859,6 +1862,8 @@ class SettingsPage(ctk.CTkScrollableFrame):
             self.sw_flow_auto.select()
         else:
             self.sw_flow_auto.deselect()
+        auth_mode = cfg.get("flow_auth_mode", "chrome")
+        self.opt_flow_auth_mode.set("Extension" if auth_mode == "extension" else "Chrome UI")
         if cfg.get("music_workspace_mode_enabled", True):
             self.sw_music_workspace.select()
         else:
@@ -1898,6 +1903,7 @@ class SettingsPage(ctk.CTkScrollableFrame):
         if cfg["generation_backend"] in ("flowkit", "combined") and not cfg.get("flowkit_server_list"):
             cfg["flowkit_server_list"] = self._auto_flowkit_server_list()
         cfg["flow_auth_auto_enabled"] = bool(self.sw_flow_auto.get())
+        cfg["flow_auth_mode"] = "extension" if self.opt_flow_auth_mode.get() == "Extension" else "chrome"
         cfg["music_workspace_mode_enabled"] = bool(self.sw_music_workspace.get())
         selected_provider_label = self.opt_excel_ai_provider.get().strip() or "DeepSeek"
         cfg["excel_ai_provider"] = self.excel_ai_provider_options.get(selected_provider_label, "deepseek")
