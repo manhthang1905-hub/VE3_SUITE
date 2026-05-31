@@ -1046,7 +1046,8 @@ Generator/context error:
             why = f" ({reason})" if reason else ""
             self.log(f"[AUTH] {self.project_dir.name}: ensure token/project{why}", "INFO")
             keep_open = self.generation_backend in ("flowkit", "combined")
-            auth = self.auth_service.ensure_auth(self.project_dir, wb, force_refresh=force_refresh, keep_chrome_open=keep_open)
+            my_server = self.server_list[0]["name"] if self.server_list else ""
+            auth = self.auth_service.ensure_auth(self.project_dir, wb, force_refresh=force_refresh, keep_chrome_open=keep_open, server_name=my_server)
             if not auth.get("ok"):
                 self.log(f"[AUTH] {self.project_dir.name}: {auth.get('error', 'unknown auth error')}", "ERROR")
                 return False
@@ -1068,7 +1069,8 @@ Generator/context error:
                     return True
             self.log(f"[AUTH] {self.project_dir.name}: refresh token from existing project ({reason})", "WARN")
             keep_open = self.generation_backend in ("flowkit", "combined")
-            auth = self.auth_service.ensure_auth(self.project_dir, wb, force_refresh=True, keep_chrome_open=keep_open)
+            my_server = self.server_list[0]["name"] if self.server_list else ""
+            auth = self.auth_service.ensure_auth(self.project_dir, wb, force_refresh=True, keep_chrome_open=keep_open, server_name=my_server)
             if not auth.get("ok"):
                 self.log(f"[AUTH] refresh failed: {auth.get('error', 'unknown auth error')}", "ERROR")
                 return False

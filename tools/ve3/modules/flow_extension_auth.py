@@ -1,22 +1,26 @@
 """
 Flow Extension Auth — get token/project/media via FlowKit extension API.
 
-Multi-instance: each server (sv1, sv2...) gets its own Chrome + agent,
-exactly like FlowKit GUI. Ports per instance:
-  sv1: Chrome Copy (1) + ext_8100 + agent 8100/ws 9222 + debug 19200
-  sv2: Chrome Copy (2) + ext_8101 + agent 8101/ws 9223 + debug 19201
+Ports per instance:
+  sv1: agent 8100 / ws 9222 / debug 19200 / Chrome Copy (1)
+  sv2: agent 8101 / ws 9223 / debug 19201 / Chrome Copy (2)
   ...
 
-Startup runs ONCE (from VE3 GUI or first worker), sets up ALL instances.
-Workers call the correct agent based on their server binding.
+Worker flow (y het FlowKit — worker KHÔNG start, chỉ dùng):
+  1. Tính port từ server index: api_port = 8100 + index
+  2. Check port: healthy → dùng luôn
+  3. Chưa chạy → gọi start_all (PID lock, chỉ 1 process start)
+  4. Process khác → đợi port ready
 """
 import base64
 import logging
 import os
+import shutil
 import subprocess
 import sys
 import threading
 import time
+import urllib.request
 from pathlib import Path
 from typing import Optional, Tuple, List, Dict
 
@@ -28,73 +32,175 @@ except ImportError:
 logger = logging.getLogger(__name__)
 
 
-# ─── Global instance manager (shared across all workers) ──────
+def _is_pid_alive(pid: int) -> bool:
+    try:
+        os.kill(pid, 0)
+        return True
+    except (OSError, ProcessLookupError):
+        return False
+
 
 class _ExtensionInstanceManager:
-    """Manages Chrome + agent instances — y het FlowKit GUI."""
-
     _lock = threading.Lock()
-    _started = False
-    _instances: Dict[str, dict] = {}  # server_name → {api_port, agent_proc, chrome_proc}
+    _instances: Dict[str, dict] = {}
 
     @classmethod
     def is_instance_ready(cls, api_port: int) -> bool:
         try:
             r = httpx.get(f"http://127.0.0.1:{api_port}/health", timeout=3)
-            data = r.json() if hasattr(r, 'json') else r.json()
+            data = r.json()
             return data.get("extension_connected", False) and data.get("flow_key_present", False)
         except Exception:
             return False
 
     @classmethod
+    def _is_agent_alive(cls, api_port: int) -> bool:
+        try:
+            with urllib.request.urlopen(f"http://127.0.0.1:{api_port}/health", timeout=2) as resp:
+                return resp.status == 200
+        except Exception:
+            return False
+
+    @classmethod
+    def _kill_on_port(cls, port: int, log=None):
+        log = log or (lambda m: None)
+        try:
+            result = subprocess.run(
+                ['netstat', '-ano', '-p', 'TCP'],
+                capture_output=True, text=True, timeout=5, creationflags=0x08000000)
+            for line in result.stdout.splitlines():
+                if f':{port} ' not in line or 'LISTENING' not in line:
+                    continue
+                pid = line.strip().split()[-1]
+                if pid.isdigit() and int(pid) > 0:
+                    subprocess.run(['taskkill', '/F', '/T', '/PID', pid],
+                                   capture_output=True, timeout=5, creationflags=0x08000000)
+                    log(f"[ExtAuth] Killed PID {pid} on port {port}")
+                    time.sleep(1)
+        except Exception:
+            pass
+
+    @classmethod
+    def _kill_chrome_for_dir(cls, chrome_dir: Path):
+        dir_name = chrome_dir.name
+        try:
+            subprocess.run(
+                ['wmic', 'process', 'where',
+                 f"name='chrome.exe' and CommandLine like '%{dir_name}%'",
+                 'call', 'terminate'],
+                capture_output=True, timeout=10, creationflags=0x08000000)
+        except Exception:
+            pass
+        try:
+            subprocess.run(
+                ['wmic', 'process', 'where',
+                 f"name='GoogleChromePortable.exe' and CommandLine like '%{dir_name}%'",
+                 'call', 'terminate'],
+                capture_output=True, timeout=10, creationflags=0x08000000)
+        except Exception:
+            pass
+
+    @classmethod
+    def _wait_all_ready(cls, servers: List[dict], timeout: int = 300, log=None):
+        """Wait for all instances to become ready (started by another process)."""
+        log = log or (lambda m: None)
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            all_ok = True
+            for i in range(len(servers)):
+                if not cls.is_instance_ready(8100 + i):
+                    all_ok = False
+                    break
+            if all_ok:
+                for i, srv in enumerate(servers):
+                    cls._instances[srv.get("name", f"sv{i+1}")] = {"api_port": 8100 + i}
+                log("[ExtAuth] All instances ready")
+                return True
+            time.sleep(3)
+        return False
+
+    @classmethod
     def start_all(cls, servers: List[dict], suite_root: str, log_func=None):
-        """Start ALL server instances — y het FlowKit GUI _start_all."""
-        # File lock — works across subprocesses
-        lock_file = Path(suite_root) / ".extension_startup.lock"
-        try:
-            lock_file.parent.mkdir(parents=True, exist_ok=True)
-            import msvcrt
-            fd = open(lock_file, 'w')
-            msvcrt.locking(fd.fileno(), msvcrt.LK_NBLCK, 1)
-        except (OSError, IOError):
-            # Another process already starting — wait for it
-            log = log_func or (lambda m: print(m))
-            log("[ExtAuth] Another process starting instances — waiting...")
-            import time
-            for _ in range(120):
-                time.sleep(1)
-                # Check if first instance is ready
-                if cls.is_instance_ready(8100):
-                    cls._started = True
-                    # Discover running instances
-                    for i, srv in enumerate(servers):
-                        port = 8100 + i
-                        if cls.is_instance_ready(port):
-                            cls._instances[srv.get("name", f"sv{i+1}")] = {"api_port": port}
-                    return
-            return
-
-        try:
-            with cls._lock:
-                if cls._started:
-                    return
-                cls._started = True
-
+        """Start all instances — PID lock for cross-process safety."""
         log = log_func or (lambda m: print(m))
         suite = Path(suite_root)
+
+        # Check ALL healthy first — skip startup entirely
+        all_ready = True
+        for i in range(len(servers)):
+            if not cls.is_instance_ready(8100 + i):
+                all_ready = False
+                break
+        if all_ready:
+            log("[ExtAuth] All instances already running")
+            for i, srv in enumerate(servers):
+                cls._instances[srv.get("name", f"sv{i+1}")] = {"api_port": 8100 + i}
+            return
+
+        # PID lock — check if another process is already starting
+        lock_file = suite / ".extension_startup.lock"
+        try:
+            if lock_file.exists():
+                old_pid = int(lock_file.read_text().strip())
+                if _is_pid_alive(old_pid) and old_pid != os.getpid():
+                    log(f"[ExtAuth] PID {old_pid} already starting — waiting...")
+                    if cls._wait_all_ready(servers, timeout=300, log=log):
+                        return
+                    log("[ExtAuth] Wait timeout — taking over")
+        except Exception:
+            pass
+
+        # Write our PID
+        try:
+            lock_file.write_text(str(os.getpid()))
+        except Exception:
+            pass
+
+        try:
+            cls._do_start_all(servers, suite, log)
+        finally:
+            try:
+                lock_file.unlink(missing_ok=True)
+            except Exception:
+                pass
+
+    @classmethod
+    def _do_start_all(cls, servers: List[dict], suite: Path, log):
+        """Actual startup — called by lock holder only."""
         flowkit_dir = suite / "tools" / "flowkit"
         if not flowkit_dir.exists():
             flowkit_dir = suite / "server" / "flowkit"
-
         sys.path.insert(0, str(flowkit_dir))
 
         for i, srv in enumerate(servers):
             name = srv.get("name", f"sv{i+1}")
             chrome_path = srv.get("chrome_path", "")
             if not chrome_path or not Path(chrome_path).exists():
+                log(f"[ExtAuth] {name}: chrome_path not found, skip")
                 continue
 
             chrome_dir = Path(chrome_path).parent
+            api_port = 8100 + i
+            ws_port = 9222 + i
+            debug_port = 19200 + i
+
+            # Already healthy? skip
+            if cls.is_instance_ready(api_port):
+                log(f"[ExtAuth] {name}: already ready (port {api_port})")
+                cls._instances[name] = {"api_port": api_port}
+                continue
+
+            # Extension dir — 3 locations
+            ext_dir = suite / "flowkit_extensions" / f"ext_{api_port}"
+            if not ext_dir.exists():
+                ext_dir = suite / "server" / "flowkit" / "flowkit_extensions" / f"ext_{api_port}"
+            if not ext_dir.exists():
+                ext_dir = flowkit_dir / "flowkit_extensions" / f"ext_{api_port}"
+            if not ext_dir.exists():
+                log(f"[ExtAuth] {name}: ext_{api_port} not found, skip")
+                continue
+
+            # Account
             bundle = srv.get("flow_account_bundle", "")
             account = None
             if bundle:
@@ -106,32 +212,24 @@ class _ExtensionInstanceManager:
                         "totp_secret": parts[2].strip() if len(parts) >= 3 else "",
                     }
 
-            api_port = 8100 + i
-            ws_port = 9222 + i
-            debug_port = 19200 + i
-            ext_dir = suite / "server" / "flowkit" / "flowkit_extensions" / f"ext_{api_port}"
-            if not ext_dir.exists():
-                ext_dir = flowkit_dir / "flowkit_extensions" / f"ext_{api_port}"
-            if not ext_dir.exists():
-                log(f"[ExtAuth] {name}: ext_{api_port} not found, skip")
-                continue
+            log(f"[ExtAuth] {name}: starting (port {api_port}/{ws_port}/{debug_port})")
 
-            # Check if already running
-            if cls.is_instance_ready(api_port):
-                log(f"[ExtAuth] {name}: already running on port {api_port}")
-                cls._instances[name] = {"api_port": api_port}
-                continue
+            # Kill old on THIS instance's ports
+            cls._kill_on_port(api_port, log)
+            cls._kill_on_port(ws_port, log)
+            cls._kill_chrome_for_dir(chrome_dir)
+            time.sleep(2)
 
-            log(f"[ExtAuth] {name}: starting ({chrome_dir.name}, port {debug_port}, account {account['id'] if account else '?'})")
-
-            # Step 1: setup_chrome — login + verify Flow + kill (y het FlowKit)
+            # Step 1: setup_chrome
             try:
                 from chrome_setup import setup_chrome
                 from launcher import _write_chrome_prefs
 
-                for lock_name in ("SingletonLock", "SingletonCookie", "SingletonSocket"):
-                    try: (chrome_dir / "Data" / "profile" / lock_name).unlink()
-                    except: pass
+                for lk in ("SingletonLock", "SingletonCookie", "SingletonSocket"):
+                    try:
+                        (chrome_dir / "Data" / "profile" / lk).unlink()
+                    except Exception:
+                        pass
                 _write_chrome_prefs(chrome_dir)
 
                 ok = setup_chrome(
@@ -147,7 +245,11 @@ class _ExtensionInstanceManager:
                 log(f"[ExtAuth] {name}: setup error: {e}")
                 continue
 
-            # Step 2: Start agent (y het FlowKit GUI _start_agent)
+            # Step 2: Start agent + wait ready
+            cls._kill_on_port(api_port, log)
+            cls._kill_on_port(ws_port, log)
+            time.sleep(1)
+
             env = os.environ.copy()
             env.update({"API_PORT": str(api_port), "WS_PORT": str(ws_port), "INSTANCE_NAME": name})
             try:
@@ -156,33 +258,93 @@ class _ExtensionInstanceManager:
                      "--host", "127.0.0.1", "--port", str(api_port), "--log-level", "warning"],
                     cwd=str(flowkit_dir), env=env,
                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                    creationflags=0x08000000)
-                time.sleep(3)
+                    creationflags=subprocess.CREATE_NEW_PROCESS_GROUP)
             except Exception as e:
                 log(f"[ExtAuth] {name}: agent error: {e}")
                 continue
 
-            # Step 3: Start Chrome subprocess with extension (y het FlowKit GUI _start_chrome)
+            agent_ready = False
+            for _ in range(20):
+                if cls._is_agent_alive(api_port):
+                    agent_ready = True
+                    break
+                time.sleep(1)
+            if agent_ready:
+                log(f"[ExtAuth] {name}: Agent ready (port {api_port})")
+            else:
+                log(f"[ExtAuth] {name}: Agent not ready after 20s")
+
+            # Step 3: Start Chrome
+            profile_dir = chrome_dir / "Data" / "profile"
+            sw_cache = profile_dir / "Default" / "Service Worker"
+            if sw_cache.exists():
+                try:
+                    shutil.rmtree(sw_cache)
+                except Exception:
+                    pass
+            for lk in ("SingletonLock", "SingletonCookie", "SingletonSocket"):
+                try:
+                    (profile_dir / lk).unlink()
+                except Exception:
+                    pass
+            try:
+                from launcher import _write_chrome_prefs
+                _write_chrome_prefs(chrome_dir)
+            except Exception:
+                pass
+
             args = [
                 str(chrome_path),
                 f"--load-extension={ext_dir}",
                 f"--remote-debugging-port={debug_port}",
-                "--no-first-run", "--no-default-browser-check",
                 "--disable-background-timer-throttling",
                 "--disable-renderer-backgrounding",
-                "https://labs.google/fx/tools/flow?hl=en",
+                "--disable-backgrounding-occluded-windows",
+                "--disable-session-crashed-bubble",
+                "--hide-crash-restore-bubble",
+                "--no-first-run",
+                "--no-default-browser-check",
+                "https://labs.google/fx/tools/flow",
             ]
             try:
                 chrome_proc = subprocess.Popen(args, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                                               creationflags=0x08000000)
-                time.sleep(5)
+                                               creationflags=subprocess.CREATE_NEW_PROCESS_GROUP)
+                time.sleep(8)
             except Exception as e:
                 log(f"[ExtAuth] {name}: Chrome error: {e}")
                 continue
 
-            # Wait for extension connect
+            # Step 4: Apply CDP
+            try:
+                from chrome_setup import apply_chrome_cdp
+                apply_chrome_cdp(
+                    debug_port=debug_port, ext_dir=ext_dir, instance_name=name,
+                    log_func=lambda msg, n=name: log(f"[ExtAuth] [{n}] {msg}"),
+                )
+            except Exception as e:
+                log(f"[ExtAuth] {name}: CDP error: {e}")
+
+            # Step 5: Minimize
+            try:
+                from DrissionPage import ChromiumPage, ChromiumOptions
+                _co = ChromiumOptions()
+                _co.set_address(f"127.0.0.1:{debug_port}")
+                _p = ChromiumPage(_co)
+                info = _p.run_cdp('Browser.getWindowForTarget')
+                wid = info.get('windowId')
+                if wid:
+                    _p.run_cdp('Browser.setWindowBounds', windowId=wid,
+                               bounds={'windowState': 'minimized'})
+                try:
+                    _p.disconnect()
+                except Exception:
+                    pass
+            except Exception:
+                pass
+
+            # Step 6: Wait extension connect
             ready = False
-            for _ in range(15):
+            for _ in range(30):
                 if cls.is_instance_ready(api_port):
                     ready = True
                     break
@@ -192,15 +354,15 @@ class _ExtensionInstanceManager:
                 cls._instances[name] = {"api_port": api_port, "agent_proc": agent_proc, "chrome_proc": chrome_proc}
                 log(f"[ExtAuth] {name}: READY (port {api_port})")
             else:
-                log(f"[ExtAuth] {name}: extension not connected after 30s")
-
-        finally:
-            try:
-                import msvcrt
-                msvcrt.locking(fd.fileno(), msvcrt.LK_UNLCK, 1)
-                fd.close()
-            except Exception:
-                pass
+                try:
+                    h = httpx.get(f"http://127.0.0.1:{api_port}/health", timeout=3).json()
+                    if h.get("extension_connected"):
+                        cls._instances[name] = {"api_port": api_port, "agent_proc": agent_proc, "chrome_proc": chrome_proc}
+                        log(f"[ExtAuth] {name}: connected, token pending")
+                    else:
+                        log(f"[ExtAuth] {name}: extension NOT connected")
+                except Exception:
+                    log(f"[ExtAuth] {name}: agent unreachable")
 
     @classmethod
     def get_agent_port(cls, server_name: str) -> Optional[int]:
@@ -209,8 +371,16 @@ class _ExtensionInstanceManager:
             return inst["api_port"]
         return None
 
+    @classmethod
+    def get_agent_port_by_index(cls, server_index: int) -> Optional[int]:
+        """Compute port directly from index — no need for _instances dict."""
+        port = 8100 + server_index
+        if cls.is_instance_ready(port):
+            return port
+        if cls._is_agent_alive(port):
+            return port
+        return None
 
-# ─── FlowExtensionAuth — per-project auth client ─────────────
 
 class FlowExtensionAuth:
     """Get Flow auth data via correct server's agent API."""
@@ -225,12 +395,19 @@ class FlowExtensionAuth:
 
     @staticmethod
     def start_all_instances(servers: list, suite_root: str, log_func=None):
-        """Start ALL extension instances — call from VE3 GUI once."""
         _ExtensionInstanceManager.start_all(servers, suite_root, log_func)
 
     @staticmethod
     def get_agent_url_for_server(server_name: str) -> Optional[str]:
         port = _ExtensionInstanceManager.get_agent_port(server_name)
+        if port:
+            return f"http://127.0.0.1:{port}"
+        return None
+
+    @staticmethod
+    def get_agent_url_by_index(server_index: int) -> Optional[str]:
+        """Check port directly — works across processes without _instances dict."""
+        port = _ExtensionInstanceManager.get_agent_port_by_index(server_index)
         if port:
             return f"http://127.0.0.1:{port}"
         return None

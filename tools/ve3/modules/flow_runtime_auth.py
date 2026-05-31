@@ -5,7 +5,7 @@ import json
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 from .excel_manager import PromptWorkbook
 from .flow_reference_bridge import (
@@ -302,6 +302,7 @@ class FlowRuntimeAuthService:
         wb: PromptWorkbook,
         force_refresh: bool = False,
         keep_chrome_open: bool = False,
+        server_name: str = "",
     ) -> Dict[str, str]:
         if not self.is_enabled():
             return {"ok": "", "error": "auto auth disabled"}
@@ -351,7 +352,8 @@ class FlowRuntimeAuthService:
         # Mode: extension (FlowKit agent API) or chrome (UI automation)
         auth_mode = str(self.settings.get("flow_auth_mode", "chrome")).strip().lower()
         if auth_mode == "extension":
-            return self._ensure_auth_via_extension(project_dir, wb, existing_pid, existing_url, account)
+            return self._ensure_auth_via_extension(project_dir, wb, existing_pid, existing_url, account,
+                                                   server_name=server_name, force_refresh=force_refresh)
 
         # Mode: chrome (original UI automation)
         bridge = self._bridge_for_account(account, project_dir)
@@ -396,38 +398,55 @@ class FlowRuntimeAuthService:
             "account_name": account.name,
         }
 
-    def _ensure_auth_via_extension(self, project_dir, wb, existing_pid, existing_url, account):
+    def _ensure_auth_via_extension(self, project_dir, wb, existing_pid, existing_url, account,
+                                     server_name: str = "", force_refresh: bool = False):
         """Get token/project via FlowKit extension API (no UI automation)."""
         try:
             from .flow_extension_auth import FlowExtensionAuth
         except ImportError:
             from modules.flow_extension_auth import FlowExtensionAuth
 
-        # Find server name for this account → route to correct agent
-        server_name = ""
-        for srv in self.settings.get("local_server_list", []):
-            srv_account = srv.get("flow_account_name", "")
-            if srv_account and account and srv_account == account.name:
-                server_name = srv.get("name", "")
-                break
-        if not server_name and account:
-            # Fallback: match by email in bundle
-            for srv in self.settings.get("local_server_list", []):
-                bundle = srv.get("flow_account_bundle", "")
-                if account.email and account.email in bundle:
-                    server_name = srv.get("name", "")
-                    break
+        servers = self.settings.get("local_server_list", [])
 
-        # Start ALL instances if not running (y het FlowKit GUI _start_all)
-        agent_url = FlowExtensionAuth.get_agent_url_for_server(server_name)
+        # Find server index — by server_name from worker (correct), NOT by account (wrong)
+        server_index = None
+        if server_name:
+            for i, srv in enumerate(servers):
+                if srv.get("name", "") == server_name:
+                    server_index = i
+                    break
+        if server_index is None:
+            # Fallback: match by account
+            for i, srv in enumerate(servers):
+                srv_account = srv.get("flow_account_name", "")
+                bundle = srv.get("flow_account_bundle", "")
+                if account and (
+                    (srv_account and srv_account == account.name) or
+                    (account.email and account.email in bundle)
+                ):
+                    server_index = i
+                    server_name = srv.get("name", f"sv{i+1}")
+                    break
+        if server_index is None:
+            server_index = 0
+            server_name = servers[0].get("name", "sv1") if servers else "sv1"
+
+        api_port = 8100 + server_index
+
+        # Check port directly
+        agent_url = FlowExtensionAuth.get_agent_url_by_index(server_index)
         if not agent_url:
-            self.log(f"[AUTH] Extension instances not started — starting all...", "INFO")
-            servers = self.settings.get("local_server_list", [])
+            self.log(f"[AUTH] Agent port {api_port} ({server_name}) not ready — starting all...", "INFO")
             FlowExtensionAuth.start_all_instances(servers, str(self.suite_root),
                                                    log_func=lambda m: self.log(m, "INFO"))
-            agent_url = FlowExtensionAuth.get_agent_url_for_server(server_name)
+            # Wait for THIS port to become ready
+            for _ in range(60):
+                agent_url = FlowExtensionAuth.get_agent_url_by_index(server_index)
+                if agent_url:
+                    break
+                time.sleep(2)
             if not agent_url:
-                self.log(f"[AUTH] No agent for server {server_name}", "WARN")
+                self.log(f"[AUTH] Agent port {api_port} still not ready for {server_name}", "WARN")
                 return {"ok": "", "error": f"extension agent not ready for {server_name}"}
 
         ext_auth = FlowExtensionAuth(
@@ -436,7 +455,41 @@ class FlowRuntimeAuthService:
             suite_root=str(self.suite_root),
         )
 
+        # force_refresh: kill Chrome → setup_chrome lai → extension capture token moi
+        # Y het luc ban dau: check login, re-login neu can, vao Flow, extension lay token
+        if force_refresh:
+            self.log(f"[AUTH] {server_name}: token expired — re-setup (y het luc dau)", "INFO")
+            try:
+                from .flow_extension_auth import _ExtensionInstanceManager
+            except ImportError:
+                from modules.flow_extension_auth import _ExtensionInstanceManager
+
+            chrome_dir = Path(servers[server_index].get("chrome_path", "")).parent
+            api_port = 8100 + server_index
+            debug_port = 19200 + server_index
+
+            # Kill Chrome cua instance nay
+            _ExtensionInstanceManager._kill_chrome_for_dir(chrome_dir)
+            time.sleep(2)
+
+            # Re-run full start cho tat ca (PID lock xu ly, chi start instance chua ready)
+            FlowExtensionAuth.start_all_instances(servers, str(self.suite_root),
+                                                   log_func=lambda m: self.log(m, "INFO"))
+
+            # Wait for agent ready again
+            for _ in range(60):
+                agent_url = FlowExtensionAuth.get_agent_url_by_index(server_index)
+                if agent_url:
+                    break
+                time.sleep(2)
+            if agent_url:
+                ext_auth = FlowExtensionAuth(agent_url, log_func=lambda m: self.log(m, "INFO"),
+                                             suite_root=str(self.suite_root))
+
         token = ext_auth.get_token()
+        if not token:
+            time.sleep(5)
+            token = ext_auth.get_token()
         if not token:
             return {"ok": "", "error": "extension: no token"}
 
