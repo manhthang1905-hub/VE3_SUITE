@@ -1200,17 +1200,6 @@ Generator/context error:
                 result["failed"] = ref_result["failed"] + validate_result["failed"]
                 return result
 
-        # Release Chrome after Phase 1 — agent keeps token, Chrome not needed for generation
-        if str(self.config.get("flow_auth_mode", "")).strip().lower() == "extension":
-            try:
-                from modules.flow_extension_auth import _ExtensionInstanceManager
-                import re as _re
-                my_server = (self.server_list[0].get("name", "") if self.server_list else "")
-                if my_server:
-                    _ExtensionInstanceManager.release_chrome(my_server, log=self.log)
-            except Exception:
-                pass
-
         # === PHASE 2: Thumbnail ===
         self.log("")
         self.log("=" * 50)
