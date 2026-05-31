@@ -1471,14 +1471,14 @@ def login_google_chrome(account_info: dict, chrome_portable: str = None, profile
                     log("Waiting 5s for 2FA page to fully render...")
                     time.sleep(5)
 
-                # B3: Generate OTP — wait for fresh code (>10s remaining in window)
+                # B3: Generate OTP — wait for fresh code (>15s remaining in window)
                 clean_secret = totp_secret.replace(" ", "").replace("-", "").upper()
                 totp = pyotp.TOTP(clean_secret)
 
-                # Wait until OTP has at least 10s before expiry
+                # Wait until OTP has at least 15s before expiry
                 remaining = 30 - (int(time.time()) % 30)
-                if remaining < 10:
-                    wait_for = 30 - remaining + 2
+                if remaining < 15:
+                    wait_for = remaining + 2
                     log(f"OTP window expires in {remaining}s — waiting {wait_for}s for fresh code...")
                     time.sleep(wait_for)
 
