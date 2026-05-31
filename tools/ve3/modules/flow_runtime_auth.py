@@ -434,20 +434,19 @@ class FlowRuntimeAuthService:
         api_port = 8100 + server_index
 
         # Check port directly
+        # Worker chi check port — GUI da start instances truoc (y het FlowKit)
         agent_url = FlowExtensionAuth.get_agent_url_by_index(server_index)
         if not agent_url:
-            self.log(f"[AUTH] Agent port {api_port} ({server_name}) not ready — starting all...", "INFO")
-            FlowExtensionAuth.start_all_instances(servers, str(self.suite_root),
-                                                   log_func=lambda m: self.log(m, "INFO"))
-            # Wait for THIS port to become ready
-            for _ in range(60):
+            # Doi GUI start xong (max 3 phut)
+            self.log(f"[AUTH] Agent port {api_port} ({server_name}) not ready — waiting for GUI to start...", "INFO")
+            for _ in range(90):
                 agent_url = FlowExtensionAuth.get_agent_url_by_index(server_index)
                 if agent_url:
                     break
                 time.sleep(2)
             if not agent_url:
-                self.log(f"[AUTH] Agent port {api_port} still not ready for {server_name}", "WARN")
-                return {"ok": "", "error": f"extension agent not ready for {server_name}"}
+                self.log(f"[AUTH] Agent port {api_port} ({server_name}) not ready after 3min", "WARN")
+                return {"ok": "", "error": f"extension agent not ready for {server_name} — GUI chua start?"}
 
         ext_auth = FlowExtensionAuth(
             agent_url,
