@@ -49,10 +49,36 @@ class _ExtensionInstanceManager:
     @classmethod
     def start_all(cls, servers: List[dict], suite_root: str, log_func=None):
         """Start ALL server instances — y het FlowKit GUI _start_all."""
-        with cls._lock:
-            if cls._started:
-                return
-            cls._started = True
+        # File lock — works across subprocesses
+        lock_file = Path(suite_root) / ".extension_startup.lock"
+        try:
+            lock_file.parent.mkdir(parents=True, exist_ok=True)
+            import msvcrt
+            fd = open(lock_file, 'w')
+            msvcrt.locking(fd.fileno(), msvcrt.LK_NBLCK, 1)
+        except (OSError, IOError):
+            # Another process already starting — wait for it
+            log = log_func or (lambda m: print(m))
+            log("[ExtAuth] Another process starting instances — waiting...")
+            import time
+            for _ in range(120):
+                time.sleep(1)
+                # Check if first instance is ready
+                if cls.is_instance_ready(8100):
+                    cls._started = True
+                    # Discover running instances
+                    for i, srv in enumerate(servers):
+                        port = 8100 + i
+                        if cls.is_instance_ready(port):
+                            cls._instances[srv.get("name", f"sv{i+1}")] = {"api_port": port}
+                    return
+            return
+
+        try:
+            with cls._lock:
+                if cls._started:
+                    return
+                cls._started = True
 
         log = log_func or (lambda m: print(m))
         suite = Path(suite_root)
@@ -167,6 +193,14 @@ class _ExtensionInstanceManager:
                 log(f"[ExtAuth] {name}: READY (port {api_port})")
             else:
                 log(f"[ExtAuth] {name}: extension not connected after 30s")
+
+        finally:
+            try:
+                import msvcrt
+                msvcrt.locking(fd.fileno(), msvcrt.LK_UNLCK, 1)
+                fd.close()
+            except Exception:
+                pass
 
     @classmethod
     def get_agent_port(cls, server_name: str) -> Optional[int]:
