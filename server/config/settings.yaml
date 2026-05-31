@@ -8,9 +8,9 @@ chrome_path: C:\Program Files\Google\Chrome\Application\chrome.exe
 chrome_portable: ./GoogleChromePortable/GoogleChromePortable.exe
 chrome_portable_2: ./GoogleChromePortable - Copy/GoogleChromePortable.exe
 chrome_profile: ''
-deepseek_api_key: sk-9a0f488007e04fa5a7f5a6896a4872c8
+deepseek_api_key: sk-8f878e41e2e4400a9cd98caa6245a958
 deepseek_api_keys:
-- sk-9a0f488007e04fa5a7f5a6896a4872c8
+- sk-8f878e41e2e4400a9cd98caa6245a958
 early_video_start: 10
 excel_mode: basic
 flow_aspect_ratio: landscape

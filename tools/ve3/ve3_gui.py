@@ -2210,6 +2210,19 @@ foreach ($pid in $children) {{
             with open(srt_cfg_path, "w", encoding="utf-8") as f:
                 yaml.dump(srt_cfg, f, default_flow_style=False, allow_unicode=True)
         except: pass
+        # Sync API keys to server/config/settings.yaml
+        try:
+            import yaml
+            srv_cfg_path = VE3_DIR.parent.parent / "server" / "config" / "settings.yaml"
+            if srv_cfg_path.exists():
+                srv_cfg = yaml.safe_load(srv_cfg_path.read_text(encoding="utf-8")) or {}
+                for key in ("deepseek_api_key", "deepseek_api_keys", "deepseek_model",
+                            "vov_direct_base_url", "vov_direct_api_key", "vov_direct_model"):
+                    if key in self.config_data:
+                        srv_cfg[key] = self.config_data[key]
+                with open(srv_cfg_path, "w", encoding="utf-8") as f:
+                    yaml.dump(srv_cfg, f, default_flow_style=False, allow_unicode=True)
+        except: pass
 
     def _music_workspace_mode_enabled(self):
         return bool(self.config_data.get("music_workspace_mode_enabled", True))
