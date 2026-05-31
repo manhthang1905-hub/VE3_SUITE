@@ -1659,6 +1659,31 @@ Generator/context error:
             self.log("[PSY] nv1.png chua co trong project/nv", "ERROR")
             return False
 
+        # Extension mode: upload via local agent (no UI automation)
+        auth_mode = str(self.config.get("flow_auth_mode", "chrome")).strip().lower()
+        if auth_mode == "extension":
+            try:
+                from modules.flow_extension_auth import FlowExtensionAuth
+                agent_url = str(self.config.get("flow_extension_agent_url", "http://127.0.0.1:8100")).strip()
+                ext_auth = FlowExtensionAuth(agent_url, log_func=self.log)
+                if ext_auth.is_ready():
+                    token = ext_auth.get_token()
+                    pid = self.flow_project_id or ext_auth.get_project_id()
+                    if token and pid:
+                        media_id = ext_auth.upload_image(str(image_path), token, pid)
+                        if media_id:
+                            update_data = {"status": "done", "media_id": media_id, "reference_media_checked": False, "image_file": "nv1.png"}
+                            with self._excel_lock:
+                                wb.update_character("nv1", **update_data)
+                                wb.safe_save(max_retries=8)
+                            char.status = "done"
+                            char.media_id = media_id
+                            self.log(f"[PSY] nv1 media_id via Extension: {media_id[:60]}", "SUCCESS")
+                            return True
+                self.log("[PSY] Extension upload failed, trying fallback...", "WARN")
+            except Exception as e:
+                self.log(f"[PSY] Extension error: {e}, trying fallback...", "WARN")
+
         # FlowKit mode: upload via agent endpoint instead of DrissionPage
         if self.generation_backend in ("flowkit", "combined") and self.flowkit_pool:
             media_id = self._upload_reference_via_flowkit(image_path)
