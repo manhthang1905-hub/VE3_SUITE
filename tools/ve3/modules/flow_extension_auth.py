@@ -314,7 +314,7 @@ class _ExtensionInstanceManager:
                 log(f"[ExtAuth] {name}: Chrome error: {e}")
                 continue
 
-            # Step 4: Apply CDP
+            # Step 4: Apply CDP + wait for extension to connect and capture token
             try:
                 from chrome_setup import apply_chrome_cdp
                 apply_chrome_cdp(
@@ -324,25 +324,7 @@ class _ExtensionInstanceManager:
             except Exception as e:
                 log(f"[ExtAuth] {name}: CDP error: {e}")
 
-            # Step 5: Minimize
-            try:
-                from DrissionPage import ChromiumPage, ChromiumOptions
-                _co = ChromiumOptions()
-                _co.set_address(f"127.0.0.1:{debug_port}")
-                _p = ChromiumPage(_co)
-                info = _p.run_cdp('Browser.getWindowForTarget')
-                wid = info.get('windowId')
-                if wid:
-                    _p.run_cdp('Browser.setWindowBounds', windowId=wid,
-                               bounds={'windowState': 'minimized'})
-                try:
-                    _p.disconnect()
-                except Exception:
-                    pass
-            except Exception:
-                pass
-
-            # Step 6: Wait extension connect
+            # Step 5: Wait extension connect + token captured
             ready = False
             for _ in range(30):
                 if cls.is_instance_ready(api_port):
@@ -351,13 +333,15 @@ class _ExtensionInstanceManager:
                 time.sleep(2)
 
             if ready:
-                cls._instances[name] = {"api_port": api_port, "agent_proc": agent_proc, "chrome_proc": chrome_proc}
+                cls._instances[name] = {"api_port": api_port, "agent_proc": agent_proc, "chrome_proc": chrome_proc,
+                                        "chrome_dir": str(chrome_dir)}
                 log(f"[ExtAuth] {name}: READY (port {api_port})")
             else:
                 try:
                     h = httpx.get(f"http://127.0.0.1:{api_port}/health", timeout=3).json()
                     if h.get("extension_connected"):
-                        cls._instances[name] = {"api_port": api_port, "agent_proc": agent_proc, "chrome_proc": chrome_proc}
+                        cls._instances[name] = {"api_port": api_port, "agent_proc": agent_proc, "chrome_proc": chrome_proc,
+                                                "chrome_dir": str(chrome_dir)}
                         log(f"[ExtAuth] {name}: connected, token pending")
                     else:
                         log(f"[ExtAuth] {name}: extension NOT connected")
@@ -378,6 +362,15 @@ class _ExtensionInstanceManager:
         if cls.is_instance_ready(port):
             return port
         return None
+
+    @classmethod
+    def release_chrome(cls, server_name: str, log=None):
+        """Kill Chrome for instance — agent keeps token in RAM. Call after auth done."""
+        log = log or (lambda m: None)
+        inst = cls._instances.get(server_name)
+        if inst and inst.get("chrome_dir"):
+            cls._kill_chrome_for_dir(Path(inst["chrome_dir"]))
+            log(f"[ExtAuth] {server_name}: Chrome released (agent keeps token)")
 
 
 class FlowExtensionAuth:
