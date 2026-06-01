@@ -439,14 +439,34 @@ class FlowRuntimeAuthService:
 
         if not agent_url or force_refresh:
             reason = "token expired" if force_refresh else "not running"
-            self.log(f"[AUTH] {server_name} (port {api_port}): {reason} — start on-demand", "INFO")
+            self.log(f"[AUTH] {server_name} (port {api_port}): {reason}", "INFO")
 
-            if force_refresh and _ExtensionInstanceManager._instances.get(server_name):
+            if force_refresh and _ExtensionInstanceManager._is_agent_alive(api_port):
+                # Agent chay roi, chi can mo lai Chrome de lay token moi
+                self.log(f"[AUTH] {server_name}: reopen Chrome (agent alive)", "INFO")
+                # Populate _instances cho reopen
+                srv_cfg = servers[server_index] if server_index < len(servers) else {}
+                chrome_dir = str(Path(srv_cfg.get("chrome_path", "")).parent) if srv_cfg.get("chrome_path") else ""
+                ext_dir_candidates = [
+                    Path(self.suite_root) / "flowkit_extensions" / f"ext_{api_port}",
+                    Path(self.suite_root) / "server" / "flowkit" / "flowkit_extensions" / f"ext_{api_port}",
+                ]
+                ext_dir = ""
+                for ed in ext_dir_candidates:
+                    if ed.exists():
+                        ext_dir = str(ed)
+                        break
+                _ExtensionInstanceManager._instances[server_name] = {
+                    "api_port": api_port, "chrome_dir": chrome_dir,
+                    "ext_dir": ext_dir, "debug_port": 19200 + server_index,
+                }
                 _ExtensionInstanceManager.reopen_chrome_for_instance(
                     server_name, str(self.suite_root),
                     log=lambda m: self.log(m, "INFO"),
                 )
             else:
+                # Agent chua chay, start tu dau
+                self.log(f"[AUTH] {server_name}: start on-demand (agent not running)", "INFO")
                 my_srv = servers[server_index] if server_index < len(servers) else None
                 if my_srv:
                     _ExtensionInstanceManager.start_one(
