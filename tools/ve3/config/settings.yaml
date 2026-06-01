@@ -30,6 +30,7 @@ flow_accounts:
   totp_secret: ag7b 35ne sdsx na3z xgkj kydl 3bmx 3fir
 flow_aspect_ratio: landscape
 flow_auth_auto_enabled: true
+flow_auth_mode: extension
 flow_auth_chrome_path: D:\VE3_SUITE\GoogleChromePortable\GoogleChromePortable.exe
 flow_auth_default_account: dendalion41
 flow_bearer_token: ''
@@ -129,8 +130,8 @@ local_server_list:
 - allowed_topics: ''
   chrome_path: D:\VE3_SUITE\GoogleChromePortable - Copy (13)\GoogleChromePortable.exe
   enabled: true
-  flow_account_bundle: lock05042007@gmail.com|NgOrKmUMrfpDfD|r2kz 6qmw jmps d7ks
-    t2jw njuw 257y n6rm
+  flow_account_bundle: lock05042007@gmail.com|NgOrKmUMrfpDfD|r2kz 6qmw jmps d7ks t2jw
+    njuw 257y n6rm
   name: sv13
   url: http://192.168.88.69:5100
 - allowed_topics: ''
@@ -143,8 +144,8 @@ local_server_list:
 - allowed_topics: ''
   chrome_path: D:\VE3_SUITE\GoogleChromePortable - Copy (15)\GoogleChromePortable.exe
   enabled: true
-  flow_account_bundle: lukaogrossoa@gmail.com|JuIXNXIaOXqJVI|sqof mbnl nlvw qpnd
-    z64z gwsl heek w65s
+  flow_account_bundle: lukaogrossoa@gmail.com|JuIXNXIaOXqJVI|sqof mbnl nlvw qpnd z64z
+    gwsl heek w65s
   name: sv15
   url: http://192.168.88.67:5100
 - allowed_topics: ''
@@ -185,8 +186,8 @@ local_server_list:
 - allowed_topics: ''
   chrome_path: D:\VE3_SUITE\GoogleChromePortable - Copy (21)\GoogleChromePortable.exe
   enabled: true
-  flow_account_bundle: nguyenvantinh2391994@gmail.com|19946269484947GiangB!@|frkn 7ovy
-    eee6 d4mg rpx2 gck4 pdxd xad3
+  flow_account_bundle: nguyenvantinh2391994@gmail.com|19946269484947GiangB!@|frkn
+    7ovy eee6 d4mg rpx2 gck4 pdxd xad3
   name: sv21
   url: http://192.168.88.62:5100
 local_server_url: http://192.168.88.145:5100
