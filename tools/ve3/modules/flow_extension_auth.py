@@ -403,29 +403,56 @@ class _ExtensionInstanceManager:
 
     @classmethod
     def start_one(cls, server_index: int, srv: dict, suite_root: str, log=None):
-        """Start a SINGLE instance on-demand with correct port. No PID lock needed."""
+        """Start a SINGLE instance on-demand. PID lock per-port to serialize across processes."""
         log = log or (lambda m: print(m))
         suite = Path(suite_root)
         api_port = 8100 + server_index
+        name = srv.get("name", f"sv{server_index+1}")
 
         if cls.is_instance_ready(api_port):
-            name = srv.get("name", f"sv{server_index+1}")
             cls._instances[name] = {"api_port": api_port}
             return True
 
-        flowkit_dir = suite / "tools" / "flowkit"
-        if not flowkit_dir.exists():
-            flowkit_dir = suite / "server" / "flowkit"
-        sys.path.insert(0, str(flowkit_dir))
+        # PID lock per-port: only 1 process starts this server at a time
+        lock_file = suite / f".ext_start_{api_port}.lock"
+        try:
+            if lock_file.exists():
+                old_pid = int(lock_file.read_text().strip())
+                if _is_pid_alive(old_pid) and old_pid != os.getpid():
+                    log(f"[ExtAuth] {name}: another process starting — waiting...")
+                    for _ in range(90):
+                        if cls.is_instance_ready(api_port):
+                            cls._instances[name] = {"api_port": api_port}
+                            return True
+                        time.sleep(2)
+                    return cls.is_instance_ready(api_port)
+        except Exception:
+            pass
 
-        dummy_sem = threading.Semaphore(1)
-        dummy_count = [0]
-        dummy_lock = threading.Lock()
-        dummy_event = threading.Event()
-        cls._start_single_instance(
-            server_index, srv, suite, flowkit_dir, log,
-            dummy_sem, dummy_count, dummy_lock, dummy_event,
-        )
+        try:
+            lock_file.write_text(str(os.getpid()))
+        except Exception:
+            pass
+
+        try:
+            flowkit_dir = suite / "tools" / "flowkit"
+            if not flowkit_dir.exists():
+                flowkit_dir = suite / "server" / "flowkit"
+            sys.path.insert(0, str(flowkit_dir))
+
+            dummy_sem = threading.Semaphore(1)
+            dummy_count = [0]
+            dummy_lock = threading.Lock()
+            dummy_event = threading.Event()
+            cls._start_single_instance(
+                server_index, srv, suite, flowkit_dir, log,
+                dummy_sem, dummy_count, dummy_lock, dummy_event,
+            )
+        finally:
+            try:
+                lock_file.unlink(missing_ok=True)
+            except Exception:
+                pass
         return cls.is_instance_ready(api_port) or cls._is_agent_alive(api_port)
 
     # ─── Chrome lifecycle ──────────────────────────────────────
