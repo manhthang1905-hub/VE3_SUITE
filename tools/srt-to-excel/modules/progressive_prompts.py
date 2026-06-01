@@ -7447,31 +7447,31 @@ Return EXACTLY {len(sequence_scenes)} scene_plans.
         except Exception as e:
             self._log(f"  [WARN] Step 7.5 (QA) crashed - continuing anyway: {e}", "WARN")
 
-        # Step 8: Generate Suno music prompts
+        # Step 8: Generate thumbnail prompts (truoc music de khong bi skip khi tat giua chung)
         self._log("\n" + "="*60)
-        self._log("  [STEP 8/8] Tao Suno music prompts...")
-        self._log("="*60)
-        try:
-            result = self.step_generate_music_prompts(project_dir, code, workbook)
-            if result.status == StepStatus.FAILED:
-                self._log("  [WARN] Step 8 (music) failed - continuing anyway", "WARN")
-            else:
-                self._log("  -> Music prompts saved to 'music' sheet")
-        except Exception as e:
-            self._log(f"  [WARN] Step 8 (music) crashed - continuing anyway: {e}", "WARN")
-
-        # Step 9: Generate thumbnail prompts
-        self._log("\n" + "="*60)
-        self._log("  [STEP 9/9] Tao thumbnail prompts...")
+        self._log("  [STEP 8/9] Tao thumbnail prompts...")
         self._log("="*60)
         try:
             result = self.step_generate_thumbnail_prompts(project_dir, code, workbook)
             if result.status == StepStatus.FAILED:
-                self._log("  [WARN] Step 9 (thumbnail) failed - continuing anyway", "WARN")
+                self._log("  [WARN] Step 8 (thumbnail) failed - continuing anyway", "WARN")
             else:
                 self._log("  -> Thumbnail prompts saved to 'thumbnail' sheet")
         except Exception as e:
-            self._log(f"  [WARN] Step 9 (thumbnail) crashed - continuing anyway: {e}", "WARN")
+            self._log(f"  [WARN] Step 8 (thumbnail) crashed - continuing anyway: {e}", "WARN")
+
+        # Step 9: Generate Suno music prompts
+        self._log("\n" + "="*60)
+        self._log("  [STEP 9/9] Tao Suno music prompts...")
+        self._log("="*60)
+        try:
+            result = self.step_generate_music_prompts(project_dir, code, workbook)
+            if result.status == StepStatus.FAILED:
+                self._log("  [WARN] Step 9 (music) failed - continuing anyway", "WARN")
+            else:
+                self._log("  -> Music prompts saved to 'music' sheet")
+        except Exception as e:
+            self._log(f"  [WARN] Step 9 (music) crashed - continuing anyway: {e}", "WARN")
 
         self._log("\n" + "="*70)
         self._log("  ALL STEPS COMPLETED!")
