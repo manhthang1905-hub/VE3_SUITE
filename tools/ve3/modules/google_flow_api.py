@@ -56,16 +56,16 @@ class VideoModel(Enum):
     """Model tạo video Veo 3."""
     # Text-to-Video models (t2v)
     VEO3_T2V_LITE = "veo_3_1_t2v_lite_low_priority"
-    VEO3_FAST = "veo_3_1_t2v_fast_ultra"
+    VEO3_FAST = "veo_3_1_t2v_lite_low_priority"
     VEO3_QUALITY = "veo_3_1_t2v"
     # Image-to-Video models (r2v = reference to video)
     VEO3_I2V_LITE = "veo_3_1_r2v_lite_low_priority"
-    VEO3_I2V_FAST_LANDSCAPE = "veo_3_1_r2v_fast_landscape_ultra"
-    VEO3_I2V_FAST_PORTRAIT = "veo_3_1_r2v_fast_portrait_ultra"
-    VEO3_I2V_QUALITY_LANDSCAPE = "veo_3_1_r2v_quality_landscape_ultra"
+    VEO3_I2V_FAST_LANDSCAPE = "veo_3_1_r2v_lite_low_priority"
+    VEO3_I2V_FAST_PORTRAIT = "veo_3_1_r2v_lite_low_priority"
+    VEO3_I2V_QUALITY_LANDSCAPE = "veo_3_1_r2v_lite_low_priority"
     # Backward compat aliases
     VEO3_I2V_FAST = "veo_3_1_r2v_lite_low_priority"
-    VEO3_I2V_QUALITY = "veo_3_1_r2v_quality_landscape_ultra"
+    VEO3_I2V_QUALITY = "veo_3_1_r2v_lite_low_priority"
 
 
 class PaygateTier(Enum):

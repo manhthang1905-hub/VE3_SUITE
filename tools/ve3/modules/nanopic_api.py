@@ -343,7 +343,7 @@ class NanoPicAPI:
         else:
             flow_url = f"{self.flow_base_url}/v1/video:batchAsyncGenerateVideoText"
 
-        video_model_key = self._resolve_i2v_model(video_model, aspect_ratio) if is_i2v else (video_model or "veo_3_1_t2v_fast_ultra")
+        video_model_key = self._resolve_i2v_model(video_model, aspect_ratio) if is_i2v else (video_model or "veo_3_1_t2v_lite_low_priority")
 
         request_data = {
             "aspectRatio": aspect_ratio,
