@@ -450,34 +450,20 @@ class FlowRuntimeAuthService:
             suite_root=str(self.suite_root),
         )
 
-        # force_refresh: kill Chrome → setup_chrome lai → extension capture token moi
-        # Y het luc ban dau: check login, re-login neu can, vao Flow, extension lay token
+        # force_refresh: reopen Chrome → extension capture token moi (nhe hon start_all)
         if force_refresh:
-            self.log(f"[AUTH] {server_name}: token expired — re-setup (y het luc dau)", "INFO")
+            self.log(f"[AUTH] {server_name}: token expired — reopen Chrome", "INFO")
             try:
                 from .flow_extension_auth import _ExtensionInstanceManager
             except ImportError:
                 from modules.flow_extension_auth import _ExtensionInstanceManager
 
-            chrome_dir = Path(servers[server_index].get("chrome_path", "")).parent
-            api_port = 8100 + server_index
-            debug_port = 19200 + server_index
-
-            # Kill Chrome cua instance nay
-            _ExtensionInstanceManager._kill_chrome_for_dir(chrome_dir)
-            time.sleep(2)
-
-            # Re-run full start cho tat ca (PID lock xu ly, chi start instance chua ready)
-            FlowExtensionAuth.start_all_instances(servers, str(self.suite_root),
-                                                   log_func=lambda m: self.log(m, "INFO"))
-
-            # Wait for agent ready again
-            for _ in range(60):
-                agent_url = FlowExtensionAuth.get_agent_url_by_index(server_index)
-                if agent_url:
-                    break
-                time.sleep(2)
-            if agent_url:
+            ok = _ExtensionInstanceManager.reopen_chrome_for_instance(
+                server_name, str(self.suite_root),
+                log=lambda m: self.log(m, "INFO"),
+            )
+            if ok:
+                agent_url = f"http://127.0.0.1:{api_port}"
                 ext_auth = FlowExtensionAuth(agent_url, log_func=lambda m: self.log(m, "INFO"),
                                              suite_root=str(self.suite_root))
 

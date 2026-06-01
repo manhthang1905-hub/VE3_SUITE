@@ -5226,19 +5226,21 @@ Get-CimInstance Win32_Process |
         self.pages["home"].btn_run_center.configure(text="STOP", fg_color="#D32F2F", hover_color="#9A0007")
         self._log(f"[QUEUE] Bt u: Excel worker + VE3 dispatcher. Pair sn sng {len(available_pairs)}/{len(configured_pairs)}.", "SUCCESS", "ve3")
         self._log("[QUEUE/EXCEL] Worker Excel da khoi dong, se quet PROJECTS va tiep tuc cac ma chua co Excel.", "SUCCESS", "excel")
-        # Start ALL extension instances TRUOC (y het FlowKit GUI — start tat ca roi moi cho worker dung)
+        # Start extension instances song song (y het FlowKit GUI)
         auth_mode = str(cfg.get("flow_auth_mode", "chrome")).strip().lower()
+        self.extension_ready_event = threading.Event()
         if auth_mode == "extension":
             self._log("[QUEUE] Starting extension instances (Chrome + agent)...", "INFO", "ve3")
             threading.Thread(target=self._start_extension_instances, args=(cfg,), daemon=True).start()
+        else:
+            self.extension_ready_event.set()
         self.queue_excel_thread = threading.Thread(target=self._queue_excel_loop, daemon=True)
         self.queue_ve3_thread = threading.Thread(target=self._queue_ve3_loop, args=(cfg,), daemon=True)
         self.queue_excel_thread.start()
         self.queue_ve3_thread.start()
 
     def _start_extension_instances(self, cfg):
-        """Start ALL extension Chrome+agent instances — y het FlowKit GUI _start_all.
-        Chay 1 lan khi queue start, worker chi dung khong tu start."""
+        """Start ALL extension instances song song — y het FlowKit GUI _start_all."""
         try:
             import sys as _sys
             _sys.path.insert(0, str(VE3_DIR.parent / "flowkit"))
@@ -5246,14 +5248,17 @@ Get-CimInstance Win32_Process |
             from modules.flow_extension_auth import FlowExtensionAuth
             servers = cfg.get("local_server_list", [])
             if not servers:
+                self.extension_ready_event.set()
                 return
             FlowExtensionAuth.start_all_instances(
                 servers, str(SUITE_ROOT),
                 log_func=lambda m: self._log(m, "INFO", "ve3"),
+                ready_event=self.extension_ready_event,
             )
             self._log("[QUEUE] Extension instances started.", "SUCCESS", "ve3")
         except Exception as e:
             self._log(f"[QUEUE] Extension start error: {e}", "ERROR", "ve3")
+            self.extension_ready_event.set()
 
     def _queue_projects(self):
         PROJECTS_DIR.mkdir(parents=True, exist_ok=True)
@@ -6309,6 +6314,14 @@ Get-CimInstance Win32_Process |
         self._log(f"[QUEUE/VE3] {code}: skip {reason}{suffix}", "INFO", "ve3")
 
     def _queue_ve3_loop(self, cfg):
+        # Wait for first extension instance ready before dispatching workers
+        auth_mode = str(cfg.get("flow_auth_mode", "chrome")).strip().lower()
+        if auth_mode == "extension" and hasattr(self, 'extension_ready_event'):
+            self._log("[QUEUE/VE3] Waiting for extension instances...", "INFO", "ve3")
+            if self.extension_ready_event.wait(timeout=300):
+                self._log("[QUEUE/VE3] Extension ready — starting VE3 dispatch", "SUCCESS", "ve3")
+            else:
+                self._log("[QUEUE/VE3] Extension not ready after 5min — proceeding anyway", "WARN", "ve3")
         try:
             while not self.queue_stop_requested:
                 did_work = False
