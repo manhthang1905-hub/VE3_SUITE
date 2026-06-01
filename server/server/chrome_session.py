@@ -439,18 +439,9 @@ return (function() {
                                 }];
                                 console.log('[VIDEO-PROXY] 2b. Injected mediaId: ' + window._clientMediaId.substring(0, 50) + '...');
                             }
-                            // v1.0.636: Doi model T2V â†’ I2V (giong API mode)
-                            // Chrome gui model t2v, can doi thanh r2v cho I2V endpoint
-                            var currentModel = req.videoModelKey || '';
-                            if (currentModel.includes('_t2v_')) {
-                                var newModel = currentModel.replace('_t2v_', '_r2v_');
-                                // I2V model can _landscape truoc _ultra
-                                if (newModel.includes('_ultra') && !newModel.includes('_landscape')) {
-                                    newModel = newModel.replace('_ultra', '_landscape_ultra');
-                                }
-                                req.videoModelKey = newModel;
-                                console.log('[VIDEO-PROXY] 2c-model. T2Vâ†’I2V model: ' + currentModel + ' â†’ ' + newModel);
-                            }
+                            // Force lite_low_priority model (free tier)
+                            req.videoModelKey = ‘veo_3_1_r2v_lite_low_priority’;
+                            console.log(‘[VIDEO-PROXY] 2c-model. Forced: veo_3_1_r2v_lite_low_priority’);
                             // Override neu VM chi dinh model cu the
                             if (window._clientVideoModel) {
                                 req.videoModelKey = window._clientVideoModel;

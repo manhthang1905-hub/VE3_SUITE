@@ -55,11 +55,11 @@ class VideoAspectRatio(Enum):
 class VideoModel(Enum):
     """Model tạo video Veo 3."""
     # Text-to-Video models (t2v)
-    VEO3_FAST = "veo_3_1_t2v_fast_ultra"  # Fast generation
-    VEO3_QUALITY = "veo_3_1_t2v"           # Quality generation
+    VEO3_FAST = "veo_3_1_t2v_lite_low_priority"
+    VEO3_QUALITY = "veo_3_1_t2v"
     # Image-to-Video models (r2v = reference to video)
-    VEO3_I2V_FAST = "veo_3_0_r2v_fast_ultra"  # Fast Image-to-Video
-    VEO3_I2V_QUALITY = "veo_3_0_r2v"           # Quality Image-to-Video
+    VEO3_I2V_FAST = "veo_3_1_r2v_lite_low_priority"
+    VEO3_I2V_QUALITY = "veo_3_1_r2v_lite_low_priority"
 
 
 class PaygateTier(Enum):
@@ -1491,7 +1491,7 @@ class GoogleFlowAPI:
             "textInput": {
                 "prompt": prompt
             },
-            "videoModelKey": request_data.get("videoModelKey", "veo_3_1_t2v_fast_ultra"),
+            "videoModelKey": request_data.get("videoModelKey", "veo_3_1_t2v_lite_low_priority"),
             "seed": request_data.get("seed"),
             "metadata": request_data.get("metadata", {})
         }

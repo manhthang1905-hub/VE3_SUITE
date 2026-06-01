@@ -379,7 +379,7 @@ return (function(){
             // T2V → I2V CONVERSION MODE: Convert Text-to-Video thành Image-to-Video
             // Chrome gửi T2V request (batchAsyncGenerateVideoText) với model veo_3_1_t2v_fast_landscape_ultra_relaxed
             // Interceptor chỉ đổi: _t2v_ → _r2v_, GIỮ NGUYÊN phần còn lại
-            // Result: veo_3_1_r2v_fast_landscape_ultra (I2V endpoint)
+            // Result: veo_3_1_r2v_lite_low_priority (I2V endpoint)
             // ============================================
             if (window._t2vToI2vConfig && chromeVideoBody && urlStr.includes('batchAsyncGenerateVideoText')) {
                 try {
@@ -6550,7 +6550,7 @@ class DrissionFlowAPI:
         media_id: str,
         prompt: str = "Subtle motion, cinematic, slow movement",
         aspect_ratio: str = "VIDEO_ASPECT_RATIO_LANDSCAPE",
-        video_model: str = "veo_3_1_r2v_fast_landscape_ultra",
+        video_model: str = "veo_3_1_r2v_lite_low_priority",
         max_wait: int = 360,
         max_retries: int = 3
     ) -> Tuple[bool, Optional[str], Optional[str]]:
@@ -6795,7 +6795,7 @@ class DrissionFlowAPI:
         media_id: str,
         prompt: str = "Subtle motion, cinematic, slow movement",
         aspect_ratio: str = "VIDEO_ASPECT_RATIO_LANDSCAPE",
-        video_model: str = "veo_3_1_r2v_fast_landscape_ultra",
+        video_model: str = "veo_3_1_r2v_lite_low_priority",
         max_wait: int = 360,
         save_path: Optional[Path] = None,
         max_retries: int = 3
@@ -7252,7 +7252,7 @@ class DrissionFlowAPI:
         prompt: str,
         save_path: Optional[Path] = None,
         aspect_ratio: str = "VIDEO_ASPECT_RATIO_LANDSCAPE",
-        video_model: str = "veo_3_1_r2v_fast_landscape_ultra",
+        video_model: str = "veo_3_1_r2v_lite_low_priority",
         max_wait: int = 360,
         timeout: int = 60,
         max_retries: int = 3
@@ -7373,7 +7373,7 @@ class DrissionFlowAPI:
         prompt: str,
         save_path: Optional[Path] = None,
         aspect_ratio: str = "VIDEO_ASPECT_RATIO_LANDSCAPE",
-        video_model: str = "veo_3_1_r2v_fast_landscape_ultra",
+        video_model: str = "veo_3_1_r2v_lite_low_priority",
         max_wait: int = 360,
         timeout: int = 60
     ) -> Tuple[bool, Optional[str], Optional[str]]:
@@ -7624,7 +7624,7 @@ class DrissionFlowAPI:
         media_id: str,
         prompt: str,
         save_path: Optional[Path] = None,
-        video_model: str = "veo_3_1_r2v_fast_landscape_ultra",
+        video_model: str = "veo_3_1_r2v_lite_low_priority",
         max_wait: int = 360,
         timeout: int = 360,  # v1.0.447: Tăng lên 6 phút cho video
         max_retries: int = 3

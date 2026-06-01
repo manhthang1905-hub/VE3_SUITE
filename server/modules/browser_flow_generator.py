@@ -3361,7 +3361,7 @@ class BrowserFlowGenerator:
                 success, result_path, error = drission_api.generate_video_t2v_mode(
                     media_id=media_id,
                     prompt=video_prompt,
-                    video_model="veo_3_0_r2v_fast",
+                    video_model="veo_3_1_r2v_lite_low_priority",
                     save_path=video_file
                 )
 
@@ -5813,7 +5813,7 @@ class BrowserFlowGenerator:
                         success, result_path, error = drission_api.generate_video_t2v_mode(
                             media_id=media_id,
                             prompt=video_prompt,
-                            video_model="veo_3_0_r2v_fast",
+                            video_model="veo_3_1_r2v_lite_low_priority",
                             save_path=video_file  # Tự download luôn
                         )
 
