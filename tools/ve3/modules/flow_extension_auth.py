@@ -79,23 +79,45 @@ class _ExtensionInstanceManager:
 
     @classmethod
     def _kill_chrome_for_dir(cls, chrome_dir: Path):
+        """Kill Chrome + ALL child processes for a specific chrome dir."""
         dir_name = chrome_dir.name
+        # Step 1: find PIDs
+        pids = set()
         try:
-            subprocess.run(
+            proc = subprocess.run(
                 ['wmic', 'process', 'where',
                  f"name='chrome.exe' and CommandLine like '%{dir_name}%'",
-                 'call', 'terminate'],
-                capture_output=True, timeout=10, creationflags=0x08000000)
+                 'get', 'ProcessId', '/FORMAT:CSV'],
+                capture_output=True, text=True, timeout=8, creationflags=0x08000000)
+            for line in (proc.stdout or "").splitlines():
+                s = line.strip()
+                if s:
+                    parts = s.rsplit(',', 1)
+                    if len(parts) == 2 and parts[1].strip().isdigit():
+                        pids.add(parts[1].strip())
         except Exception:
             pass
         try:
-            subprocess.run(
+            proc = subprocess.run(
                 ['wmic', 'process', 'where',
                  f"name='GoogleChromePortable.exe' and CommandLine like '%{dir_name}%'",
-                 'call', 'terminate'],
-                capture_output=True, timeout=10, creationflags=0x08000000)
+                 'get', 'ProcessId', '/FORMAT:CSV'],
+                capture_output=True, text=True, timeout=8, creationflags=0x08000000)
+            for line in (proc.stdout or "").splitlines():
+                s = line.strip()
+                if s:
+                    parts = s.rsplit(',', 1)
+                    if len(parts) == 2 and parts[1].strip().isdigit():
+                        pids.add(parts[1].strip())
         except Exception:
             pass
+        # Step 2: tree kill each PID
+        for pid in pids:
+            try:
+                subprocess.run(['taskkill', '/F', '/T', '/PID', pid],
+                               capture_output=True, timeout=5, creationflags=0x08000000)
+            except Exception:
+                pass
 
     @classmethod
     def _wait_all_ready(cls, servers: List[dict], timeout: int = 300, log=None):
