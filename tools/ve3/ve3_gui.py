@@ -2182,8 +2182,17 @@ foreach ($pid in $children) {{
                 pass
 
     def _kill_extension_instances(self):
-        """Kill all Chrome + agent started by extension mode."""
+        """Kill all Chrome + agent + cleanup lock files."""
         import subprocess as _sp
+        for f in SUITE_ROOT.glob(".ext_start_*.lock"):
+            try:
+                f.unlink()
+            except Exception:
+                pass
+        try:
+            (SUITE_ROOT / ".extension_startup.lock").unlink(missing_ok=True)
+        except Exception:
+            pass
         try:
             _sp.run(['wmic', 'process', 'where',
                      "name='chrome.exe' and CommandLine like '%GoogleChromePortable%'",
