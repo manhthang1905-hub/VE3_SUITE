@@ -5758,6 +5758,18 @@ Get-CimInstance Win32_Process |
             summary = state.get("summary")
             if summary and summary.get("completion_pct", 0) < 100:
                 return False
+            # Check thumbnail — excel chua xong neu thumbnail chua co
+            thumbnails = state.get("thumbnails") or []
+            if not thumbnails:
+                try:
+                    from modules.excel_manager import PromptWorkbook
+                    wb = PromptWorkbook(str(ep))
+                    wb.load_or_create()
+                    thumbnails = wb.get_thumbnails() if hasattr(wb, 'get_thumbnails') else []
+                except Exception:
+                    pass
+            if not thumbnails:
+                return False
             return True
         except Exception as exc:
             return False
