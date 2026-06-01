@@ -470,17 +470,14 @@ class FlowRuntimeAuthService:
         if not token:
             return {"ok": "", "error": "extension: no token"}
 
-        # force_refresh (401): chi can token moi, giu project cu + media_id cu
-        if force_refresh and existing_pid:
-            pid = existing_pid
-        else:
-            pid = existing_pid
-            if not pid:
-                pid = ext_auth.get_project_id()
-            if not pid:
-                pid = ext_auth.ensure_project()
-            if not pid:
-                return {"ok": "", "error": "extension: no project"}
+        # Project ID: 1 VE3 project = 1 Flow project. Không bao giờ tạo mới nếu đã có.
+        pid = existing_pid or str(wb.get_config_value("flow_project_id") or "").strip()
+        if not pid:
+            pid = ext_auth.get_project_id()
+        if not pid:
+            pid = ext_auth.ensure_project()
+        if not pid:
+            return {"ok": "", "error": "extension: no project"}
 
         purl = self._normalize_project_url(pid, "")
         self._write_auth_back(project_dir, wb, token, pid, purl, account.name if account else "")
