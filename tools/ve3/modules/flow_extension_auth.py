@@ -60,16 +60,16 @@ class _ExtensionInstanceManager:
 
     @classmethod
     def _kill_on_port(cls, port: int, log=None):
+        """Kill process on port — uses PowerShell one-liner (no CMD accumulation)."""
         log = log or (lambda m: None)
         try:
             result = subprocess.run(
-                ['netstat', '-ano', '-p', 'TCP'],
-                capture_output=True, text=True, timeout=5, creationflags=0x08000000)
-            for line in result.stdout.splitlines():
-                if f':{port} ' not in line or 'LISTENING' not in line:
-                    continue
-                pid = line.strip().split()[-1]
-                if pid.isdigit() and int(pid) > 0:
+                ['powershell', '-NoProfile', '-Command',
+                 f'(Get-NetTCPConnection -LocalPort {port} -State Listen -EA SilentlyContinue).OwningProcess'],
+                capture_output=True, text=True, timeout=8, creationflags=0x08000000)
+            for pid in result.stdout.strip().splitlines():
+                pid = pid.strip()
+                if pid and pid.isdigit() and int(pid) > 0:
                     subprocess.run(['taskkill', '/F', '/T', '/PID', pid],
                                    capture_output=True, timeout=5, creationflags=0x08000000)
                     log(f"[ExtAuth] Killed PID {pid} on port {port}")
