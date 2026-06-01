@@ -3535,7 +3535,7 @@ Generator/context error:
                         "requests": [{
                             "aspectRatio": video_ar,
                             "textInput": {"structuredPrompt": {"parts": [{"text": prompt}]}},
-                            "videoModelKey": "veo_3_1_t2v_lite_low_priority",
+                            "videoModelKey": "veo_3_1_r2v_lite_low_priority",
                             "seed": int(time.time()) % 10000,
                             "metadata": {},
                             "referenceImages": [{"mediaId": reference_image_id, "imageUsageType": "IMAGE_USAGE_TYPE_ASSET"}],
