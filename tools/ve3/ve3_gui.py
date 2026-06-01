@@ -5226,14 +5226,7 @@ Get-CimInstance Win32_Process |
         self.pages["home"].btn_run_center.configure(text="STOP", fg_color="#D32F2F", hover_color="#9A0007")
         self._log(f"[QUEUE] Bt u: Excel worker + VE3 dispatcher. Pair sn sng {len(available_pairs)}/{len(configured_pairs)}.", "SUCCESS", "ve3")
         self._log("[QUEUE/EXCEL] Worker Excel da khoi dong, se quet PROJECTS va tiep tuc cac ma chua co Excel.", "SUCCESS", "excel")
-        # Start extension instances song song (y het FlowKit GUI)
-        auth_mode = str(cfg.get("flow_auth_mode", "chrome")).strip().lower()
-        self.extension_ready_event = threading.Event()
-        if auth_mode == "extension":
-            self._log("[QUEUE] Starting extension instances (Chrome + agent)...", "INFO", "ve3")
-            threading.Thread(target=self._start_extension_instances, args=(cfg,), daemon=True).start()
-        else:
-            self.extension_ready_event.set()
+        # Extension mode: workers tu mo Chrome khi can (on-demand), khong start tat ca luc dau
         self.queue_excel_thread = threading.Thread(target=self._queue_excel_loop, daemon=True)
         self.queue_ve3_thread = threading.Thread(target=self._queue_ve3_loop, args=(cfg,), daemon=True)
         self.queue_excel_thread.start()
@@ -6314,14 +6307,6 @@ Get-CimInstance Win32_Process |
         self._log(f"[QUEUE/VE3] {code}: skip {reason}{suffix}", "INFO", "ve3")
 
     def _queue_ve3_loop(self, cfg):
-        # Wait for first extension instance ready before dispatching workers
-        auth_mode = str(cfg.get("flow_auth_mode", "chrome")).strip().lower()
-        if auth_mode == "extension" and hasattr(self, 'extension_ready_event'):
-            self._log("[QUEUE/VE3] Waiting for extension instances...", "INFO", "ve3")
-            if self.extension_ready_event.wait(timeout=300):
-                self._log("[QUEUE/VE3] Extension ready — starting VE3 dispatch", "SUCCESS", "ve3")
-            else:
-                self._log("[QUEUE/VE3] Extension not ready after 5min — proceeding anyway", "WARN", "ve3")
         try:
             while not self.queue_stop_requested:
                 did_work = False

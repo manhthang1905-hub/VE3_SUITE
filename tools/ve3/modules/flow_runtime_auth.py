@@ -429,43 +429,45 @@ class FlowRuntimeAuthService:
 
         api_port = 8100 + server_index
 
-        # Check port directly
-        # Worker chi check port — GUI da start instances truoc (y het FlowKit)
+        try:
+            from .flow_extension_auth import _ExtensionInstanceManager
+        except ImportError:
+            from modules.flow_extension_auth import _ExtensionInstanceManager
+
+        # On-demand: check port → start CHI server nay neu can
         agent_url = FlowExtensionAuth.get_agent_url_by_index(server_index)
-        if not agent_url:
-            # Doi GUI start xong (max 3 phut)
-            self.log(f"[AUTH] Agent port {api_port} ({server_name}) not ready — waiting for GUI to start...", "INFO")
-            for _ in range(90):
+
+        if not agent_url or force_refresh:
+            reason = "token expired" if force_refresh else "not running"
+            self.log(f"[AUTH] {server_name} (port {api_port}): {reason} — start on-demand", "INFO")
+
+            if force_refresh and _ExtensionInstanceManager._instances.get(server_name):
+                _ExtensionInstanceManager.reopen_chrome_for_instance(
+                    server_name, str(self.suite_root),
+                    log=lambda m: self.log(m, "INFO"),
+                )
+            else:
+                my_srv = servers[server_index] if server_index < len(servers) else None
+                if my_srv:
+                    _ExtensionInstanceManager.start_one(
+                        server_index, my_srv, str(self.suite_root),
+                        log=lambda m: self.log(m, "INFO"),
+                    )
+
+            for _ in range(30):
                 agent_url = FlowExtensionAuth.get_agent_url_by_index(server_index)
                 if agent_url:
                     break
                 time.sleep(2)
             if not agent_url:
-                self.log(f"[AUTH] Agent port {api_port} ({server_name}) not ready after 3min", "WARN")
-                return {"ok": "", "error": f"extension agent not ready for {server_name} — GUI chua start?"}
+                self.log(f"[AUTH] {server_name}: port {api_port} not ready", "WARN")
+                return {"ok": "", "error": f"extension agent not ready for {server_name}"}
 
         ext_auth = FlowExtensionAuth(
             agent_url,
             log_func=lambda m: self.log(m, "INFO"),
             suite_root=str(self.suite_root),
         )
-
-        # force_refresh: reopen Chrome → extension capture token moi (nhe hon start_all)
-        if force_refresh:
-            self.log(f"[AUTH] {server_name}: token expired — reopen Chrome", "INFO")
-            try:
-                from .flow_extension_auth import _ExtensionInstanceManager
-            except ImportError:
-                from modules.flow_extension_auth import _ExtensionInstanceManager
-
-            ok = _ExtensionInstanceManager.reopen_chrome_for_instance(
-                server_name, str(self.suite_root),
-                log=lambda m: self.log(m, "INFO"),
-            )
-            if ok:
-                agent_url = f"http://127.0.0.1:{api_port}"
-                ext_auth = FlowExtensionAuth(agent_url, log_func=lambda m: self.log(m, "INFO"),
-                                             suite_root=str(self.suite_root))
 
         token = ext_auth.get_token()
         if not token:

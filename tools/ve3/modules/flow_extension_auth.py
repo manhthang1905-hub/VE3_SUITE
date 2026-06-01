@@ -399,6 +399,35 @@ class _ExtensionInstanceManager:
             return port
         return None
 
+    # ─── On-demand start for single server ─────────────────────
+
+    @classmethod
+    def start_one(cls, server_index: int, srv: dict, suite_root: str, log=None):
+        """Start a SINGLE instance on-demand with correct port. No PID lock needed."""
+        log = log or (lambda m: print(m))
+        suite = Path(suite_root)
+        api_port = 8100 + server_index
+
+        if cls.is_instance_ready(api_port):
+            name = srv.get("name", f"sv{server_index+1}")
+            cls._instances[name] = {"api_port": api_port}
+            return True
+
+        flowkit_dir = suite / "tools" / "flowkit"
+        if not flowkit_dir.exists():
+            flowkit_dir = suite / "server" / "flowkit"
+        sys.path.insert(0, str(flowkit_dir))
+
+        dummy_sem = threading.Semaphore(1)
+        dummy_count = [0]
+        dummy_lock = threading.Lock()
+        dummy_event = threading.Event()
+        cls._start_single_instance(
+            server_index, srv, suite, flowkit_dir, log,
+            dummy_sem, dummy_count, dummy_lock, dummy_event,
+        )
+        return cls.is_instance_ready(api_port) or cls._is_agent_alive(api_port)
+
     # ─── Chrome lifecycle ──────────────────────────────────────
 
     @classmethod
