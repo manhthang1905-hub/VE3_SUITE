@@ -1013,26 +1013,30 @@ class HomePage(ctk.CTkScrollableFrame):
             def sort_priority(r):
                 state = r["state"]
                 next_step = str(r.get("next", ""))
-                has_server = bool(r.get("server_name") and r.get("server_name") != "-")
-                has_account = bool(r.get("account_name") and r.get("account_name") != "-")
-                has_pair = has_server and has_account
+                is_ve3_run = state == "RUN" and r.get("ve3_running")
+                is_excel_run = state == "RUN" and r.get("excel_running") and not r.get("ve3_running")
+                srv = r.get("server_name", "zz") or "zz"
 
-                if state == "RUN":
-                    return 0  # Running - highest priority
+                if is_ve3_run:
+                    return (0, srv)
+                elif is_excel_run:
+                    return (1, srv)
+                elif state == "RUN":
+                    return (2, srv)
                 elif state == "WAIT" and "VE3" in next_step:
-                    return 1  # Ready for VE3 - Excel done
+                    return (3, r["code"])
                 elif state == "WAIT" and "Excel" in next_step:
-                    return 2  # Ready for Excel
-                elif state == "WAIT" and has_pair:
-                    return 3  # Has server/account pair - work in progress
+                    return (4, r["code"])
+                elif state == "WAIT":
+                    return (5, r["code"])
                 elif state == "BLOCK":
-                    return 4  # Blocked
+                    return (6, r["code"])
                 elif state == "DONE":
-                    return 5  # Completed
+                    return (7, r["code"])
                 else:
-                    return 6  # Not started yet
+                    return (8, r["code"])
 
-            ordered = sorted(rows, key=lambda r: (sort_priority(r), r["code"]))
+            ordered = sorted(rows, key=lambda r: sort_priority(r))
         except Exception as e:
             ordered = rows
 
@@ -1054,8 +1058,12 @@ class HomePage(ctk.CTkScrollableFrame):
                 border_color=border,
             )
             row.grid(row=i, column=0, padx=6, pady=(0,4), sticky="ew")
-            for col, weight in enumerate((0, 2, 2, 2, 1, 0, 0, 0)):
-                row.grid_columnconfigure(col, weight=weight)
+            row.grid_columnconfigure(0, weight=0, minsize=90)
+            row.grid_columnconfigure(1, weight=2, minsize=140)
+            row.grid_columnconfigure(2, weight=2, minsize=160)
+            row.grid_columnconfigure(3, weight=2, minsize=130)
+            for col in range(4, 8):
+                row.grid_columnconfigure(col, weight=0)
             row.grid_propagate(False)
             row.configure(height=40)
 
