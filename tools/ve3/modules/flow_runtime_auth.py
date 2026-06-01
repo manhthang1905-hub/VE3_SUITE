@@ -440,7 +440,8 @@ class FlowRuntimeAuthService:
         if not agent_url or force_refresh:
             reason = "token expired — kill + start lai" if force_refresh else "not running"
             self.log(f"[AUTH] {server_name} (port {api_port}): {reason}", "INFO")
-            my_srv = servers[server_index] if server_index < len(servers) else None
+            # Worker list chi co 1 entry (server duoc assign), dung servers[0]
+            my_srv = servers[0] if servers else None
             if my_srv:
                 _ExtensionInstanceManager.start_one(
                     server_index, my_srv, str(self.suite_root),
