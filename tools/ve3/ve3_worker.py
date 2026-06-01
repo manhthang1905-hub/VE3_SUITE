@@ -1204,9 +1204,11 @@ Generator/context error:
         if str(self.config.get("flow_auth_mode", "")).strip().lower() == "extension":
             try:
                 from modules.flow_extension_auth import _ExtensionInstanceManager
-                my_server = self.server_list[0].get("name", "") if self.server_list else ""
+                srv = self.server_list[0] if self.server_list else {}
+                my_server = srv.get("name", "")
+                chrome_dir = str(Path(srv.get("chrome_path", "")).parent) if srv.get("chrome_path") else ""
                 if my_server:
-                    _ExtensionInstanceManager.release_chrome(my_server, log=self.log)
+                    _ExtensionInstanceManager.release_chrome(my_server, log=self.log, chrome_dir=chrome_dir)
             except Exception:
                 pass
 

@@ -431,17 +431,23 @@ class _ExtensionInstanceManager:
     # ─── Chrome lifecycle ──────────────────────────────────────
 
     @classmethod
-    def release_chrome(cls, server_name: str, log=None):
+    def release_chrome(cls, server_name: str, log=None, chrome_dir: str = ""):
         """Kill Chrome — agent keeps token in RAM."""
         log = log or (lambda m: None)
+        # Try from _instances first
         inst = cls._instances.get(server_name)
-        if not inst or inst.get("chrome_released"):
-            return
-        chrome_dir = inst.get("chrome_dir")
+        if inst and not inst.get("chrome_released"):
+            d = inst.get("chrome_dir", "")
+            if d:
+                cls._kill_chrome_for_dir(Path(d))
+                inst["chrome_released"] = True
+                log(f"[ExtAuth] {server_name}: Chrome released")
+                return
+        # Fallback: kill by chrome_dir directly
         if chrome_dir:
             cls._kill_chrome_for_dir(Path(chrome_dir))
-            inst["chrome_released"] = True
-            log(f"[ExtAuth] {server_name}: Chrome released (agent keeps token)")
+            log(f"[ExtAuth] {server_name}: Chrome released (direct)")
+            return
 
     @classmethod
     def reopen_chrome_for_instance(cls, server_name: str, suite_root: str, log=None):

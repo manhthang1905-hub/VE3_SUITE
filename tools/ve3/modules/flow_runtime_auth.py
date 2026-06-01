@@ -482,6 +482,12 @@ class FlowRuntimeAuthService:
         self._write_auth_back(project_dir, wb, token, pid, purl, account.name if account else "")
         self.log(f"[AUTH] {project_dir.name}: token via extension for project {pid[:8]}...", "SUCCESS")
 
+        # Release Chrome — agent giu token, Chrome khong can nua
+        if force_refresh:
+            srv = servers[0] if servers else {}
+            chrome_dir = str(Path(srv.get("chrome_path", "")).parent) if srv.get("chrome_path") else ""
+            _ExtensionInstanceManager.release_chrome(server_name, log=lambda m: self.log(m, "INFO"), chrome_dir=chrome_dir)
+
         return {
             "ok": "1",
             "error": "",
