@@ -1678,7 +1678,12 @@ Generator/context error:
         if auth_mode == "extension":
             try:
                 from modules.flow_extension_auth import FlowExtensionAuth
-                agent_url = str(self.config.get("flow_extension_agent_url", "http://127.0.0.1:8100")).strip()
+                import re as _re
+                srv = self.server_list[0] if self.server_list else {}
+                srv_name = srv.get("name", "sv1")
+                m = _re.match(r'[a-zA-Z]+(\d+)', srv_name)
+                srv_port = 8100 + (int(m.group(1)) - 1) if m else 8100
+                agent_url = f"http://127.0.0.1:{srv_port}"
                 ext_auth = FlowExtensionAuth(agent_url, log_func=self.log)
                 if ext_auth.is_ready():
                     token = ext_auth.get_token()
