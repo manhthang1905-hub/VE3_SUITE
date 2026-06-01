@@ -419,15 +419,20 @@ class _ExtensionInstanceManager:
             if lock_file.exists():
                 old_pid = int(lock_file.read_text().strip())
                 if _is_pid_alive(old_pid) and old_pid != os.getpid():
-                    log(f"[ExtAuth] {name}: another process starting — waiting...")
+                    log(f"[ExtAuth] {name}: another process starting port {api_port} — waiting...")
                     for _ in range(90):
-                        if cls.is_instance_ready(api_port):
+                        if cls.is_instance_ready(api_port) or cls._is_agent_alive(api_port):
                             cls._instances[name] = {"api_port": api_port}
                             return True
                         time.sleep(2)
-                    return cls.is_instance_ready(api_port)
+                    return cls.is_instance_ready(api_port) or cls._is_agent_alive(api_port)
         except Exception:
             pass
+
+        # Re-check after lock wait — another process may have started it
+        if cls.is_instance_ready(api_port) or cls._is_agent_alive(api_port):
+            cls._instances[name] = {"api_port": api_port}
+            return True
 
         try:
             lock_file.write_text(str(os.getpid()))
