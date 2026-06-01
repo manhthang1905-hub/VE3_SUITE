@@ -1010,19 +1010,24 @@ class HomePage(ctk.CTkScrollableFrame):
             # 4 = BLOCK (blocked)
             # 5 = DONE (completed)
             # 6 = WAIT + no pair (not started yet)
+            def _srv_num(name):
+                import re as _r
+                m = _r.search(r'(\d+)', str(name or ""))
+                return int(m.group(1)) if m else 999
+
             def sort_priority(r):
                 state = r["state"]
                 next_step = str(r.get("next", ""))
                 is_ve3_run = state == "RUN" and r.get("ve3_running")
                 is_excel_run = state == "RUN" and r.get("excel_running") and not r.get("ve3_running")
-                srv = r.get("server_name", "zz") or "zz"
+                srv_n = _srv_num(r.get("server_name"))
 
                 if is_ve3_run:
-                    return (0, srv)
+                    return (0, srv_n)
                 elif is_excel_run:
-                    return (1, srv)
+                    return (1, srv_n)
                 elif state == "RUN":
-                    return (2, srv)
+                    return (2, srv_n)
                 elif state == "WAIT" and "VE3" in next_step:
                     return (3, r["code"])
                 elif state == "WAIT" and "Excel" in next_step:
@@ -1058,10 +1063,10 @@ class HomePage(ctk.CTkScrollableFrame):
                 border_color=border,
             )
             row.grid(row=i, column=0, padx=6, pady=(0,4), sticky="ew")
-            row.grid_columnconfigure(0, weight=0, minsize=90)
-            row.grid_columnconfigure(1, weight=2, minsize=140)
-            row.grid_columnconfigure(2, weight=2, minsize=160)
-            row.grid_columnconfigure(3, weight=2, minsize=130)
+            row.grid_columnconfigure(0, weight=0, minsize=85)
+            row.grid_columnconfigure(1, weight=0, minsize=80)
+            row.grid_columnconfigure(2, weight=1, minsize=220)
+            row.grid_columnconfigure(3, weight=1, minsize=180)
             for col in range(4, 8):
                 row.grid_columnconfigure(col, weight=0)
             row.grid_propagate(False)
@@ -1092,7 +1097,7 @@ class HomePage(ctk.CTkScrollableFrame):
             ctk.CTkLabel(
                 row,
                 text=pair_label(r),
-                font=("", 10),
+                font=("Consolas", 9),
                 text_color=T3,
                 anchor="w",
             ).grid(row=0, column=2, padx=(0,10), pady=6, sticky="ew")
