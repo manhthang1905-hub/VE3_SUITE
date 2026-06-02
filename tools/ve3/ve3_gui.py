@@ -1045,139 +1045,93 @@ class HomePage(ctk.CTkScrollableFrame):
         except Exception as e:
             ordered = rows
 
-        # Render projects list — skip rebuild if data unchanged
-        _sig = tuple(
-            (r["code"], r["state"], r.get("next",""), r.get("img_progress",""), r.get("vid_progress",""),
-             r.get("music_progress",""), r.get("server_name",""), r.get("latest_media_age",""))
-            for r in ordered
-        )
-        if getattr(self, "_last_projects_sig", None) == _sig:
-            return
-        self._last_projects_sig = _sig
+        # Render projects list — reuse existing widgets, only update text/colors
+        if not hasattr(self, "_project_row_widgets"):
+            self._project_row_widgets = []
 
-        for w in self.projects_list.winfo_children():
-            w.destroy()
-        if not ordered:
-            ctk.CTkLabel(self.projects_list, text="No project in PROJECTS.", font=("",10), text_color=T3).grid(row=0, column=0, padx=8, pady=8, sticky="w")
-            return
+        need_rebuild = len(ordered) != len(self._project_row_widgets)
+        if not need_rebuild:
+            old_codes = [w["code"] for w in self._project_row_widgets]
+            new_codes = [r["code"] for r in ordered]
+            if old_codes != new_codes:
+                need_rebuild = True
 
+        if need_rebuild:
+            for w in self.projects_list.winfo_children():
+                w.destroy()
+            self._project_row_widgets = []
+            if not ordered:
+                ctk.CTkLabel(self.projects_list, text="No project in PROJECTS.", font=("",10), text_color=T3).grid(row=0, column=0, padx=8, pady=8, sticky="w")
+                return
+            for i, r in enumerate(ordered):
+                bg = "#FFFFFF" if i % 2 == 0 else "#FBFCFD"
+                border = "#D9E7FF" if r["state"] == "RUN" else "#E6EAEE"
+                row = ctk.CTkFrame(self.projects_list, fg_color=bg, corner_radius=6, border_width=1, border_color=border)
+                row.grid(row=i, column=0, padx=6, pady=(0,4), sticky="ew")
+                row.grid_columnconfigure(0, weight=0, minsize=85)
+                row.grid_columnconfigure(1, weight=0, minsize=80)
+                row.grid_columnconfigure(2, weight=1, minsize=220)
+                row.grid_columnconfigure(3, weight=1, minsize=180)
+                for col in range(4, 8):
+                    row.grid_columnconfigure(col, weight=0)
+                row.grid_propagate(False)
+                row.configure(height=40)
+                lbl_code = ctk.CTkLabel(row, text=r["code"], font=("Consolas", 11, "bold"), text_color=T1)
+                lbl_code.grid(row=0, column=0, padx=(10,8), pady=6, sticky="w")
+                lbl_step = ctk.CTkLabel(row, text="", font=("", 10, "bold"), text_color=T1, anchor="w")
+                lbl_step.grid(row=0, column=1, padx=(0,10), pady=6, sticky="ew")
+                lbl_pair = ctk.CTkLabel(row, text="", font=("Consolas", 9), text_color=T3, anchor="w")
+                lbl_pair.grid(row=0, column=2, padx=(0,10), pady=6, sticky="ew")
+                lbl_prog = ctk.CTkLabel(row, text="", font=("Consolas", 10), text_color=T2, anchor="w")
+                lbl_prog.grid(row=0, column=3, padx=(0,10), pady=6, sticky="ew")
+                lbl_media = ctk.CTkLabel(row, text="", font=("Consolas", 10, "bold"), text_color=T2, anchor="w")
+                lbl_media.grid(row=0, column=4, padx=(0,10), pady=6, sticky="ew")
+                lbl_state = ctk.CTkLabel(row, text="", corner_radius=9, font=("Consolas", 10, "bold"), width=64, height=22)
+                lbl_state.grid(row=0, column=5, padx=(0,8), pady=6, sticky="w")
+                btn_done = ctk.CTkButton(row, text="Xong", width=64, height=22, corner_radius=4, font=("",10))
+                btn_done.grid(row=0, column=6, padx=(0,4), pady=6, sticky="e")
+                btn_reset = ctk.CTkButton(row, text="Reset", width=50, height=22, corner_radius=4,
+                                          fg_color="#EF5350", hover_color="#D32F2F", text_color="#FFFFFF", font=("",10))
+                btn_reset.grid(row=0, column=7, padx=(0,10), pady=6, sticky="e")
+                self._project_row_widgets.append({
+                    "code": r["code"], "frame": row,
+                    "lbl_step": lbl_step, "lbl_pair": lbl_pair, "lbl_prog": lbl_prog,
+                    "lbl_media": lbl_media, "lbl_state": lbl_state,
+                    "btn_done": btn_done, "btn_reset": btn_reset,
+                })
+
+        state_colors = {
+            "RUN": ("#E8F2FF", RN), "WAIT": ("#FFF4DD", "#C47F00"),
+            "DONE": ("#E8F7ED", OK), "BLOCK": ("#FDECEC", ER),
+        }
         for i, r in enumerate(ordered):
-            bg = "#FFFFFF" if i % 2 == 0 else "#FBFCFD"
+            if i >= len(self._project_row_widgets):
+                break
+            w = self._project_row_widgets[i]
+            st = state_label(r)
+            badge_bg, badge_fg = state_colors.get(st, ("#F2F2F2", T2))
             border = "#D9E7FF" if r["state"] == "RUN" else "#E6EAEE"
-            row = ctk.CTkFrame(
-                self.projects_list,
-                fg_color=bg,
-                corner_radius=6,
-                border_width=1,
-                border_color=border,
-            )
-            row.grid(row=i, column=0, padx=6, pady=(0,4), sticky="ew")
-            row.grid_columnconfigure(0, weight=0, minsize=85)
-            row.grid_columnconfigure(1, weight=0, minsize=80)
-            row.grid_columnconfigure(2, weight=1, minsize=220)
-            row.grid_columnconfigure(3, weight=1, minsize=180)
-            for col in range(4, 8):
-                row.grid_columnconfigure(col, weight=0)
-            row.grid_propagate(False)
-            row.configure(height=40)
-
-            state = state_label(r)
-            state_colors = {
-                "RUN": ("#E8F2FF", RN),
-                "WAIT": ("#FFF4DD", "#C47F00"),
-                "DONE": ("#E8F7ED", OK),
-                "BLOCK": ("#FDECEC", ER),
-            }
-            badge_bg, badge_fg = state_colors.get(state, ("#F2F2F2", T2))
-
-            ctk.CTkLabel(
-                row,
-                text=r["code"],
-                font=("Consolas", 11, "bold"),
-                text_color=T1,
-            ).grid(row=0, column=0, padx=(10,8), pady=6, sticky="w")
-            ctk.CTkLabel(
-                row,
-                text=step_label(r),
-                font=("", 10, "bold"),
-                text_color=T1,
-                anchor="w",
-            ).grid(row=0, column=1, padx=(0,10), pady=6, sticky="ew")
-            ctk.CTkLabel(
-                row,
-                text=pair_label(r),
-                font=("Consolas", 9),
-                text_color=T3,
-                anchor="w",
-            ).grid(row=0, column=2, padx=(0,10), pady=6, sticky="ew")
-            ctk.CTkLabel(
-                row,
-                text=progress_short(r),
-                font=("Consolas", 10),
-                text_color=T2,
-                anchor="w",
-            ).grid(row=0, column=3, padx=(0,10), pady=6, sticky="ew")
-            ctk.CTkLabel(
-                row,
-                text=media_label(r),
-                font=("Consolas", 10, "bold"),
-                text_color=RN if str(r.get("latest_media_kind", "")) == "VID" else T2,
-                anchor="w",
-            ).grid(row=0, column=4, padx=(0,10), pady=6, sticky="ew")
-            ctk.CTkLabel(
-                row,
-                text=state,
-                fg_color=badge_bg,
-                text_color=badge_fg,
-                corner_radius=9,
-                font=("Consolas", 10, "bold"),
-                width=64,
-                height=22,
-            ).grid(row=0, column=5, padx=(0,8), pady=6, sticky="w")
+            w["frame"].configure(border_color=border)
+            w["lbl_step"].configure(text=step_label(r))
+            w["lbl_pair"].configure(text=pair_label(r))
+            w["lbl_prog"].configure(text=progress_short(r))
+            w["lbl_media"].configure(text=media_label(r),
+                                     text_color=RN if str(r.get("latest_media_kind", "")) == "VID" else T2)
+            w["lbl_state"].configure(text=st, fg_color=badge_bg, text_color=badge_fg)
             manual_done = bool(r.get("manual_done"))
             if manual_done:
-                btn_text = "Da nhan"
-                btn_fg = "#1F8E4D"
-                btn_hover = "#1F8E4D"
-                btn_text_color = "#FFFFFF"
-                btn_state = "disabled"
-                btn_command = None
+                w["btn_done"].configure(text="Da nhan", fg_color="#1F8E4D", hover_color="#1F8E4D",
+                                        text_color="#FFFFFF", state="disabled", command=None)
             else:
-                # Chua bam: vang de nhin ro canh bao lenh thu cong.
-                btn_text = "Xong"
-                btn_fg = "#F4C542"
-                btn_hover = "#E5B52F"
-                btn_text_color = "#1F1F1F"
-                btn_state = "normal"
-                btn_command = lambda p=r["path"]: self.app.toggle_project_manual_done(Path(p), mark_done=True)
-            ctk.CTkButton(
-                row,
-                text=btn_text,
-                width=64,
-                height=22,
-                corner_radius=4,
-                fg_color=btn_fg,
-                hover_color=btn_hover,
-                text_color=btn_text_color,
-                font=("",10),
-                state=btn_state,
-                command=btn_command,
-            ).grid(row=0, column=6, padx=(0,4), pady=6, sticky="e")
+                cmd = lambda p=r["path"]: self.app.toggle_project_manual_done(Path(p), mark_done=True)
+                w["btn_done"].configure(text="Xong", fg_color="#F4C542", hover_color="#E5B52F",
+                                        text_color="#1F1F1F", state="normal", command=cmd)
             is_running = bool(r.get("excel_running") or r.get("ve3_running"))
-            reset_state = "disabled" if is_running else "normal"
-            ctk.CTkButton(
-                row,
-                text="Reset",
-                width=50,
-                height=22,
-                corner_radius=4,
-                fg_color="#EF5350" if not is_running else "#BDBDBD",
-                hover_color="#D32F2F",
-                text_color="#FFFFFF",
-                font=("",10),
-                state=reset_state,
+            w["btn_reset"].configure(
+                state="disabled" if is_running else "normal",
+                fg_color="#BDBDBD" if is_running else "#EF5350",
                 command=lambda p=r["path"], c=r["code"]: self.app.clean_project_excel(Path(p), c),
-            ).grid(row=0, column=7, padx=(0,10), pady=6, sticky="e")
+            )
 
     def _sanitize_log_text(self, msg):
         """Normalize logs to plain ASCII to avoid font/encoding glitches."""
