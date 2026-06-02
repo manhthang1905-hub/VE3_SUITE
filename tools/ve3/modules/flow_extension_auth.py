@@ -670,6 +670,28 @@ class FlowExtensionAuth:
                 self._log(f"[ExtAuth] get_project_id failed: {data.get('error', data)}")
         except Exception as e:
             self._log(f"[ExtAuth] Project ID error: {e}")
+        # Fallback: read project ID directly from Chrome tab URL via CDP
+        pid = self._extract_project_id_from_cdp()
+        if pid:
+            self._log(f"[ExtAuth] get_project_id via CDP fallback: {pid[:8]}...")
+        return pid
+
+    def _extract_project_id_from_cdp(self) -> Optional[str]:
+        """Extract project ID from Chrome tab URL via CDP debug port (no extension needed)."""
+        import re
+        try:
+            api_port = int(self.agent_url.rsplit(":", 1)[-1].split("/")[0])
+            debug_port = 19200 + (api_port - 8100)
+            r = httpx.get(f"http://127.0.0.1:{debug_port}/json", timeout=5)
+            tabs = r.json()
+            project_regex = re.compile(r'/project/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})', re.I)
+            for tab in tabs:
+                url = tab.get("url", "")
+                m = project_regex.search(url)
+                if m:
+                    return m.group(1)
+        except Exception:
+            pass
         return None
 
     def ensure_project(self) -> Optional[str]:
