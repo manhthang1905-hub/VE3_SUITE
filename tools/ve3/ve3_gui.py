@@ -1045,7 +1045,16 @@ class HomePage(ctk.CTkScrollableFrame):
         except Exception as e:
             ordered = rows
 
-        # Render projects list
+        # Render projects list — skip rebuild if data unchanged
+        _sig = tuple(
+            (r["code"], r["state"], r.get("next",""), r.get("img_progress",""), r.get("vid_progress",""),
+             r.get("music_progress",""), r.get("server_name",""), r.get("latest_media_age",""))
+            for r in ordered
+        )
+        if getattr(self, "_last_projects_sig", None) == _sig:
+            return
+        self._last_projects_sig = _sig
+
         for w in self.projects_list.winfo_children():
             w.destroy()
         if not ordered:
