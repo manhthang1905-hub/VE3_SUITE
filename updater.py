@@ -126,11 +126,67 @@ def _is_protected(rel_path: str) -> bool:
     return False
 
 
+def _try_git_pull(progress_callback=None) -> dict | None:
+    """Try git pull first — much faster than ZIP download. Returns None if git unavailable."""
+    import subprocess
+    try:
+        result = subprocess.run(
+            ["git", "rev-parse", "--git-dir"],
+            cwd=str(SUITE_ROOT), capture_output=True, text=True, timeout=5,
+        )
+        if result.returncode != 0:
+            return None
+    except Exception:
+        return None
+
+    if progress_callback:
+        progress_callback("Git pull...")
+    try:
+        result = subprocess.run(
+            ["git", "pull", "--ff-only", "origin", "main"],
+            cwd=str(SUITE_ROOT), capture_output=True, text=True, timeout=120,
+        )
+        if result.returncode == 0:
+            ver = get_local_version()
+            try:
+                VERSION_FILE.write_text(ver + "\n", encoding="utf-8")
+            except Exception:
+                pass
+            return {"success": True, "version": ver, "updated": 0, "skipped": 0, "errors": [],
+                    "method": "git"}
+        # ff-only failed (diverged) — try reset
+        subprocess.run(
+            ["git", "fetch", "--depth=1", "origin", "main"],
+            cwd=str(SUITE_ROOT), capture_output=True, text=True, timeout=120,
+        )
+        result = subprocess.run(
+            ["git", "reset", "--hard", "origin/main"],
+            cwd=str(SUITE_ROOT), capture_output=True, text=True, timeout=30,
+        )
+        if result.returncode == 0:
+            ver = get_local_version()
+            try:
+                VERSION_FILE.write_text(ver + "\n", encoding="utf-8")
+            except Exception:
+                pass
+            return {"success": True, "version": ver, "updated": 0, "skipped": 0, "errors": [],
+                    "method": "git-reset"}
+    except Exception:
+        pass
+    return None
+
+
 def download_and_apply(progress_callback=None) -> dict:
     def _progress(msg):
         if progress_callback:
             progress_callback(msg)
 
+    # Try git pull first — fast, only downloads diff
+    git_result = _try_git_pull(progress_callback=_progress)
+    if git_result is not None:
+        return git_result
+
+    # Fallback: download full ZIP (for machines without git)
     _progress("Đang tải bản mới từ GitHub...")
     try:
         req = Request(GITHUB_ZIP, headers={"User-Agent": "VE3-Suite-Updater"})
