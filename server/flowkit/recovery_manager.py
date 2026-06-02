@@ -368,8 +368,8 @@ class RecoveryManager:
 
             if not success and level <= 2 and state.level_attempts[2] < self.level2_max:
                 state.level_attempts[2] += 1
-                # Rotate account before L2 restart
-                self._rotate_account_for_instance(instance_name)
+                if not self._fa_enabled:
+                    self._rotate_account_for_instance(instance_name)
                 success = await self._level2_rotate_ipv6(instance_name)
                 if not success:
                     logger.info("[Recovery] %s Level 2 failed, escalating to L3", instance_name)
@@ -424,7 +424,7 @@ class RecoveryManager:
             if not cfg:
                 return False
 
-            loop = asyncio.get_event_loop()
+            loop = asyncio.get_running_loop()
 
             # 1. Soft-clean profile
             try:
@@ -438,7 +438,7 @@ class RecoveryManager:
             # 2. Kill Chrome
             try:
                 from launcher import kill_chrome
-                await loop.run_in_executor(None, kill_chrome, cfg)
+                await loop.run_in_executor(None, kill_chrome, instance_name)
                 logger.info("[FA-Swap] %s: Chrome killed", instance_name)
             except Exception as e:
                 logger.warning("[FA-Swap] %s: kill error: %s", instance_name, e)
@@ -624,14 +624,15 @@ class RecoveryManager:
             proxy_port = 1081 + (api_port - 8100)
 
             # Step 1: Kill Chrome (with timeout to prevent hang)
-            try:
-                await asyncio.wait_for(
-                    loop.run_in_executor(None, lambda: kill_chrome(instance_name)),
-                    timeout=30,
-                )
-            except asyncio.TimeoutError:
-                logger.warning("[Recovery] %s: kill_chrome timeout (30s), forcing continue", instance_name)
-            await asyncio.sleep(8)  # Windows needs 5-10s to release debug port
+            if login:
+                try:
+                    await asyncio.wait_for(
+                        loop.run_in_executor(None, lambda: kill_chrome(instance_name)),
+                        timeout=30,
+                    )
+                except asyncio.TimeoutError:
+                    logger.warning("[Recovery] %s: kill_chrome timeout (30s), forcing continue", instance_name)
+                await asyncio.sleep(8)  # Windows needs 5-10s to release debug port
 
             # Step 2: Full IPv6 setup + update proxy
             proxy_arg = ""
