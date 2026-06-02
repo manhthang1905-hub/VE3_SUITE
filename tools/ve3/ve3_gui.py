@@ -3029,10 +3029,12 @@ Get-CimInstance Win32_Process |
             PROJECTS_DIR.mkdir(parents=True, exist_ok=True)
             projects = [p for p in PROJECTS_DIR.iterdir() if p.is_dir()]
             projects.sort(key=lambda p: p.stat().st_mtime, reverse=True)
+            all_pairs = self._get_server_pairs(only_available=False)
+            pair_by_server = {p["server_name"]: p for p in all_pairs}
             for pd in projects:
                 if self._is_project_exported_to_visual(pd):
                     continue
-                rows.append(self._project_row(pd))
+                rows.append(self._project_row(pd, pair_by_server=pair_by_server))
             state_order = {"RUN": 0, "WAIT": 1, "DONE": 2, "BLOCK": 3}
             rows.sort(key=lambda r: (state_order.get(r.get("state", "BLOCK"), 9), r.get("code", "")))
         except Exception as exc:
@@ -3468,15 +3470,16 @@ Get-CimInstance Win32_Process |
             self._log(f"[QUEUE] {project_dir.name}: finalize loi {exc}", "WARN", "ve3")
             return False
 
-    def _project_row(self, pd):
+    def _project_row(self, pd, pair_by_server=None):
         code = pd.name
         manual_done = self._is_project_manually_done(pd)
-        has_audio = any(list(pd.glob(ext)) for ext in ("*.mp3", "*.wav", "*.m4a", "*.flac", "*.ogg", "*.aac"))
+        has_audio = any(pd.glob(ext) for ext in ("*.mp3", "*.wav", "*.m4a", "*.flac", "*.ogg", "*.aac"))
         srt = pd / f"{code}.srt"
         ep = self._project_excel_path(pd)
         binding = self._load_project_pair_binding(pd)
-        all_pairs = self._get_server_pairs(only_available=False)
-        pair_by_server = {p["server_name"]: p for p in all_pairs}
+        if pair_by_server is None:
+            all_pairs = self._get_server_pairs(only_available=False)
+            pair_by_server = {p["server_name"]: p for p in all_pairs}
         flow_project_id = binding.get("flow_project_id", "")
         server_name = binding.get("bound_server_name", "") or "-"
         account_name = binding.get("bound_account_name", "") or binding.get("flow_account_name", "") or "-"
@@ -5562,14 +5565,15 @@ Get-CimInstance Win32_Process |
     def _is_project_endpoint_complete(self, project_dir):
         try:
             has_done_lock = self._endpoint_done_marker(project_dir).exists()
+            if has_done_lock:
+                return True
             has_visual = self._is_project_exported_to_visual(project_dir)
             has_archive = self._has_project_archive(project_dir)
-            complete = has_done_lock or has_visual or has_archive
+            complete = has_visual or has_archive
             if complete:
                 reasons = []
-                if has_done_lock: reasons.append("done_lock")
-                if has_visual: reasons.append(f"visual({EDIT_VISUAL_DIR / project_dir.name})")
-                if has_archive: reasons.append(f"archive({ARCHIVE_DIR / project_dir.name})")
+                if has_visual: reasons.append(f"visual")
+                if has_archive: reasons.append(f"archive")
                 self._log(f"[DEBUG] {project_dir.name}: endpoint_complete ({', '.join(reasons)})", "INFO", "excel")
                 self._repair_endpoint_done_marker(project_dir, reason="repaired_from_endpoint_artifact")
             return complete
