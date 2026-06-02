@@ -636,6 +636,8 @@ class FlowExtensionAuth:
             data = r.json()
             if data.get("success"):
                 return data.get("data", {}).get("projectId", "")
+            else:
+                self._log(f"[ExtAuth] get_project_id failed: {data.get('error', data)}")
         except Exception as e:
             self._log(f"[ExtAuth] Project ID error: {e}")
         return None
@@ -646,7 +648,12 @@ class FlowExtensionAuth:
             data = r.json()
             if data.get("success"):
                 time.sleep(2)
-                return self.get_project_id()
+                pid = self.get_project_id()
+                if not pid:
+                    self._log(f"[ExtAuth] ensure_project OK but get_project_id returned None")
+                return pid
+            else:
+                self._log(f"[ExtAuth] ensure_project failed: {data.get('error', data)}")
         except Exception as e:
             self._log(f"[ExtAuth] Ensure project error: {e}")
         return None

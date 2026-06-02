@@ -5878,16 +5878,16 @@ Get-CimInstance Win32_Process |
                 self.queue_excel_tasks.pop(code, None)
 
     def _queue_excel_loop(self):
-        # Gioi han so ma Excel chay dong thoi
-        max_excel_concurrent = self.config_data.get("excel_workers", 2)
-        try:
-            max_excel_concurrent = int(max_excel_concurrent)
-        except Exception:
-            max_excel_concurrent = 2
-        max_excel_concurrent = max(1, max_excel_concurrent)
-
+        # Gioi han so ma Excel chay dong thoi — doc lai moi vong de cap nhat khi user thay doi setting
         try:
             while not self.queue_stop_requested:
+                max_excel_concurrent = self.config_data.get("excel_workers", 2)
+                try:
+                    max_excel_concurrent = int(max_excel_concurrent)
+                except Exception:
+                    max_excel_concurrent = 2
+                max_excel_concurrent = max(1, max_excel_concurrent)
+
                 self._prune_excel_task_registry()
                 did_work = False
                 total_projects = 0
@@ -5903,7 +5903,7 @@ Get-CimInstance Win32_Process |
                     active_count = len(self.queue_excel_tasks)
 
                 excel_queue = self._queue_projects_excel()
-                self._log(f"[DEBUG] Excel queue returned {len(excel_queue)} projects", "INFO", "excel")
+                self._log(f"[DEBUG] Excel queue returned {len(excel_queue)} projects, max_concurrent={max_excel_concurrent}, active={active_count}", "INFO", "excel")
 
                 # Debug: log first 5 project codes in queue
                 if excel_queue:
