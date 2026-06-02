@@ -3526,6 +3526,8 @@ Get-CimInstance Win32_Process |
             if manual_done and state != "RUN":
                 state = "DONE"
                 next_step = "Manually done"
+            if state == "DONE":
+                self._repair_endpoint_done_marker(pd, reason="auto_done")
             return {
                 "code": code,
                 "path": str(pd),
@@ -3769,6 +3771,9 @@ Get-CimInstance Win32_Process |
         if manual_done and state != "RUN":
             state = "DONE"
             next_step = "Manually done"
+
+        if state == "DONE":
+            self._repair_endpoint_done_marker(pd, reason="auto_done")
 
         return {
             "code": code,
