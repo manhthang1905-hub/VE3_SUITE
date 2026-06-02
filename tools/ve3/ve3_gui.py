@@ -1550,18 +1550,21 @@ class SettingsPage(ctk.CTkScrollableFrame):
         self.ent_vov_slots = ctk.CTkEntry(slots, width=48, height=26, corner_radius=4, font=("",10), fg_color=EN, border_color=BD)
         self.ent_vov_slots.grid(row=0, column=3)
 
-        ctk.CTkLabel(ai, text="DeepSeek key:", font=("",11), text_color=T2).grid(row=3, column=0, padx=(10,6), sticky="e")
+        ctk.CTkLabel(ai, text="DeepSeek keys:", font=("",11), text_color=T2).grid(row=3, column=0, padx=(10,6), sticky="ne")
         ds_key_frame = ctk.CTkFrame(ai, fg_color="transparent")
         ds_key_frame.grid(row=3, column=1, sticky="ew", padx=(0,10), pady=2)
         ds_key_frame.columnconfigure(0, weight=1)
-        self.ent_deepseek_key = ctk.CTkEntry(ds_key_frame, height=28, corner_radius=4, font=("Consolas",10), fg_color=EN, border_color=BD)
-        self.ent_deepseek_key.grid(row=0, column=0, sticky="ew")
-        self.btn_ds_balance = ctk.CTkButton(ds_key_frame, text="Check $", width=60, height=28, corner_radius=4, font=("",10), command=self._check_deepseek_balance)
-        self.btn_ds_balance.grid(row=0, column=1, padx=(4,0))
-
-        ctk.CTkLabel(ai, text="DeepSeek extra keys:", font=("",11), text_color=T2).grid(row=4, column=0, padx=(10,6), sticky="e")
-        self.ent_deepseek_keys = ctk.CTkEntry(ai, height=28, corner_radius=4, font=("Consolas",10), fg_color=EN, border_color=BD, placeholder_text="comma,separated,keys")
-        self.ent_deepseek_keys.grid(row=4, column=1, sticky="ew", padx=(0,10), pady=2)
+        self.txt_deepseek_keys = ctk.CTkTextbox(ds_key_frame, height=60, corner_radius=4, font=("Consolas",9), fg_color=EN, border_color=BD, border_width=1)
+        self.txt_deepseek_keys.grid(row=0, column=0, sticky="ew")
+        ds_btn_frame = ctk.CTkFrame(ds_key_frame, fg_color="transparent")
+        ds_btn_frame.grid(row=0, column=1, padx=(4,0), sticky="n")
+        self.btn_ds_balance = ctk.CTkButton(ds_btn_frame, text="Check $", width=60, height=28, corner_radius=4, font=("",10), command=self._check_deepseek_balance)
+        self.btn_ds_balance.pack(pady=(0,2))
+        self.lbl_ds_total = ctk.CTkLabel(ds_btn_frame, text="", font=("",9,"bold"), text_color=OK)
+        self.lbl_ds_total.pack()
+        # Hidden compat entries
+        self.ent_deepseek_key = type('D',(),{'get':lambda s: '','delete':lambda s,*a:None,'insert':lambda s,*a:None})()
+        self.ent_deepseek_keys = type('D',(),{'get':lambda s: '','delete':lambda s,*a:None,'insert':lambda s,*a:None})()
 
         ctk.CTkLabel(ai, text="DeepSeek model:", font=("",11), text_color=T2).grid(row=5, column=0, padx=(10,6), sticky="e")
         self.ent_deepseek_model = ctk.CTkEntry(ai, height=28, corner_radius=4, font=("Consolas",10), fg_color=EN, border_color=BD)
@@ -1793,36 +1796,60 @@ class SettingsPage(ctk.CTkScrollableFrame):
                     r["dot"].configure(text="", text_color=ER)
                     r["info"].configure(text=state, text_color=ER)
 
+    def _parse_deepseek_keys(self):
+        """Parse keys from textbox — supports tab, comma, newline, space separated."""
+        raw = self.txt_deepseek_keys.get("1.0", "end").strip()
+        keys = []
+        import re
+        for part in re.split(r'[\t,\n\s]+', raw):
+            part = part.strip()
+            if part.startswith("sk-") and len(part) > 10:
+                keys.append(part)
+        return keys
+
     def _check_deepseek_balance(self):
-        key = self.ent_deepseek_key.get().strip()
-        if not key:
-            self.btn_ds_balance.configure(text="No key!")
+        keys = self._parse_deepseek_keys()
+        if not keys:
+            self.btn_ds_balance.configure(text="No keys!")
             self.after(2000, lambda: self.btn_ds_balance.configure(text="Check $"))
             return
-        self.btn_ds_balance.configure(text="...", state="disabled")
+        self.btn_ds_balance.configure(text=f"Checking {len(keys)}...", state="disabled")
+        self.lbl_ds_total.configure(text="")
 
         def _do():
-            try:
-                import urllib.request, json
-                req = urllib.request.Request(
-                    "https://api.deepseek.com/user/balance",
-                    headers={"Authorization": f"Bearer {key}", "Accept": "application/json"},
-                )
-                with urllib.request.urlopen(req, timeout=10) as resp:
-                    data = json.loads(resp.read())
-                info = data.get("balance_infos", [{}])
-                if info:
-                    total = info[0].get("total_balance", "?")
-                    currency = info[0].get("currency", "CNY")
-                    result = f"${total} {currency}"
-                else:
-                    result = str(data)
-            except Exception as e:
-                result = f"Error: {e}"
+            import urllib.request, json as _json
+            results = []
+            grand_total = 0.0
+            for key in keys:
+                try:
+                    req = urllib.request.Request(
+                        "https://api.deepseek.com/user/balance",
+                        headers={"Authorization": f"Bearer {key}", "Accept": "application/json"},
+                    )
+                    with urllib.request.urlopen(req, timeout=10) as resp:
+                        data = _json.loads(resp.read())
+                    info = data.get("balance_infos", [{}])
+                    if info:
+                        bal = float(info[0].get("total_balance", 0))
+                        grand_total += bal
+                        results.append((key, bal))
+                    else:
+                        results.append((key, -1))
+                except Exception:
+                    results.append((key, -1))
 
+            # Update textbox with balance info
             def _update():
-                self.btn_ds_balance.configure(text=result, state="normal")
-                self.after(5000, lambda: self.btn_ds_balance.configure(text="Check $"))
+                self.txt_deepseek_keys.delete("1.0", "end")
+                lines = []
+                for key, bal in results:
+                    if bal >= 0:
+                        lines.append(f"{key}\t${bal:.2f}")
+                    else:
+                        lines.append(f"{key}\tERROR")
+                self.txt_deepseek_keys.insert("1.0", "\n".join(lines))
+                self.btn_ds_balance.configure(text="Check $", state="normal")
+                self.lbl_ds_total.configure(text=f"Total: ${grand_total:.2f}")
             self.after(0, _update)
 
         import threading
@@ -1859,10 +1886,18 @@ class SettingsPage(ctk.CTkScrollableFrame):
         self.ent_vov_slots.delete(0, "end")
         self.ent_vov_slots.insert(0, str(cfg.get("vov_direct_parallel_slots", 0) or 0))
         self._on_excel_ai_provider_change(self.opt_excel_ai_provider.get())
-        self.ent_deepseek_key.delete(0, "end")
-        self.ent_deepseek_key.insert(0, str(cfg.get("deepseek_api_key", "") or ""))
-        self.ent_deepseek_keys.delete(0, "end")
-        self.ent_deepseek_keys.insert(0, ", ".join(cfg.get("deepseek_api_keys", []) or []))
+        # Load all DeepSeek keys into textbox
+        all_keys = []
+        main_key = str(cfg.get("deepseek_api_key", "") or "").strip()
+        if main_key:
+            all_keys.append(main_key)
+        for k in (cfg.get("deepseek_api_keys", []) or []):
+            k = str(k).strip()
+            if k and k not in all_keys:
+                all_keys.append(k)
+        self.txt_deepseek_keys.delete("1.0", "end")
+        if all_keys:
+            self.txt_deepseek_keys.insert("1.0", "\n".join(all_keys))
         self.ent_deepseek_model.delete(0, "end")
         self.ent_deepseek_model.insert(0, str(cfg.get("deepseek_model", "") or "deepseek-v4-pro"))
         self.ent_deepseek_thinking.delete(0, "end")
@@ -1977,8 +2012,9 @@ class SettingsPage(ctk.CTkScrollableFrame):
         cfg["vov_direct_parallel_slots"] = vov_slots
         cfg["excel_workers"] = total_slots
         cfg["max_parallel_api"] = total_slots
-        cfg["deepseek_api_key"] = self.ent_deepseek_key.get().strip()
-        cfg["deepseek_api_keys"] = [x.strip() for x in self.ent_deepseek_keys.get().split(",") if x.strip()]
+        ds_keys = self._parse_deepseek_keys()
+        cfg["deepseek_api_key"] = ds_keys[0] if ds_keys else ""
+        cfg["deepseek_api_keys"] = ds_keys
         cfg["deepseek_model"] = self.ent_deepseek_model.get().strip() or "deepseek-v4-pro"
         cfg["deepseek_thinking_type"] = self.ent_deepseek_thinking.get().strip() or "disabled"
         cfg["vov_direct_base_url"] = self.ent_vov_direct_url.get().strip() or "https://routerapi.vovantin.online/v1"
