@@ -297,6 +297,21 @@ class _ExtensionInstanceManager:
         # Step 2: Start agent + wait ready
         cls._kill_on_port(api_port, log)
         cls._kill_on_port(ws_port, log)
+        # Wait for ports to be fully free (avoid TIME_WAIT blocking WS bind)
+        for _wait in range(10):
+            api_free = not cls._is_agent_alive(api_port)
+            ws_free = True
+            try:
+                result = subprocess.run(
+                    ['powershell', '-NoProfile', '-Command',
+                     f'(Get-NetTCPConnection -LocalPort {ws_port} -EA SilentlyContinue | Measure-Object).Count'],
+                    capture_output=True, text=True, timeout=5, creationflags=0x08000000)
+                ws_free = result.stdout.strip() == '0'
+            except Exception:
+                pass
+            if api_free and ws_free:
+                break
+            time.sleep(1)
         time.sleep(1)
 
         env = os.environ.copy()
