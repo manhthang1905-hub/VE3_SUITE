@@ -2790,19 +2790,24 @@ foreach ($pid in $children) {{
 
     def _get_local_version(self) -> str:
         try:
-            ver = (SUITE_ROOT / "VERSION").read_text(encoding="utf-8").strip()
-            if ver:
-                return ver
-        except Exception:
-            pass
-        try:
             import subprocess
             result = subprocess.run(
                 ["git", "rev-list", "--count", "HEAD"],
                 cwd=str(SUITE_ROOT), capture_output=True, text=True, timeout=5,
             )
             if result.returncode == 0:
-                return f"1.0.{result.stdout.strip()}"
+                ver = f"1.0.{result.stdout.strip()}"
+                try:
+                    (SUITE_ROOT / "VERSION").write_text(ver, encoding="utf-8")
+                except Exception:
+                    pass
+                return ver
+        except Exception:
+            pass
+        try:
+            ver = (SUITE_ROOT / "VERSION").read_text(encoding="utf-8").strip()
+            if ver:
+                return ver
         except Exception:
             pass
         return "?.?.?"
