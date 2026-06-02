@@ -141,6 +141,67 @@ def clean_chrome_profile(chrome_dir: Path):
     print(f"  Profile cleaned: kept only Secure Preferences")
 
 
+def soft_clean_chrome_profile(chrome_dir: Path):
+    """Soft clean Chrome profile — clear cache/storage but KEEP login cookies + extension.
+
+    Used by Fixed Account mode: preserve the login session so Chrome doesn't
+    need to re-authenticate, while clearing data that might trigger 403.
+    """
+    import shutil as _shutil
+
+    default_dir = chrome_dir / "Data" / "profile" / "Default"
+    if not default_dir.exists():
+        return
+
+    DELETE_DIRS = {
+        "blob_storage", "BudgetDatabase", "chrome_cart_db", "commerce_subscription_db",
+        "DawnGraphiteCache", "DawnWebGPUCache", "discounts_db", "discount_infos_db",
+        "Download Service", "Feature Engagement Tracker", "GPUCache", "IndexedDB",
+        "Local Storage", "optimization_guide_hint_cache_store", "parcel_tracking_db",
+        "PersistentOriginTrials", "Safe Browsing Network", "Segmentation Platform",
+        "Service Worker", "Session Storage", "Sessions", "Shared Dictionary",
+        "shared_proto_db", "Site Characteristics Database", "VideoDecodeStats",
+        "WebStorage", "AutofillAiModelCache", "AutofillStrikeDatabase",
+        "Collaboration", "DataSharing", "File System",
+    }
+    DELETE_FILES = {
+        "Web Data", "Web Data-journal",
+        "Account Web Data", "Account Web Data-journal",
+        "History", "History-journal",
+        "Favicons", "Favicons-journal",
+        "Shortcuts", "Shortcuts-journal",
+        "Top Sites", "Top Sites-journal",
+        "Network Action Predictor", "Network Action Predictor-journal",
+        "Affiliation Database", "Affiliation Database-journal",
+        "BrowsingTopicsSiteData", "BrowsingTopicsSiteData-journal",
+        "BrowsingTopicsState",
+        "DIPS", "DIPS-wal",
+        "heavy_ad_intervention_opt_out.db", "heavy_ad_intervention_opt_out.db-journal",
+        "MediaDeviceSalts", "MediaDeviceSalts-journal",
+        "ServerCertificate", "ServerCertificate-journal",
+        "SharedStorage", "SharedStorage-wal",
+        "BookmarkMergedSurfaceOrdering", "PreferredApps",
+    }
+    # KEEP: Cookies, Login Data*, Preferences, Secure Preferences,
+    #       Extension*, Local Extension Settings, GCM Store, Network,
+    #       Accounts, Sync Data, trusted_vault.pb, LOCK, LOG*
+
+    deleted = 0
+    for item in default_dir.iterdir():
+        name = item.name
+        try:
+            if item.is_dir() and name in DELETE_DIRS:
+                _shutil.rmtree(item)
+                deleted += 1
+            elif item.is_file() and name in DELETE_FILES:
+                item.unlink()
+                deleted += 1
+        except Exception:
+            pass
+
+    print(f"  Soft clean: deleted {deleted} items, kept login + extension")
+
+
 def _write_chrome_prefs(chrome_dir: Path):
     """Write fresh Preferences with session restore prevention. Remove any zoom data."""
     import json as _json
