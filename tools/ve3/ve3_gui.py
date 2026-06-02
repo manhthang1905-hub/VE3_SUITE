@@ -2790,6 +2790,12 @@ foreach ($pid in $children) {{
 
     def _get_local_version(self) -> str:
         try:
+            ver = (SUITE_ROOT / "VERSION").read_text(encoding="utf-8").strip()
+            if ver:
+                return ver
+        except Exception:
+            pass
+        try:
             import subprocess
             result = subprocess.run(
                 ["git", "rev-list", "--count", "HEAD"],
@@ -2799,10 +2805,7 @@ foreach ($pid in $children) {{
                 return f"1.0.{result.stdout.strip()}"
         except Exception:
             pass
-        try:
-            return (SUITE_ROOT / "VERSION").read_text(encoding="utf-8").strip()
-        except Exception:
-            return "?.?.?"
+        return "?.?.?"
 
     def _on_check_update(self):
         self._update_btn.configure(text="Checking...", state="disabled", text_color="#FFA500")
