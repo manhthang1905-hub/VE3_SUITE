@@ -1088,15 +1088,23 @@ async def startup():
     global _recovery_manager
 
     # Initialize instances
-    enabled_configs = [cfg for cfg in CONFIG.get("instances", []) if cfg.get("enabled", True)]
-    for cfg in enabled_configs:
-        instances.append(AgentInstance(cfg))
+    fa_enabled = CONFIG.get("fixed_account", {}).get("enabled", False)
+    all_configs = CONFIG.get("instances", [])
+    if fa_enabled:
+        for cfg in all_configs:
+            instances.append(AgentInstance(cfg))
+        logger.info("Gateway: Fixed Account mode — %d instances, %d concurrent",
+                    len(instances), CONFIG.get("fixed_account", {}).get("concurrent", 2))
+    else:
+        enabled_configs = [cfg for cfg in all_configs if cfg.get("enabled", True)]
+        for cfg in enabled_configs:
+            instances.append(AgentInstance(cfg))
     logger.info("Gateway initialized with %d instances", len(instances))
 
     # Initialize recovery manager
     _recovery_manager = RecoveryManager(
         config=CONFIG,
-        instances_config=enabled_configs,
+        instances_config=all_configs if fa_enabled else [cfg for cfg in all_configs if cfg.get("enabled", True)],
         on_cooldown_clear=_clear_cooldown,
     )
     # Load ALL accounts from GUI config (full list), then assign active from .flow_accounts
