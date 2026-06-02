@@ -408,7 +408,7 @@ class _ExtensionInstanceManager:
                 pass
             if attempt == 0:
                 log(f"[ExtAuth] {name}: extension NOT connected — restarting Chrome (retry)")
-                cls._kill_chrome_for_dir(str(chrome_dir), log)
+                cls._kill_chrome_for_dir(chrome_dir)
                 time.sleep(3)
                 try:
                     chrome_proc = subprocess.Popen(args, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,

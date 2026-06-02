@@ -126,7 +126,7 @@ def _is_protected(rel_path: str) -> bool:
     return False
 
 
-def _try_git_pull(progress_callback=None) -> dict | None:
+def _try_git_pull(progress_callback=None):
     """Try git pull first — much faster than ZIP download. Returns None if git unavailable."""
     import subprocess
     try:
