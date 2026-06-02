@@ -2196,6 +2196,7 @@ foreach ($pid in $children) {{
     def _kill_extension_instances(self):
         """Kill all Chrome + agent + cleanup lock files."""
         import subprocess as _sp
+        CF = 0x08000000
         for f in SUITE_ROOT.glob(".ext_start_*.lock"):
             try:
                 f.unlink()
@@ -2205,33 +2206,52 @@ foreach ($pid in $children) {{
             (SUITE_ROOT / ".extension_startup.lock").unlink(missing_ok=True)
         except Exception:
             pass
+        # Kill all GoogleChromePortable processes
+        try:
+            _sp.run(['taskkill', '/F', '/IM', 'GoogleChromePortable.exe'],
+                    capture_output=True, timeout=5, creationflags=CF)
+        except Exception:
+            pass
         try:
             _sp.run(['wmic', 'process', 'where',
                      "name='chrome.exe' and CommandLine like '%GoogleChromePortable%'",
                      'call', 'terminate'],
-                    capture_output=True, timeout=10, creationflags=0x08000000)
+                    capture_output=True, timeout=10, creationflags=CF)
         except Exception:
             pass
+        # Kill agents: any process listening on ports 8100-8129
+        killed_pids = set()
         try:
-            _sp.run(['taskkill', '/F', '/IM', 'GoogleChromePortable.exe'],
-                    capture_output=True, timeout=5, creationflags=0x08000000)
+            script = (
+                "Get-NetTCPConnection -State Listen -ErrorAction SilentlyContinue | "
+                "Where-Object { $_.LocalPort -ge 8100 -and $_.LocalPort -le 8129 } | "
+                "Select-Object -ExpandProperty OwningProcess -Unique"
+            )
+            proc = _sp.run(['powershell', '-NoProfile', '-Command', script],
+                          capture_output=True, text=True, timeout=10, creationflags=CF)
+            for line in (proc.stdout or "").splitlines():
+                pid = line.strip()
+                if pid.isdigit() and int(pid) > 4:
+                    killed_pids.add(pid)
+                    _sp.run(['taskkill', '/F', '/T', '/PID', pid],
+                            capture_output=True, timeout=5, creationflags=CF)
         except Exception:
             pass
-        # Kill agents on ports 8100-8129
-        markers = ("flowkit\\\\agent", "flowkit/agent")
+        # Fallback: also kill by command line pattern
+        markers = ("flowkit\\\\agent", "flowkit/agent", "agent\\\\main.py", "agent/main.py")
         try:
             proc = _sp.run(['wmic', 'process', 'where',
                            'name="python.exe" or name="pythonw.exe"',
                            'get', 'ProcessId,CommandLine', '/FORMAT:CSV'],
-                          capture_output=True, text=True, timeout=8, creationflags=0x08000000)
+                          capture_output=True, text=True, timeout=8, creationflags=CF)
             for line in (proc.stdout or "").splitlines():
                 s = line.strip()
                 if not s or not any(m in s.lower() for m in markers):
                     continue
                 parts = s.rsplit(',', 1)
-                if len(parts) == 2 and parts[1].strip().isdigit():
+                if len(parts) == 2 and parts[1].strip().isdigit() and parts[1].strip() not in killed_pids:
                     _sp.run(['taskkill', '/F', '/T', '/PID', parts[1].strip()],
-                            capture_output=True, timeout=5, creationflags=0x08000000)
+                            capture_output=True, timeout=5, creationflags=CF)
         except Exception:
             pass
 
