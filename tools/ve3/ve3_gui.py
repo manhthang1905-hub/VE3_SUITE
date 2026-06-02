@@ -3970,10 +3970,37 @@ Get-CimInstance Win32_Process |
             "server_state": server_state,
         }
 
+    def _binding_yaml_path(self, project_dir):
+        return Path(project_dir) / ".ve3_binding.yaml"
+
+    def _read_binding_yaml(self, project_dir):
+        try:
+            import yaml
+            p = self._binding_yaml_path(project_dir)
+            if p.exists():
+                return yaml.safe_load(p.read_text(encoding="utf-8")) or {}
+        except Exception:
+            pass
+        return {}
+
+    def _write_binding_yaml(self, project_dir, data):
+        try:
+            import yaml
+            p = self._binding_yaml_path(project_dir)
+            p.write_text(yaml.dump(data, default_flow_style=False, allow_unicode=True), encoding="utf-8")
+        except Exception:
+            pass
+
     def _load_project_pair_binding(self, project_dir):
+        # 1. Try YAML cache first (always available, never locked)
+        yaml_data = self._read_binding_yaml(project_dir)
+        if yaml_data.get("bound_server_name"):
+            return yaml_data
+
+        # 2. Try Excel
         ep = self._project_excel_path(project_dir)
         if not ep.exists():
-            return {}
+            return yaml_data or {}
         try:
             st = ep.stat()
             cache_key = str(ep)
@@ -3996,11 +4023,22 @@ Get-CimInstance Win32_Process |
             }
             if cache_sig is not None:
                 self._project_binding_cache[cache_key] = {"sig": cache_sig, "data": dict(data)}
+            if data.get("bound_server_name"):
+                self._write_binding_yaml(project_dir, data)
             return data
         except Exception:
-            return {}
+            return yaml_data or {}
 
     def _save_project_pair_binding(self, project_dir, pair):
+        data = {
+            "flow_project_id": pair.get("flow_project_id", ""),
+            "flow_account_name": pair["flow_account_name"],
+            "bound_account_name": pair["flow_account_name"],
+            "bound_server_name": pair["server_name"],
+            "bound_server_url": pair["server_url"],
+        }
+        self._write_binding_yaml(project_dir, data)
+
         ep = self._project_excel_path(project_dir)
         if not ep.exists():
             return
@@ -4023,7 +4061,7 @@ Get-CimInstance Win32_Process |
             if changed:
                 wb.safe_save()
         except Exception as exc:
-            self._log(f"[QUEUE] {project_dir.name}: khong ghi duoc binding server/account ({exc})", "WARN", "ve3")
+            self._log(f"[QUEUE] {project_dir.name}: khong ghi duoc binding vao Excel ({exc}), YAML da luu", "WARN", "ve3")
 
     def _get_project_topic(self, project_dir):
         """Lay topic da normalize tu _CLAIMED file hoac Sheet NGUON."""
