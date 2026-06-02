@@ -373,37 +373,52 @@ class _ExtensionInstanceManager:
         except Exception as e:
             log(f"[ExtAuth] {name}: CDP error: {e}")
 
-        # Step 5: Wait extension connect + token
+        # Step 5: Wait extension connect + token (with 1 retry on failure)
         ready = False
-        for _ in range(30):
-            if cls.is_instance_ready(api_port):
-                ready = True
+        connected = False
+        for attempt in range(2):
+            for _ in range(30):
+                if cls.is_instance_ready(api_port):
+                    ready = True
+                    break
+                time.sleep(2)
+            if ready:
                 break
-            time.sleep(2)
+            try:
+                h = httpx.get(f"http://127.0.0.1:{api_port}/health", timeout=3).json()
+                if h.get("extension_connected"):
+                    connected = True
+                    break
+            except Exception:
+                pass
+            if attempt == 0:
+                log(f"[ExtAuth] {name}: extension NOT connected — restarting Chrome (retry)")
+                cls._kill_chrome_for_dir(str(chrome_dir), log)
+                time.sleep(3)
+                try:
+                    chrome_proc = subprocess.Popen(args, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                                                   creationflags=subprocess.CREATE_NEW_PROCESS_GROUP)
+                    time.sleep(8)
+                    try:
+                        from chrome_setup import apply_chrome_cdp
+                        apply_chrome_cdp(debug_port=debug_port, ext_dir=ext_dir, instance_name=name,
+                                         log_func=lambda msg, n=name: log(f"[ExtAuth] [{n}] {msg}"))
+                    except Exception:
+                        pass
+                except Exception as e:
+                    log(f"[ExtAuth] {name}: Chrome retry error: {e}")
+                    break
 
-        if ready:
+        if ready or connected:
             cls._instances[name] = {"api_port": api_port, "agent_proc": agent_proc,
                                     "chrome_proc": chrome_proc, "chrome_dir": str(chrome_dir),
                                     "ext_dir": str(ext_dir), "debug_port": debug_port}
-            log(f"[ExtAuth] {name}: READY (port {api_port})")
+            log(f"[ExtAuth] {name}: {'READY' if ready else 'connected, token pending'} (port {api_port})")
             with ready_lock:
                 ready_count[0] += 1
             ready_event.set()
         else:
-            try:
-                h = httpx.get(f"http://127.0.0.1:{api_port}/health", timeout=3).json()
-                if h.get("extension_connected"):
-                    cls._instances[name] = {"api_port": api_port, "agent_proc": agent_proc,
-                                            "chrome_proc": chrome_proc, "chrome_dir": str(chrome_dir),
-                                            "ext_dir": str(ext_dir), "debug_port": debug_port}
-                    log(f"[ExtAuth] {name}: connected, token pending")
-                    with ready_lock:
-                        ready_count[0] += 1
-                    ready_event.set()
-                else:
-                    log(f"[ExtAuth] {name}: extension NOT connected")
-            except Exception:
-                log(f"[ExtAuth] {name}: agent unreachable")
+            log(f"[ExtAuth] {name}: extension NOT connected after retry")
 
     # ─── Port lookups ──────────────────────────────────────────
 
