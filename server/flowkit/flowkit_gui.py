@@ -231,6 +231,39 @@ class FlowKitGUI(tk.Tk):
         except Exception:
             pass
 
+        # ── Fixed Account Mode ──
+        fa_frame = tk.LabelFrame(p, text=" Fixed Account ", bg=BG2, fg=FG2,
+                                  font=('Segoe UI', 8, 'bold'), bd=1, relief='groove')
+        fa_frame.pack(fill='x', padx=10, pady=2)
+        fa_row = tk.Frame(fa_frame, bg=BG2)
+        fa_row.pack(fill='x', padx=6, pady=4)
+        self._fixed_account_var = tk.BooleanVar(value=False)
+        self._fa_checkbox = tk.Checkbutton(
+            fa_row, text="Co dinh tai khoan", variable=self._fixed_account_var,
+            bg=BG2, fg=FG, selectcolor=BG, activebackground=BG2,
+            font=('Segoe UI', 9), command=self._on_fa_toggle)
+        self._fa_checkbox.pack(side='left')
+        tk.Label(fa_row, text="Dong thoi:", bg=BG2, fg=FG,
+                 font=('Segoe UI', 9)).pack(side='left', padx=(16, 0))
+        self._fa_concurrent = tk.Spinbox(
+            fa_row, from_=1, to=20, width=4, bg=BG, fg=FG,
+            insertbackground=FG, font=('Consolas', 10), bd=1, relief='solid')
+        self._fa_concurrent.pack(side='left', padx=4)
+        self._fa_concurrent.delete(0, 'end')
+        self._fa_concurrent.insert(0, "2")
+        self._fa_info = tk.Label(fa_frame, text="", bg=BG2, fg=FG2,
+                                  font=('Segoe UI', 8))
+        self._fa_info.pack(padx=6, pady=(0, 2), anchor='w')
+        # Load saved values
+        try:
+            self._fixed_account_var.set(self._settings.get('fixed_account_enabled', False))
+            saved_concurrent = self._settings.get('fixed_account_concurrent', 2)
+            self._fa_concurrent.delete(0, 'end')
+            self._fa_concurrent.insert(0, str(saved_concurrent))
+        except Exception:
+            pass
+        self._on_fa_toggle()
+
         # ── Google Accounts ──
         f = tk.LabelFrame(p, text=" Tai khoan Google (email|password|2fa_secret) ",
                           bg=BG2, fg=FG2, font=('Segoe UI', 8, 'bold'), bd=1, relief='groove')
@@ -352,6 +385,19 @@ class FlowKitGUI(tk.Tk):
         self._chrome_info.config(text=f"Tim thay {count} Chrome: {names}" if count else "Khong tim thay Chrome Portable!")
 
     # ============================================================
+    def _on_fa_toggle(self):
+        if self._fixed_account_var.get():
+            total = len(getattr(self, '_chrome_dirs', [])) or 6
+            try:
+                concurrent = int(self._fa_concurrent.get() or 2)
+            except Exception:
+                concurrent = 2
+            self._fa_info.config(
+                text=f"Login {total} Chrome, chay {concurrent} dong thoi. 403 → swap Chrome.",
+                fg=BLUE)
+        else:
+            self._fa_info.config(text="", fg=FG2)
+
     # Settings
     # ============================================================
     def _load_settings(self):
@@ -372,6 +418,10 @@ class FlowKitGUI(tk.Tk):
             if accounts:
                 self._accounts_text.delete('1.0', 'end')
                 self._accounts_text.insert('1.0', accounts)
+            self._fixed_account_var.set(data.get('fixed_account_enabled', False))
+            self._fa_concurrent.delete(0, 'end')
+            self._fa_concurrent.insert(0, str(data.get('fixed_account_concurrent', 2)))
+            self._on_fa_toggle()
         except Exception:
             pass
 
@@ -405,6 +455,8 @@ class FlowKitGUI(tk.Tk):
             'cooldown': int(self._cooldown.get() or 300),
             'accounts': self._accounts_text.get('1.0', 'end').strip(),
             'chrome_count': self._get_chrome_count(),
+            'fixed_account_enabled': self._fixed_account_var.get(),
+            'fixed_account_concurrent': int(self._fa_concurrent.get() or 2),
         }
         self._settings = data
         SETTINGS_FILE.write_text(json.dumps(data, indent=2), encoding='utf-8')
@@ -471,6 +523,15 @@ class FlowKitGUI(tk.Tk):
         ipv6_cfg['pool_url'] = self._pool_url.get().strip()
         config['ipv6'] = ipv6_cfg
 
+        # Fixed Account config
+        fa_enabled = self._fixed_account_var.get()
+        fa_concurrent = int(self._fa_concurrent.get() or 2)
+        config['fixed_account'] = {
+            'enabled': fa_enabled,
+            'concurrent': fa_concurrent,
+            'cooldown_seconds': int(self._cooldown.get() or 300),
+        }
+
         # Update instance count based on detected Chromes + chrome_count limit
         chrome_count = 0
         try:
@@ -483,7 +544,9 @@ class FlowKitGUI(tk.Tk):
         instances = []
         for i, chrome_dir in enumerate(self._chrome_dirs):
             enabled = True
-            if chrome_count > 0 and i >= chrome_count:
+            if fa_enabled:
+                enabled = True
+            elif chrome_count > 0 and i >= chrome_count:
                 enabled = False
             instances.append({
                 'name': f'flowkit-{i + 1}',
