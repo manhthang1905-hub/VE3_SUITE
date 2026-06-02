@@ -608,6 +608,11 @@ class FlowKitGUI(tk.Tk):
             except Exception as e:
                 self._log(f"IPv6 Pool error: {e}", "ERROR")
 
+        # Fixed Account mode
+        fa_cfg = config.get('fixed_account', {})
+        fa_enabled = fa_cfg.get('enabled', False)
+        fa_concurrent = fa_cfg.get('concurrent', 2)
+
         # Chrome count limiting — BEFORE IPv6 to only request IPs we need
         chrome_count = 0
         try:
@@ -616,7 +621,11 @@ class FlowKitGUI(tk.Tk):
                 chrome_count = int(val)
         except Exception:
             pass
-        if chrome_count > 0:
+        if fa_enabled:
+            for inst in instances:
+                inst['enabled'] = True
+            self._log(f"Fixed Account mode: ALL {len(instances)} instances enabled, {fa_concurrent} concurrent", "INFO")
+        elif chrome_count > 0:
             for i, inst in enumerate(instances):
                 inst['enabled'] = (i < chrome_count)
             self._log(f"Chrome count limited to {chrome_count}/{len(instances)}", "INFO")
@@ -789,40 +798,44 @@ class FlowKitGUI(tk.Tk):
                 self._log(f"[{name}] Agent not ready after 20s", "WARN")
 
             # ── Step 3: Start Chrome subprocess + apply CDP ──
-            self._start_chrome(chrome_dir, inst_cfg, proxy_arg)
-            time.sleep(5)
-            try:
-                from chrome_setup import apply_chrome_cdp
-                apply_chrome_cdp(
-                    debug_port=debug_port,
-                    ext_dir=ext_dir,
-                    instance_name=name,
-                    window_args=win_args,
-                    log_func=lambda msg, n=name: self._log(f"[{n}] {msg}", "INFO"),
-                )
-            except Exception as e:
-                self._log(f"[{name}] CDP apply error: {e}", "WARN")
-
-            # Minimize Chrome to save GPU/RAM (extension works when minimized)
-            try:
-                from DrissionPage import ChromiumPage, ChromiumOptions
-                _co = ChromiumOptions()
-                _co.set_address(f"127.0.0.1:{debug_port}")
-                _p = ChromiumPage(_co)
-                _p.run_cdp('Browser.getWindowForTarget')
-                info = _p.run_cdp('Browser.getWindowForTarget')
-                wid = info.get('windowId')
-                if wid:
-                    _p.run_cdp('Browser.setWindowBounds', windowId=wid,
-                               bounds={'windowState': 'minimized'})
+            # Fixed Account: only start Chrome for first M instances (standby = no Chrome)
+            is_active = not fa_enabled or idx < fa_concurrent
+            if is_active:
+                self._start_chrome(chrome_dir, inst_cfg, proxy_arg)
+                time.sleep(5)
                 try:
-                    _p.disconnect()
+                    from chrome_setup import apply_chrome_cdp
+                    apply_chrome_cdp(
+                        debug_port=debug_port,
+                        ext_dir=ext_dir,
+                        instance_name=name,
+                        window_args=win_args,
+                        log_func=lambda msg, n=name: self._log(f"[{n}] {msg}", "INFO"),
+                    )
+                except Exception as e:
+                    self._log(f"[{name}] CDP apply error: {e}", "WARN")
+
+                # Minimize Chrome to save GPU/RAM (extension works when minimized)
+                try:
+                    from DrissionPage import ChromiumPage, ChromiumOptions
+                    _co = ChromiumOptions()
+                    _co.set_address(f"127.0.0.1:{debug_port}")
+                    _p = ChromiumPage(_co)
+                    _p.run_cdp('Browser.getWindowForTarget')
+                    info = _p.run_cdp('Browser.getWindowForTarget')
+                    wid = info.get('windowId')
+                    if wid:
+                        _p.run_cdp('Browser.setWindowBounds', windowId=wid,
+                                   bounds={'windowState': 'minimized'})
+                    try:
+                        _p.disconnect()
+                    except Exception:
+                        pass
                 except Exception:
                     pass
-            except Exception:
-                pass
-
-            self._log(f"[{name}] Instance READY", "OK")
+                self._log(f"[{name}] Instance READY (active)", "OK")
+            else:
+                self._log(f"[{name}] Instance STANDBY (Chrome not started, agent ready)", "OK")
             with ready_lock:
                 ready_count[0] += 1
             ready_event.set()
