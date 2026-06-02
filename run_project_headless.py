@@ -418,6 +418,13 @@ def excel_is_usable(project_dir, code):
                 return False
         except Exception:
             pass
+        # Thumbnail phai co — neu thieu thi excel chua xong
+        try:
+            thumbnails = wb.get_thumbnails() if hasattr(wb, 'get_thumbnails') else []
+            if not thumbnails:
+                return False
+        except Exception:
+            pass
         return True
     except Exception:
         return False
