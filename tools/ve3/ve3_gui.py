@@ -5339,15 +5339,16 @@ Get-CimInstance Win32_Process |
 
             projects.append(p)
 
-        self._log(
+        scan_msg = (
             f"[DEBUG] _queue_projects: scanned {total_dirs} dirs, "
             f"returned {len(projects)} projects | "
             f"skipped: manual_done={skipped_reasons['manual_done']}, "
             f"manual_skip={skipped_reasons['manual_skip']}, "
             f"endpoint_complete={skipped_reasons['endpoint_complete']}, "
-            f"endpoint_hold={skipped_reasons['endpoint_hold']}",
-            "INFO"
+            f"endpoint_hold={skipped_reasons['endpoint_hold']}"
         )
+        self._log(scan_msg, "INFO")
+        self._log(scan_msg, "INFO", "excel")
 
         return sorted(projects, key=lambda p: p.name)
 
@@ -5547,12 +5548,16 @@ Get-CimInstance Win32_Process |
 
     def _is_project_endpoint_complete(self, project_dir):
         try:
-            complete = (
-                self._endpoint_done_marker(project_dir).exists()
-                or self._is_project_exported_to_visual(project_dir)
-                or self._has_project_archive(project_dir)
-            )
+            has_done_lock = self._endpoint_done_marker(project_dir).exists()
+            has_visual = self._is_project_exported_to_visual(project_dir)
+            has_archive = self._has_project_archive(project_dir)
+            complete = has_done_lock or has_visual or has_archive
             if complete:
+                reasons = []
+                if has_done_lock: reasons.append("done_lock")
+                if has_visual: reasons.append(f"visual({EDIT_VISUAL_DIR / project_dir.name})")
+                if has_archive: reasons.append(f"archive({ARCHIVE_DIR / project_dir.name})")
+                self._log(f"[DEBUG] {project_dir.name}: endpoint_complete ({', '.join(reasons)})", "INFO", "excel")
                 self._repair_endpoint_done_marker(project_dir, reason="repaired_from_endpoint_artifact")
             return complete
         except Exception:
