@@ -1133,17 +1133,10 @@ class HomePage(ctk.CTkScrollableFrame):
             )
 
     def _sanitize_log_text(self, msg):
-        """Normalize logs to plain ASCII to avoid font/encoding glitches."""
+        """Fast log sanitization — remove control chars, keep printable."""
         text = str(msg).replace("\r\n", "\n").replace("\r", "\n")
-        # Remove Vietnamese diacritics and other combining marks.
-        text = unicodedata.normalize("NFKD", text)
-        text = "".join(ch for ch in text if not unicodedata.combining(ch))
-        # Keep UI-safe ASCII only.
-        text = text.encode("ascii", "ignore").decode("ascii")
-        # Remove control chars except newline/tab.
-        text = "".join(ch for ch in text if ch == "\n" or ch == "\t" or ord(ch) >= 32)
-        # Compact whitespace per line.
-        text = "\n".join(" ".join(line.split()) for line in text.split("\n"))
+        text = text.encode("ascii", "replace").decode("ascii")
+        text = "".join(ch for ch in text if ch >= " " or ch in "\n\t")
         return text.strip()
 
     def log(self, msg, level="INFO", channel="ve3"):
@@ -3001,8 +2994,52 @@ Get-CimInstance Win32_Process |
             self._project_refresh_pending = False
             self._project_refresh_thread = threading.Thread(target=self._refresh_project_views_worker, daemon=True)
             self._project_refresh_thread.start()
-        # Lower refresh frequency to reduce IO and progress jitter.
+        # Periodic cleanup (every 60s) — prevent memory/process leaks
+        self._periodic_cleanup()
         self.after(60000, self._refresh_project_views)
+
+    def _periodic_cleanup(self):
+        """Prune dead processes, stale caches, and leaked references. Runs every 60s."""
+        # 1. Prune child_procs (dead Popen objects)
+        with self.child_proc_lock:
+            before = len(self.child_procs)
+            self.child_procs = [x for x in self.child_procs
+                                if x.get("proc") and x["proc"].poll() is None]
+            pruned = before - len(self.child_procs)
+
+        # 2. Prune queue_ve3_procs (finished VE3 subprocesses)
+        with self.queue_lock:
+            dead_ve3 = [code for code, p in (self.queue_ve3_procs or {}).items()
+                        if not p or p.poll() is not None]
+            for code in dead_ve3:
+                self.queue_ve3_procs.pop(code, None)
+            dead_music = [code for code, p in (self.queue_music_procs or {}).items()
+                          if not p or p.poll() is not None]
+            for code in dead_music:
+                self.queue_music_procs.pop(code, None)
+            # Prune VE3 task threads
+            dead_tasks = [code for code, t in (self.queue_ve3_tasks or {}).items()
+                          if not t or not t.is_alive()]
+            for code in dead_tasks:
+                self.queue_ve3_tasks.pop(code, None)
+                self.queue_active_ve3.discard(code)
+
+        # 3. Prune caches (keep max 200 entries, remove oldest)
+        for cache_name in ('_project_state_cache', '_project_binding_cache', '_ve3_priority_cache'):
+            cache = getattr(self, cache_name, None)
+            if cache and len(cache) > 200:
+                keys = sorted(cache.keys(), key=lambda k: cache[k].get("ts", 0) if isinstance(cache[k], dict) else 0)
+                for k in keys[:len(cache) - 150]:
+                    cache.pop(k, None)
+
+        # 4. Prune log timestamp dicts
+        now = _time.time()
+        for ts_dict_name in ('source_wait_log_ts', 've3_skip_log_ts'):
+            ts_dict = getattr(self, ts_dict_name, None)
+            if ts_dict and len(ts_dict) > 100:
+                stale = [k for k, v in ts_dict.items() if now - v > 300]
+                for k in stale:
+                    ts_dict.pop(k, None)
 
     def _refresh_project_views_worker(self):
         rows = []
@@ -6422,7 +6459,7 @@ Get-CimInstance Win32_Process |
         try:
             while not self.queue_stop_requested:
                 did_work = False
-                if (_time.time() - float(getattr(self, "server_status_cache_ts", 0.0) or 0.0)) >= 3:
+                if (_time.time() - float(getattr(self, "server_status_cache_ts", 0.0) or 0.0)) >= 30:
                     self._refresh_server_status_sync()
                 pairs = self._get_server_pairs(only_available=True)
                 with self.queue_lock:
