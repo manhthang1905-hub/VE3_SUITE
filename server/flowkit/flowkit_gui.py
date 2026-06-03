@@ -676,8 +676,9 @@ class FlowKitGUI(tk.Tk):
                 self._log("WARNING: No IPv6 for any instance — using direct connection", "WARN")
 
         # Save accounts mapping for recovery auto-login + account pool
+        # (FA mode: account_map updated per-instance in pipeline after detection)
+        account_map = {}
         if accounts:
-            account_map = {}
             for i, inst in enumerate(instances):
                 if not inst.get('enabled', True):
                     continue
@@ -718,12 +719,59 @@ class FlowKitGUI(tk.Tk):
 
             account_info = None
             if accounts:
-                acc = accounts[idx % len(accounts)]
-                account_info = {
-                    'id': acc['email'],
-                    'password': acc['password'],
-                    'totp_secret': acc.get('totp_secret', ''),
-                }
+                if fa_enabled:
+                    # Fixed Account: detect current account in Chrome, keep if valid
+                    current_email = None
+                    try:
+                        from chrome_setup import _check_current_account_fast
+                        current_email = _check_current_account_fast(chrome_dir)
+                    except Exception:
+                        pass
+                    # Find matching account in the list
+                    matched = None
+                    if current_email:
+                        for a in accounts:
+                            if a['email'].strip().lower() == current_email.strip().lower():
+                                matched = a
+                                break
+                    if matched:
+                        account_info = {
+                            'id': matched['email'],
+                            'password': matched['password'],
+                            'totp_secret': matched.get('totp_secret', ''),
+                        }
+                        self._log(f"[{name}] FA: Chrome has {current_email} (valid) — keep", "OK")
+                    else:
+                        # Chrome has no account or unknown account → assign unused one
+                        used_emails = set()
+                        for other_idx, other_inst in enabled:
+                            if other_idx < idx:
+                                other_acc = account_map.get(other_inst['name'], {})
+                                if other_acc:
+                                    used_emails.add(other_acc.get('id', '').lower())
+                        for a in accounts:
+                            if a['email'].strip().lower() not in used_emails:
+                                account_info = {
+                                    'id': a['email'],
+                                    'password': a['password'],
+                                    'totp_secret': a.get('totp_secret', ''),
+                                }
+                                break
+                        if not account_info:
+                            acc = accounts[idx % len(accounts)]
+                            account_info = {
+                                'id': acc['email'],
+                                'password': acc['password'],
+                                'totp_secret': acc.get('totp_secret', ''),
+                            }
+                        self._log(f"[{name}] FA: Chrome has {current_email or 'no account'} → login {account_info['id']}", "INFO")
+                else:
+                    acc = accounts[idx % len(accounts)]
+                    account_info = {
+                        'id': acc['email'],
+                        'password': acc['password'],
+                        'totp_secret': acc.get('totp_secret', ''),
+                    }
 
             win_args = []
             try:

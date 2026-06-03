@@ -203,6 +203,41 @@ JS_VERIFY_FINGERPRINT = """
 """
 
 
+# ─── Fast Account Detection (no Chrome needed) ──────
+
+def _check_current_account_fast(chrome_dir) -> str:
+    """Detect logged-in Google account from Chrome profile WITHOUT opening Chrome.
+    Reads Preferences JSON for account_info or signin emails."""
+    import json as _json
+    prefs_file = Path(chrome_dir) / "Data" / "profile" / "Default" / "Preferences"
+    if not prefs_file.exists():
+        return ""
+    try:
+        data = _json.loads(prefs_file.read_text(encoding="utf-8", errors="replace"))
+        # Method 1: account_info
+        accs = data.get("account_info", [])
+        if accs and isinstance(accs, list):
+            for acc in accs:
+                email = acc.get("email", "")
+                if email and "@" in email:
+                    return email.strip().lower()
+        # Method 2: signin.allowed_usernames
+        signin = data.get("signin", {})
+        allowed = signin.get("allowed_usernames", [])
+        if allowed and isinstance(allowed, list):
+            for u in allowed:
+                if isinstance(u, str) and "@" in u:
+                    return u.strip().lower()
+        # Method 3: profile.gaia_info_picture_url contains email hint
+        profile = data.get("profile", {})
+        name = profile.get("name", "")
+        if name and "@" in name:
+            return name.strip().lower()
+    except Exception:
+        pass
+    return ""
+
+
 # ─── Account Check — y nguyen _check_current_account server cu ──────
 
 def _check_current_account(page, log) -> str:
