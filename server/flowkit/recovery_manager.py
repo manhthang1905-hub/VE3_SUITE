@@ -362,25 +362,25 @@ class RecoveryManager:
                 if success:
                     pass  # done
                 else:
-                    logger.info("[Recovery] %s Level 1 failed, escalating to L2", instance_name)
+                    logger.info("[Recovery] %s Level 1 failed", instance_name)
                     state.recovery_level = 2
                     level = 2
 
-            if not success and level <= 2 and state.level_attempts[2] < self.level2_max:
+            if not success and self._fa_enabled:
+                # Fixed Account mode: L1 fail → SWAP immediately (skip L2/L3)
+                # Kill old Chrome → start standby Chrome (with IPv6 rotation)
+                logger.info("[Recovery] %s L1 failed → Fixed Account SWAP (kill old, start standby)", instance_name)
+                success = await self._fa_swap_chrome(instance_name)
+            elif not success and level <= 2 and state.level_attempts[2] < self.level2_max:
                 state.level_attempts[2] += 1
-                if not self._fa_enabled:
-                    self._rotate_account_for_instance(instance_name)
+                self._rotate_account_for_instance(instance_name)
                 success = await self._level2_rotate_ipv6(instance_name)
                 if not success:
                     logger.info("[Recovery] %s Level 2 failed, escalating to L3", instance_name)
                     state.recovery_level = 3
                     level = 3
 
-            if not success and self._fa_enabled:
-                # Fixed Account mode: swap Chrome instead of L3 re-login
-                logger.info("[Recovery] %s L2 failed → Fixed Account SWAP", instance_name)
-                success = await self._fa_swap_chrome(instance_name)
-            elif not success and state.level_attempts[3] < self.level3_max:
+            if not success and not self._fa_enabled and state.level_attempts[3] < self.level3_max:
                 state.recovery_level = 3
                 state.level_attempts[3] += 1
                 # Rotate account before L3 restart
@@ -591,7 +591,9 @@ class RecoveryManager:
         new_ip = await loop.run_in_executor(None, self._rotate_ipv6, instance_name, "403_L2")
         if not new_ip:
             return False
-        return await self._restart_chrome_instance(instance_name, new_ipv6=new_ip)
+        # FA mode: skip setup_chrome (account already logged in, just restart with new IPv6)
+        skip_login = self._fa_enabled
+        return await self._restart_chrome_instance(instance_name, new_ipv6=new_ip, login=not skip_login)
 
     async def _level3_restart_chrome(self, instance_name: str) -> bool:
         """Level 3: Get NEW IPv6 + full restart from scratch."""
