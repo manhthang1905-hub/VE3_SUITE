@@ -126,6 +126,7 @@ class RecoveryManager:
         self._fa_cooling_until: Dict[str, float] = {}  # name → timestamp
         self._fa_all_names: List[str] = []  # ordered list of ALL instance names
         self._fa_swap_lock = asyncio.Lock()
+        self._fa_round_robin_idx = 0
 
         if self._fa_enabled:
             self._fa_all_names = [cfg["name"] for cfg in instances_config]
@@ -466,9 +467,13 @@ class RecoveryManager:
                         logger.info("[FA-Swap] %s: cooldown expired → standby", name)
 
             standby_name = None
-            for name in self._fa_all_names:
+            n = len(self._fa_all_names)
+            for i in range(n):
+                idx = (self._fa_round_robin_idx + i) % n
+                name = self._fa_all_names[idx]
                 if self._fa_states.get(name) == "standby":
                     standby_name = name
+                    self._fa_round_robin_idx = (idx + 1) % n
                     break
 
             # If no standby, wait for first cooldown to expire

@@ -675,28 +675,72 @@ class FlowKitGUI(tk.Tk):
             else:
                 self._log("WARNING: No IPv6 for any instance — using direct connection", "WARN")
 
-        # Save accounts mapping for recovery auto-login + account pool
-        # (FA mode: account_map updated per-instance in pipeline after detection)
+        # Build account map
+        enabled = [(i, inst) for i, inst in enumerate(instances)
+                   if inst.get('enabled', True) and i < len(self._chrome_dirs)]
         account_map = {}
-        if accounts:
+
+        if fa_enabled and accounts:
+            # FA mode: detect existing accounts in Chrome, assign without duplicates
+            claimed = set()
+            all_emails = {a['email'].strip().lower() for a in accounts}
+            email_to_acc = {a['email'].strip().lower(): a for a in accounts}
+
+            # Phase 1: keep valid, unclaimed accounts already in Chrome
+            for idx, inst in enabled:
+                chrome_dir = self._chrome_dirs[idx]
+                try:
+                    from chrome_setup import _check_current_account_fast
+                    current = _check_current_account_fast(chrome_dir)
+                except Exception:
+                    current = ""
+                if current:
+                    email_lower = current.strip().lower()
+                    if email_lower in all_emails and email_lower not in claimed:
+                        acc = email_to_acc[email_lower]
+                        account_map[inst['name']] = {
+                            "id": acc["email"], "password": acc["password"],
+                            "totp_secret": acc.get("totp_secret", ""),
+                        }
+                        claimed.add(email_lower)
+                        self._log(f"[{inst['name']}] FA: Chrome has {current} (valid) — keep", "OK")
+                        continue
+                    elif email_lower in claimed:
+                        self._log(f"[{inst['name']}] FA: Chrome has {current} but already claimed → will re-login", "WARN")
+                    else:
+                        self._log(f"[{inst['name']}] FA: Chrome has {current} (not in account list) → will re-login", "WARN")
+
+            # Phase 2: assign unclaimed accounts to Chrome without valid account
+            for idx, inst in enabled:
+                if inst['name'] in account_map:
+                    continue
+                for a in accounts:
+                    if a['email'].strip().lower() not in claimed:
+                        account_map[inst['name']] = {
+                            "id": a["email"], "password": a["password"],
+                            "totp_secret": a.get("totp_secret", ""),
+                        }
+                        claimed.add(a['email'].strip().lower())
+                        self._log(f"[{inst['name']}] FA: assign {a['email']} (will login if needed)", "INFO")
+                        break
+        elif accounts:
             for i, inst in enumerate(instances):
                 if not inst.get('enabled', True):
                     continue
                 acc = accounts[i % len(accounts)]
                 account_map[inst["name"]] = {
-                    "id": acc["email"],
-                    "password": acc["password"],
+                    "id": acc["email"], "password": acc["password"],
                     "totp_secret": acc.get("totp_secret", ""),
                 }
-            try:
-                accounts_file = BASE_DIR / "config" / ".flow_accounts.json"
-                accounts_file.parent.mkdir(exist_ok=True)
-                accounts_file.write_text(json.dumps(account_map), encoding="utf-8")
-            except Exception:
-                pass
 
-        # Per-instance pipeline: each instance independently does
-        # setup_chrome → start_agent → wait_ready → start_chrome → apply_cdp
+        try:
+            accounts_file = BASE_DIR / "config" / ".flow_accounts.json"
+            accounts_file.parent.mkdir(exist_ok=True)
+            accounts_file.write_text(json.dumps(account_map), encoding="utf-8")
+        except Exception:
+            pass
+
+        # Per-instance pipeline
         setup_concurrency = max(1, int(os.getenv("CHROME_SETUP_CONCURRENCY", "6")))
         setup_stagger = max(0.0, float(os.getenv("CHROME_SETUP_STAGGER_SEC", "3.0")))
 
@@ -704,9 +748,6 @@ class FlowKitGUI(tk.Tk):
         ready_count = [0]
         ready_lock = threading.Lock()
         ready_event = threading.Event()
-
-        enabled = [(i, inst) for i, inst in enumerate(instances)
-                   if inst.get('enabled', True) and i < len(self._chrome_dirs)]
 
         self._log(f"Starting {len(enabled)} instance pipelines (concurrency={setup_concurrency})...", "INFO")
 
@@ -720,47 +761,14 @@ class FlowKitGUI(tk.Tk):
             account_info = None
             if accounts:
                 if fa_enabled:
-                    # Fixed Account: detect current account in Chrome, keep if valid
-                    current_email = None
-                    try:
-                        from chrome_setup import _check_current_account_fast
-                        current_email = _check_current_account_fast(chrome_dir)
-                    except Exception:
-                        pass
-                    # Find matching account in the list
-                    matched = None
-                    if current_email:
-                        for a in accounts:
-                            if a['email'].strip().lower() == current_email.strip().lower():
-                                matched = a
-                                break
-                    if matched:
-                        account_info = {
-                            'id': matched['email'],
-                            'password': matched['password'],
-                            'totp_secret': matched.get('totp_secret', ''),
-                        }
-                        self._log(f"[{name}] FA: Chrome has {current_email} (valid) — keep", "OK")
+                    # FA mode: account already assigned in sequential phase above
+                    assigned = account_map.get(name)
+                    if assigned:
+                        account_info = dict(assigned)
                     else:
-                        # Chrome has no account or unknown account → assign unused one
-                        used_emails = set()
-                        for other_idx, other_inst in enabled:
-                            if other_idx < idx:
-                                other_acc = account_map.get(other_inst['name'], {})
-                                if other_acc:
-                                    used_emails.add(other_acc.get('id', '').lower())
-                        for a in accounts:
-                            if a['email'].strip().lower() not in used_emails:
-                                account_info = {
-                                    'id': a['email'],
-                                    'password': a['password'],
-                                    'totp_secret': a.get('totp_secret', ''),
-                                }
-                                break
-                        if not account_info:
-                            acc = accounts[idx % len(accounts)]
-                            account_info = {
-                                'id': acc['email'],
+                        acc = accounts[idx % len(accounts)]
+                        account_info = {
+                            'id': acc['email'],
                                 'password': acc['password'],
                                 'totp_secret': acc.get('totp_secret', ''),
                             }
