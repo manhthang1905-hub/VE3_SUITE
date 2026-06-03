@@ -126,6 +126,39 @@ def _is_protected(rel_path: str) -> bool:
     return False
 
 
+GIT_PROTECTED_FILES = [
+    "tools/ve3/config/settings.yaml",
+    "tools/srt-to-excel/config/settings.yaml",
+    "server/config/settings.yaml",
+    "config/config.json",
+    "config/creds.json",
+]
+
+
+def _backup_protected():
+    """Backup settings files before git pull (git overwrites tracked files)."""
+    backups = {}
+    for rel in GIT_PROTECTED_FILES:
+        p = SUITE_ROOT / rel
+        if p.exists():
+            try:
+                backups[rel] = p.read_bytes()
+            except Exception:
+                pass
+    return backups
+
+
+def _restore_protected(backups):
+    """Restore settings files after git pull."""
+    for rel, data in backups.items():
+        p = SUITE_ROOT / rel
+        try:
+            p.parent.mkdir(parents=True, exist_ok=True)
+            p.write_bytes(data)
+        except Exception:
+            pass
+
+
 def _try_git_pull(progress_callback=None):
     """Try git pull first — much faster than ZIP download. Returns None if git unavailable."""
     import subprocess
@@ -139,6 +172,9 @@ def _try_git_pull(progress_callback=None):
     except Exception:
         return None
 
+    # Backup settings before git overwrites them
+    backups = _backup_protected()
+
     if progress_callback:
         progress_callback("Git pull...")
     try:
@@ -147,6 +183,7 @@ def _try_git_pull(progress_callback=None):
             cwd=str(SUITE_ROOT), capture_output=True, text=True, timeout=120,
         )
         if result.returncode == 0:
+            _restore_protected(backups)
             ver = get_local_version()
             try:
                 VERSION_FILE.write_text(ver + "\n", encoding="utf-8")
@@ -164,7 +201,7 @@ def _try_git_pull(progress_callback=None):
             cwd=str(SUITE_ROOT), capture_output=True, text=True, timeout=30,
         )
         if result.returncode == 0:
-            # Read VERSION file from repo (git rev-list unreliable after reset)
+            _restore_protected(backups)
             ver = "unknown"
             try:
                 ver = VERSION_FILE.read_text(encoding="utf-8").strip()
@@ -173,7 +210,7 @@ def _try_git_pull(progress_callback=None):
             return {"success": True, "version": ver, "updated": 0, "skipped": 0, "errors": [],
                     "method": "git-reset"}
     except Exception:
-        pass
+        _restore_protected(backups)
     return None
 
 
