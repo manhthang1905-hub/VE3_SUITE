@@ -732,7 +732,7 @@ class HomePage(ctk.CTkScrollableFrame):
             self.pb_music.set(cur/max(tot,1)); self.lbl_music.configure(text=f"{cur}/{tot}")
             self.pb_music_left.set(cur/max(tot,1)); self.lbl_music_left.configure(text=f"{cur}/{tot}")
 
-    def refresh_projects_overview(self, rows):
+    def refresh_projects_overview(self, rows, archived_today=0):
         def normalize_code(value):
             return str(value or "").strip().upper()
 
@@ -787,21 +787,7 @@ class HomePage(ctk.CTkScrollableFrame):
                 raw = row.get("path") or row.get("dir")
                 return Path(raw) if raw else None
 
-            def _count_done_today():
-                """Count projects archived today (moved to old/)."""
-                count = 0
-                try:
-                    if ARCHIVE_DIR.exists():
-                        for d in ARCHIVE_DIR.iterdir():
-                            if d.is_dir():
-                                try:
-                                    if d.stat().st_mtime >= today_start:
-                                        count += 1
-                                except Exception:
-                                    pass
-                except Exception:
-                    pass
-                return count
+            _archived_today = archived_today
 
             for r in rows:
                 state = str(r.get("state", "") or "").upper()
@@ -829,7 +815,7 @@ class HomePage(ctk.CTkScrollableFrame):
                 elif state == "DONE":
                     done_today += 1
 
-            done_today += _count_done_today()
+            done_today += _archived_today
 
             self.lbl_overview_total.configure(text=str(len(rows)))
             self.lbl_overview_done_today.configure(text=str(done_today))
@@ -2854,8 +2840,8 @@ foreach ($pid in $children) {{
         self._refresh_manual_done_codes()
         if cleared:
             self._log(f"[QUEUE] Da don {cleared} lock cu khi khoi dong.", "WARN", "ve3")
-        # Fetch server status synchronously BEFORE loading config to ensure accurate pair counts
-        self._refresh_server_status_sync()
+        # Fetch server status in background to avoid blocking GUI
+        threading.Thread(target=self._refresh_server_status_sync, daemon=True).start()
         self.pages["home"].load_server_config()
         self.pages["cfg"]._render()
         self._refresh_project_views()
@@ -3046,9 +3032,27 @@ Get-CimInstance Win32_Process |
                 for k in stale:
                     ts_dict.pop(k, None)
 
+    def _count_archived_today(self):
+        """Count projects in old/ modified today. Called from background thread."""
+        count = 0
+        try:
+            today_start = _time.mktime(_time.localtime()[:3] + (0,0,0,0,0,-1))
+            if ARCHIVE_DIR.exists():
+                for d in ARCHIVE_DIR.iterdir():
+                    if d.is_dir():
+                        try:
+                            if d.stat().st_mtime >= today_start:
+                                count += 1
+                        except Exception:
+                            pass
+        except Exception:
+            pass
+        return count
+
     def _refresh_project_views_worker(self):
         rows = []
         err = None
+        archived_today = 0
         try:
             PROJECTS_DIR.mkdir(parents=True, exist_ok=True)
             projects = [p for p in PROJECTS_DIR.iterdir() if p.is_dir()]
@@ -3061,15 +3065,16 @@ Get-CimInstance Win32_Process |
                 rows.append(self._project_row(pd, pair_by_server=pair_by_server))
             state_order = {"RUN": 0, "WAIT": 1, "DONE": 2, "BLOCK": 3}
             rows.sort(key=lambda r: (state_order.get(r.get("state", "BLOCK"), 9), r.get("code", "")))
+            archived_today = self._count_archived_today()
         except Exception as exc:
             err = exc
-        self.after(0, lambda rows=rows, err=err: self._apply_project_views(rows, err))
+        self.after(0, lambda rows=rows, err=err, at=archived_today: self._apply_project_views(rows, err, at))
 
-    def _apply_project_views(self, rows, err=None):
+    def _apply_project_views(self, rows, err=None, archived_today=0):
         if err is not None:
             self._log(f"Khng qut c PROJECTS: {err}", "WARN")
         try:
-            self.pages["home"].refresh_projects_overview(rows)
+            self.pages["home"].refresh_projects_overview(rows, archived_today=archived_today)
             self.pages["gen"].update_project_list(rows)
         except Exception as e:
             import traceback
@@ -5330,7 +5335,8 @@ Get-CimInstance Win32_Process |
             return
         online_count = sum(1 for s in self.server_status_cache if s.get("available"))
         if self.server_status_cache and online_count == 0:
-            self._refresh_server_status_sync()
+            threading.Thread(target=self._refresh_server_status_sync, daemon=True).start()
+            _time.sleep(0.5)
             online_count = sum(1 for s in self.server_status_cache if s.get("available"))
         if self.server_status_cache and online_count == 0:
             self._log("[QUEUE] Chua co server nao online — se tu dong chay khi server san sang.", "WARN", "ve3")
