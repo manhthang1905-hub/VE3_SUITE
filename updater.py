@@ -154,9 +154,9 @@ def _try_git_pull(progress_callback=None):
                 pass
             return {"success": True, "version": ver, "updated": 0, "skipped": 0, "errors": [],
                     "method": "git"}
-        # ff-only failed (diverged) — try reset
+        # ff-only failed (diverged) — try full fetch + reset
         subprocess.run(
-            ["git", "fetch", "--depth=1", "origin", "main"],
+            ["git", "fetch", "origin", "main"],
             cwd=str(SUITE_ROOT), capture_output=True, text=True, timeout=120,
         )
         result = subprocess.run(
@@ -164,11 +164,12 @@ def _try_git_pull(progress_callback=None):
             cwd=str(SUITE_ROOT), capture_output=True, text=True, timeout=30,
         )
         if result.returncode == 0:
-            ver = get_local_version()
+            # Read VERSION file from repo (git rev-list unreliable after reset)
+            ver = "unknown"
             try:
-                VERSION_FILE.write_text(ver + "\n", encoding="utf-8")
+                ver = VERSION_FILE.read_text(encoding="utf-8").strip()
             except Exception:
-                pass
+                ver = get_local_version()
             return {"success": True, "version": ver, "updated": 0, "skipped": 0, "errors": [],
                     "method": "git-reset"}
     except Exception:
