@@ -456,7 +456,15 @@ class RecoveryManager:
             self._fa_cooling_until[instance_name] = time.time() + self._fa_cooldown
             logger.info("[FA-Swap] %s: cooling for %ds", instance_name, self._fa_cooldown)
 
-            # 4. Find next standby
+            # 4. Transition expired cooling → standby before searching
+            now = time.time()
+            for name in self._fa_all_names:
+                if self._fa_states.get(name) == "cooling":
+                    until = self._fa_cooling_until.get(name, 0)
+                    if until > 0 and now >= until:
+                        self._fa_states[name] = "standby"
+                        logger.info("[FA-Swap] %s: cooldown expired → standby", name)
+
             standby_name = None
             for name in self._fa_all_names:
                 if self._fa_states.get(name) == "standby":
@@ -713,8 +721,12 @@ class RecoveryManager:
                         ok = False
                     if ok:
                         break
-                    # Login failed → try different account
-                    if account and self._all_accounts:
+                    # Login failed → try different account (NOT in FA mode — accounts are fixed)
+                    if self._fa_enabled:
+                        logger.warning("[Recovery] %s: setup fail — FA mode, keep same account, retry", instance_name)
+                        await loop.run_in_executor(None, lambda: kill_chrome(instance_name))
+                        await asyncio.sleep(3)
+                    elif account and self._all_accounts:
                         old_email = account.get("id", "?")
                         self._rotate_account_for_instance(instance_name)
                         account = self._get_account(instance_name)
