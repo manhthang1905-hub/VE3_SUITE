@@ -293,6 +293,13 @@ class RecoveryManager:
         if instance_name not in self.states:
             return
 
+        # FA mode: don't self-heal instances that are cooling/standby (intentionally no Chrome)
+        if self._fa_enabled:
+            fa_state = self._fa_states.get(instance_name, "")
+            if fa_state in ("cooling", "standby"):
+                logger.info("[SelfHeal] %s: skip — FA mode, state=%s", instance_name, fa_state)
+                return
+
         state = self.states[instance_name]
         if state.recovering:
             return
@@ -324,7 +331,8 @@ class RecoveryManager:
                                    "Will retry when pool has IPs.", instance_name)
                     state.recovering = False
                     return
-                self._rotate_account_for_instance(instance_name)
+                if not self._fa_enabled:
+                    self._rotate_account_for_instance(instance_name)
 
             success = await self._restart_chrome_instance(instance_name, new_ipv6=new_ip)
 
