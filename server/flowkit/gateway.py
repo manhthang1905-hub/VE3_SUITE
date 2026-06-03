@@ -254,13 +254,13 @@ def _pick_instance() -> Optional[AgentInstance]:
     return chosen
 
 
-def _pick_instance_for_retry(exclude: list[str]) -> Optional[AgentInstance]:
+def _pick_instance_for_retry(exclude: list) -> Optional[AgentInstance]:
     """Pick instance excluding already-tried ones."""
     available = [i for i in instances if i.available and i.name not in exclude]
     if not available:
-        # If all excluded, try any that's not cooling
-        available = [i for i in instances if i.enabled and i.healthy and not i.is_cooling
-                     and i.name not in exclude]
+        # Fallback: must have extension connected (skip standby instances)
+        available = [i for i in instances if i.enabled and i.healthy and i.extension_connected
+                     and not i.is_cooling and i.name not in exclude]
     if not available:
         return None
     available.sort(key=lambda i: (i.processing_count, i.consecutive_403))
