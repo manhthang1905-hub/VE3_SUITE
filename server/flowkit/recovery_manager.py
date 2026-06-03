@@ -664,9 +664,11 @@ class RecoveryManager:
                     pass
                 try:
                     (BASE_DIR / f".ipv6_override_{proxy_port}").write_text(new_ipv6)
+                    logger.info("[Recovery] %s: override file written, waiting for proxy to pick up...", instance_name)
                 except Exception:
                     pass
-                await asyncio.sleep(2)
+                # Wait for: NDP DAD (3s) + proxy override poll (1s) + buffer
+                await asyncio.sleep(5)
                 proxy_arg = f"socks5://127.0.0.1:{proxy_port}"
             elif cfg.get("ipv6"):
                 proxy_arg = f"socks5://127.0.0.1:{proxy_port}"
