@@ -297,7 +297,7 @@ class RecoveryManager:
         # FA mode: don't self-heal instances that are cooling/standby (intentionally no Chrome)
         if self._fa_enabled:
             fa_state = self._fa_states.get(instance_name, "")
-            if fa_state in ("cooling", "standby"):
+            if fa_state in ("cooling", "standby", "starting"):
                 logger.info("[SelfHeal] %s: skip — FA mode, state=%s", instance_name, fa_state)
                 return
 
@@ -421,52 +421,43 @@ class RecoveryManager:
     async def _fa_swap_chrome(self, instance_name: str) -> bool:
         """Fixed Account swap: replace 403'd Chrome with a standby Chrome.
 
-        1. Soft-clean 403'd profile (keep login + extension)
-        2. Kill 403'd Chrome
-        3. Mark cooling (300s)
-        4. Find next standby instance
-        5. Rotate IPv6 for new instance
-        6. Start Chrome for standby → extension connects → gateway routes to it
+        Lock is held only for state changes + standby selection (fast).
+        setup_chrome runs OUTSIDE lock so other swaps can proceed.
         """
+        loop = asyncio.get_running_loop()
+        standby_name = None
+
+        # ── Phase 1: Quick state changes under lock ──
         async with self._fa_swap_lock:
             cfg = self.instances_config.get(instance_name)
             if not cfg:
                 return False
 
-            loop = asyncio.get_running_loop()
-
-            # 1. Soft-clean profile
+            # Soft-clean + kill old Chrome
             try:
-                from launcher import soft_clean_chrome_profile
+                from launcher import soft_clean_chrome_profile, kill_chrome
                 chrome_dir = (BASE_DIR / cfg["chrome_path"]).resolve().parent.parent.parent
                 await loop.run_in_executor(None, soft_clean_chrome_profile, chrome_dir)
-                logger.info("[FA-Swap] %s: soft-cleaned profile", instance_name)
-            except Exception as e:
-                logger.warning("[FA-Swap] %s: soft-clean error: %s", instance_name, e)
-
-            # 2. Kill Chrome
-            try:
-                from launcher import kill_chrome
                 await loop.run_in_executor(None, kill_chrome, instance_name)
-                logger.info("[FA-Swap] %s: Chrome killed", instance_name)
+                logger.info("[FA-Swap] %s: soft-cleaned + killed", instance_name)
             except Exception as e:
-                logger.warning("[FA-Swap] %s: kill error: %s", instance_name, e)
+                logger.warning("[FA-Swap] %s: cleanup error: %s", instance_name, e)
 
-            # 3. Mark cooling
+            # Mark cooling
             self._fa_states[instance_name] = "cooling"
             self._fa_cooling_until[instance_name] = time.time() + self._fa_cooldown
             logger.info("[FA-Swap] %s: cooling for %ds", instance_name, self._fa_cooldown)
 
-            # 4. Transition expired cooling → standby before searching
+            # Expire old cooldowns
             now = time.time()
             for name in self._fa_all_names:
                 if self._fa_states.get(name) == "cooling":
                     until = self._fa_cooling_until.get(name, 0)
                     if until > 0 and now >= until:
                         self._fa_states[name] = "standby"
-                        logger.info("[FA-Swap] %s: cooldown expired → standby", name)
+                        logger.info("[FA-Swap] %s: cooldown expired -> standby", name)
 
-            standby_name = None
+            # Pick standby (round-robin)
             n = len(self._fa_all_names)
             for i in range(n):
                 idx = (self._fa_round_robin_idx + i) % n
@@ -474,57 +465,47 @@ class RecoveryManager:
                 if self._fa_states.get(name) == "standby":
                     standby_name = name
                     self._fa_round_robin_idx = (idx + 1) % n
+                    self._fa_states[standby_name] = "starting"
                     break
 
-            # If no standby, wait for first cooldown to expire
-            if not standby_name:
-                logger.info("[FA-Swap] No standby available — waiting for cooldown...")
-                earliest_name = None
-                earliest_time = float("inf")
-                for name, until in self._fa_cooling_until.items():
-                    if until < earliest_time and name != instance_name:
-                        earliest_time = until
-                        earliest_name = name
-                if not earliest_name:
-                    earliest_name = instance_name
-                    earliest_time = self._fa_cooling_until.get(instance_name, time.time() + self._fa_cooldown)
-
+        # ── Phase 2: Wait for cooldown if no standby ──
+        if not standby_name:
+            logger.info("[FA-Swap] No standby — waiting for cooldown...")
+            earliest_name = None
+            earliest_time = float("inf")
+            for name, until in self._fa_cooling_until.items():
+                if until < earliest_time:
+                    earliest_time = until
+                    earliest_name = name
+            if earliest_name:
                 wait_secs = max(0, earliest_time - time.time())
                 if wait_secs > 0:
-                    logger.info("[FA-Swap] Waiting %.0fs for %s cooldown...", wait_secs, earliest_name)
                     await asyncio.sleep(wait_secs)
-
-                # Soft-clean the expired instance and reuse it
+                async with self._fa_swap_lock:
+                    self._fa_states[earliest_name] = "starting"
                 standby_name = earliest_name
-                try:
-                    standby_cfg = self.instances_config.get(standby_name, {})
-                    standby_chrome = (BASE_DIR / standby_cfg["chrome_path"]).resolve().parent.parent.parent
-                    await loop.run_in_executor(None, soft_clean_chrome_profile, standby_chrome)
-                except Exception:
-                    pass
-                self._fa_states[standby_name] = "standby"
 
-            # 5. Rotate IPv6 for standby
-            new_ip = ""
-            if self._ipv6_client:
-                new_ip = self._rotate_ipv6(standby_name, "fa_swap")
+        if not standby_name:
+            logger.warning("[FA-Swap] %s: no standby found", instance_name)
+            return False
 
-            # 6. Start Chrome for standby (setup_chrome checks account + login if needed)
-            standby_cfg = self.instances_config.get(standby_name)
-            if not standby_cfg:
-                logger.warning("[FA-Swap] No config for %s", standby_name)
-                return False
+        # ── Phase 3: Start standby Chrome OUTSIDE lock (slow) ──
+        new_ip = ""
+        if self._ipv6_client:
+            new_ip = self._rotate_ipv6(standby_name, "fa_swap")
 
-            success = await self._restart_chrome_instance(standby_name, new_ipv6=new_ip)
+        success = await self._restart_chrome_instance(standby_name, new_ipv6=new_ip)
+
+        async with self._fa_swap_lock:
             if success:
                 self._fa_states[standby_name] = "active"
-                logger.info("[FA-Swap] %s → %s: swap OK", instance_name, standby_name)
-                return True
+                logger.info("[FA-Swap] %s -> %s: swap OK", instance_name, standby_name)
             else:
-                logger.warning("[FA-Swap] %s → %s: swap FAILED", instance_name, standby_name)
                 self._fa_states[standby_name] = "cooling"
                 self._fa_cooling_until[standby_name] = time.time() + self._fa_cooldown
-                return False
+                logger.warning("[FA-Swap] %s -> %s: swap FAILED", instance_name, standby_name)
+
+        return success
 
     async def _level1_reset_captcha(self, instance_name: str) -> bool:
         """Level 1: Reset captcha via extension API."""
