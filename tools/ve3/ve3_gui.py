@@ -9,6 +9,9 @@ from pathlib import Path
 from datetime import datetime
 from typing import Dict
 
+_RE_PROJECT_CODE = re.compile(r'\[([A-Z0-9]+-\d+)\]|\b([A-Z0-9]+-\d+):')
+_RE_QUEUE_DEBUG = re.compile(r'^\[DEBUG\]\s+[A-Z0-9]+-\d+:')
+
 VE3_DIR = Path(__file__).parent
 SUITE_ROOT = VE3_DIR.parents[1] if VE3_DIR.parent.name.lower() == "tools" else VE3_DIR
 PROJECTS_DIR = SUITE_ROOT / "PROJECTS"
@@ -1168,15 +1171,6 @@ class HomePage(ctk.CTkScrollableFrame):
                     return "excel"
         except Exception:
             pass
-        try:
-            projects_dir = getattr(app, "projects_dir", PROJECTS_DIR)
-            project_dir = projects_dir / code
-            if app._queue_marker(project_dir, "ve3").exists():
-                return "ve3"
-            if app._queue_marker(project_dir, "excel").exists():
-                return "excel"
-        except Exception:
-            pass
         return None
 
     def _format_log_targets(self, msg, level="INFO", channel="ve3"):
@@ -1186,8 +1180,7 @@ class HomePage(ctk.CTkScrollableFrame):
         safe_msg = self._sanitize_log_text(raw_msg)
         line = f"[{ts}] {ic} {safe_msg}\n"
 
-        # Extract project code from message like "[KA5-0080] ..." or "[QUEUE/VE3] KA5-0080: ..."
-        code_match = re.search(r'\[([A-Z0-9]+-\d+)\]|\b([A-Z0-9]+-\d+):', raw_msg)
+        code_match = _RE_PROJECT_CODE.search(raw_msg)
         code_key = (code_match.group(1) or code_match.group(2)) if code_match else None
 
         # Determine primary channel tab.
@@ -1208,7 +1201,7 @@ class HomePage(ctk.CTkScrollableFrame):
         # Project tabs show only the active phase for that project.
         # Queue scanner DEBUG lines are global scheduler chatter, not project task logs.
         if code_key:
-            is_queue_debug = bool(re.search(r'^\[DEBUG\]\s+[A-Z0-9]+-\d+:', raw_msg))
+            is_queue_debug = bool(_RE_QUEUE_DEBUG.search(raw_msg))
             active_channel = self._active_project_log_channel(code_key)
             target_keys = [code_key] if active_channel and ch == active_channel and not is_queue_debug else [primary_key]
         else:
