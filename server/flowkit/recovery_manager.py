@@ -364,21 +364,9 @@ class RecoveryManager:
         try:
             success = False
 
-            # Try current level, escalate on failure
-            if level <= 1 and state.level_attempts[1] < self.level1_max:
-                state.level_attempts[1] += 1
-                success = await self._level1_reset_captcha(instance_name)
-                if success:
-                    pass  # done
-                else:
-                    logger.info("[Recovery] %s Level 1 failed", instance_name)
-                    state.recovery_level = 2
-                    level = 2
-
-            if not success and self._fa_enabled:
-                # Fixed Account mode: L1 fail → SWAP immediately (skip L2/L3)
-                # Kill old Chrome → start standby Chrome (with IPv6 rotation)
-                logger.info("[Recovery] %s L1 failed → Fixed Account SWAP (kill old, start standby)", instance_name)
+            if self._fa_enabled:
+                # Fixed Account mode: 403 → swap Chrome immediately (different account)
+                logger.info("[Recovery] %s FA mode → SWAP Chrome (kill old, start standby)", instance_name)
                 success = await self._fa_swap_chrome(instance_name)
             elif not success and level <= 2 and state.level_attempts[2] < self.level2_max:
                 state.level_attempts[2] += 1
