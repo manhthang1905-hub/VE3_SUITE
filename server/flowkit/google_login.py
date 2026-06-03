@@ -1471,46 +1471,57 @@ def login_google_chrome(account_info: dict, chrome_portable: str = None, profile
                     log("Waiting 5s for 2FA page to fully render...")
                     time.sleep(5)
 
-                # B3: Generate OTP — wait for fresh code (>15s remaining in window)
+                # B3: Generate OTP — retry up to 3 times if code rejected
                 clean_secret = totp_secret.replace(" ", "").replace("-", "").upper()
                 totp = pyotp.TOTP(clean_secret)
 
-                # Wait until OTP has at least 15s before expiry
-                remaining = 30 - (int(time.time()) % 30)
-                if remaining < 15:
-                    wait_for = remaining + 2
-                    log(f"OTP window expires in {remaining}s — waiting {wait_for}s for fresh code...")
-                    time.sleep(wait_for)
+                for otp_attempt in range(3):
+                    # Wait until OTP has at least 15s before expiry
+                    remaining = 30 - (int(time.time()) % 30)
+                    if remaining < 15:
+                        wait_for = remaining + 2
+                        log(f"OTP window expires in {remaining}s — waiting {wait_for}s for fresh code...")
+                        time.sleep(wait_for)
 
-                otp_code = totp.now()
-                remaining = 30 - (int(time.time()) % 30)
-                log(f"Generated OTP: {otp_code} ({remaining}s remaining)")
+                    otp_code = totp.now()
+                    remaining = 30 - (int(time.time()) % 30)
+                    log(f"Generated OTP: {otp_code} ({remaining}s remaining, attempt {otp_attempt+1}/3)")
 
-                with _CLIPBOARD_LOCK:
-                    log("Clipboard lock acquired for OTP paste")
+                    with _CLIPBOARD_LOCK:
+                        log("Clipboard lock acquired for OTP paste")
 
-                    try:
-                        import pyperclip
-                        pyperclip.copy(otp_code)
-                        log("OTP copied to clipboard")
-                    except ImportError:
-                        import subprocess
-                        subprocess.run(['clip'], input=otp_code.encode(), check=True)
-                        log("OTP copied to clipboard (via clip)")
-
-                    # B4: Click input, paste, enter
-                    if otp_input:
                         try:
-                            otp_input.click()
-                            time.sleep(0.3)
-                        except Exception:
-                            pass
+                            import pyperclip
+                            pyperclip.copy(otp_code)
+                            log("OTP copied to clipboard")
+                        except ImportError:
+                            import subprocess
+                            subprocess.run(['clip'], input=otp_code.encode(), check=True)
+                            log("OTP copied to clipboard (via clip)")
 
-                    actions.key_down('ctrl').key_down('v').key_up('v').key_up('ctrl')
-                    log("Sent Ctrl+V")
-                    time.sleep(0.5)
-                    actions.key_down('enter').key_up('enter')
-                    log("Sent Enter")
+                        # B4: Click input, paste, enter
+                        if otp_input:
+                            try:
+                                otp_input.click()
+                                time.sleep(0.3)
+                            except Exception:
+                                pass
+
+                        actions.key_down('ctrl').key_down('v').key_up('v').key_up('ctrl')
+                        log("Sent Ctrl+V")
+                        time.sleep(0.5)
+                        actions.key_down('enter').key_up('enter')
+                        log("Sent Enter")
+
+                    # Check if OTP was accepted (page should navigate away)
+                    time.sleep(3)
+                    current_url = driver.url.lower()
+                    if "challenge" not in current_url and "signin" not in current_url:
+                        log(f"OTP accepted (attempt {otp_attempt+1})")
+                        break
+                    if otp_attempt < 2:
+                        log(f"OTP may have been rejected — waiting for next window and retrying...", "WARN")
+                        time.sleep(max(5, 30 - (int(time.time()) % 30) + 2))
 
             except ImportError:
                 log("pyotp not installed! Run: pip install pyotp", "ERROR")
