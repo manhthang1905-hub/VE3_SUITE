@@ -637,15 +637,14 @@ class HomePage(ctk.CTkScrollableFrame):
                 box.delete("1.0", f"{remove + 1}.0")
                 current = self.log_max_lines_per_tab
             except Exception:
-                current = int(float(box.index("end-1c").split(".")[0]))
-                if current > self.log_max_lines_per_tab:
-                    try:
-                        box.delete("1.0", f"{current - self.log_max_lines_per_tab + 1}.0")
-                        current = self.log_max_lines_per_tab
-                    except Exception:
-                        pass
+                pass
         box._ve3_log_line_count = current
-        box.see("end")
+        # Throttle scroll — only scroll if not scrolled recently
+        now = _time.time()
+        last_scroll = getattr(box, "_last_scroll_time", 0)
+        if now - last_scroll > 0.3:
+            box.see("end")
+            box._last_scroll_time = now
         box.configure(state="disabled")
 
     def _flush_pending_logs(self):
@@ -6638,8 +6637,30 @@ Get-CimInstance Win32_Process |
             self._log_flush_scheduled = False
         if not batch:
             return
-        records = []
+
+        # Deduplicate consecutive identical messages
+        deduped = []
+        repeat_count = 0
+        last_key = None
         for m, l, channel in batch:
+            key = (str(m).strip(), l, channel)
+            if key == last_key:
+                repeat_count += 1
+            else:
+                if repeat_count > 0:
+                    deduped.append((f"  (...repeated {repeat_count}x)", "WARN", deduped[-1][2] if deduped else "ve3"))
+                repeat_count = 0
+                last_key = key
+                deduped.append((m, l, channel))
+        if repeat_count > 0:
+            deduped.append((f"  (...repeated {repeat_count}x)", "WARN", deduped[-1][2] if deduped else "ve3"))
+
+        # Limit batch size to prevent GUI freeze
+        if len(deduped) > 60:
+            deduped = deduped[-60:]
+
+        records = []
+        for m, l, channel in deduped:
             if channel is None:
                 text = str(m)
                 if "[QUEUE/EXCEL]" in text or "MP3/SRT -> Excel" in text or "SRT -> Excel" in text or "ProgressivePromptsGenerator" in text:
