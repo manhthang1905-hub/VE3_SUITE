@@ -787,18 +787,21 @@ class HomePage(ctk.CTkScrollableFrame):
                 raw = row.get("path") or row.get("dir")
                 return Path(raw) if raw else None
 
-            def _done_marker_today(row):
-                project_dir = _as_project_path(row)
-                if not project_dir:
-                    return False
-                for marker_name in (".endpoint_done.lock", ".manual_done.lock", ".done"):
-                    marker = project_dir / marker_name
-                    try:
-                        if marker.exists() and marker.stat().st_mtime >= today_start:
-                            return True
-                    except Exception:
-                        continue
-                return False
+            def _count_done_today():
+                """Count projects archived today (moved to old/)."""
+                count = 0
+                try:
+                    if ARCHIVE_DIR.exists():
+                        for d in ARCHIVE_DIR.iterdir():
+                            if d.is_dir():
+                                try:
+                                    if d.stat().st_mtime >= today_start:
+                                        count += 1
+                                except Exception:
+                                    pass
+                except Exception:
+                    pass
+                return count
 
             for r in rows:
                 state = str(r.get("state", "") or "").upper()
@@ -823,8 +826,10 @@ class HomePage(ctk.CTkScrollableFrame):
                         excel_wait += 1
                     elif needs_ve3 or not visuals_done or not music_ready or any(token in next_lower for token in ("ve3", "music", "pair", "fix")):
                         ve3_wait += 1
-                elif state == "DONE" and _done_marker_today(r):
+                elif state == "DONE":
                     done_today += 1
+
+            done_today += _count_done_today()
 
             self.lbl_overview_total.configure(text=str(len(rows)))
             self.lbl_overview_done_today.configure(text=str(done_today))
