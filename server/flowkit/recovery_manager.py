@@ -663,7 +663,7 @@ class RecoveryManager:
                 except Exception:
                     pass
                 try:
-                    Path(f".ipv6_override_{proxy_port}").write_text(new_ipv6)
+                    (BASE_DIR / f".ipv6_override_{proxy_port}").write_text(new_ipv6)
                 except Exception:
                     pass
                 await asyncio.sleep(2)
