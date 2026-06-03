@@ -1449,19 +1449,10 @@ class FlowKitGUI(tk.Tk):
         self._stat_labels['failed'].config(text=str(self._stats.get('total_failed', 0)))
         self._stat_labels['cooling'].config(text=str(self._stats.get('instances_cooling', 0)))
 
-        # Workers — only rebuild if count changed (prevent widget leak)
-        active_count = len([w for w in self._workers if w.get('healthy') or w.get('available')
-                           or w.get('cooling') or w.get('extension_connected')])
-        prev_count = getattr(self, '_prev_worker_count', -1)
-        if active_count != prev_count:
-            for widget in self._workers_frame.winfo_children():
-                widget.destroy()
-            self._prev_worker_count = active_count
-        else:
-            # Update existing cards in-place (skip rebuild)
-            pass
+        # Workers — dedupe by name, always clear + rebuild
+        for widget in self._workers_frame.winfo_children():
+            widget.destroy()
 
-        # Load current account mapping
         account_map = {}
         try:
             accounts_file = BASE_DIR / "config" / ".flow_accounts.json"
@@ -1470,18 +1461,21 @@ class FlowKitGUI(tk.Tk):
         except Exception:
             pass
 
-        active_workers = [w for w in self._workers if w.get('healthy') or w.get('available')
-                          or w.get('cooling') or w.get('extension_connected')]
-        if not active_workers:
-            active_workers = [w for w in self._workers
-                              if w.get('name', '') in account_map or w.get('total_completed', 0) > 0]
+        # Dedupe workers by name (prevent duplicates)
+        seen = set()
+        workers = []
+        for w in self._workers:
+            name = w.get('name', '')
+            if name and name not in seen:
+                seen.add(name)
+                workers.append(w)
 
-        for i, w in enumerate(active_workers):
-            card = tk.Frame(self._workers_frame, bg=BG, bd=1, relief='solid',
-                            highlightbackground=BORDER)
-            card.pack(side='left', fill='both', padx=2, pady=2, expand=True)
+        for i, w in enumerate(workers):
+            name = w.get('name', '?')
+            ext_connected = w.get('extension_connected', False)
+            is_healthy = w.get('healthy', False)
 
-            # Status color
+            # Determine status
             if w.get('cooling'):
                 border_color = ORANGE
                 status_text = f"COOL {w.get('cooling_remaining', 0)}s"
@@ -1490,24 +1484,29 @@ class FlowKitGUI(tk.Tk):
                 border_color = ORANGE
                 status_text = f"429 {w.get('quota_remaining', 0)}s"
                 status_fg = ORANGE
-            elif w.get('available'):
+            elif ext_connected and w.get('available'):
                 border_color = GREEN
-                status_text = "READY"
+                status_text = "READY" if w.get('processing', 0) == 0 else "BUSY"
                 status_fg = GREEN
-            elif w.get('healthy'):
+            elif ext_connected and is_healthy:
                 border_color = YELLOW
                 status_text = "BUSY" if w.get('processing', 0) > 0 else "WAIT"
                 status_fg = YELLOW
+            elif is_healthy and not ext_connected:
+                border_color = '#555'
+                status_text = "STANDBY"
+                status_fg = '#888'
             else:
                 border_color = RED
                 status_text = "DOWN"
                 status_fg = RED
 
-            card.config(highlightbackground=border_color)
+            card = tk.Frame(self._workers_frame, bg=BG, bd=1, relief='solid',
+                            highlightbackground=border_color)
+            card.pack(side='left', fill='both', padx=2, pady=2, expand=True)
 
-            name = w.get('name', '?')
             tk.Label(card, text=name, font=('Segoe UI', 9, 'bold'),
-                     fg=FG, bg=BG).pack(padx=6, pady=(4, 1))
+                     fg=FG if ext_connected else '#666', bg=BG).pack(padx=6, pady=(4, 1))
             tk.Label(card, text=status_text, font=('Segoe UI', 8, 'bold'),
                      fg=status_fg, bg=BG).pack()
 
@@ -1516,10 +1515,10 @@ class FlowKitGUI(tk.Tk):
             if email:
                 short = email.split('@')[0][:12]
                 tk.Label(card, text=short, font=('Consolas', 7),
-                         fg=BLUE, bg=BG).pack()
+                         fg=BLUE if ext_connected else '#555', bg=BG).pack()
 
-            ext = "Ext: OK" if w.get('extension_connected') else "Ext: --"
-            ext_fg = GREEN if w.get('extension_connected') else RED
+            ext = "Ext: OK" if ext_connected else "Ext: --"
+            ext_fg = GREEN if ext_connected else '#555'
             tk.Label(card, text=ext, font=('Consolas', 8), fg=ext_fg, bg=BG).pack()
 
             c403 = w.get('consecutive_403', 0)
