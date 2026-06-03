@@ -488,14 +488,13 @@ class RecoveryManager:
             if self._ipv6_client:
                 new_ip = self._rotate_ipv6(standby_name, "fa_swap")
 
-            # 6. Start Chrome for standby
+            # 6. Start Chrome for standby (setup_chrome checks account + login if needed)
             standby_cfg = self.instances_config.get(standby_name)
             if not standby_cfg:
                 logger.warning("[FA-Swap] No config for %s", standby_name)
                 return False
 
-            success = await self._restart_chrome_instance(standby_name, new_ipv6=new_ip,
-                                                          clean=False, login=False)
+            success = await self._restart_chrome_instance(standby_name, new_ipv6=new_ip)
             if success:
                 self._fa_states[standby_name] = "active"
                 logger.info("[FA-Swap] %s → %s: swap OK", instance_name, standby_name)
