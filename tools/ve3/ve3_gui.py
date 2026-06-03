@@ -6463,7 +6463,7 @@ Get-CimInstance Win32_Process |
         try:
             while not self.queue_stop_requested:
                 did_work = False
-                if (_time.time() - float(getattr(self, "server_status_cache_ts", 0.0) or 0.0)) >= 30:
+                if (_time.time() - float(getattr(self, "server_status_cache_ts", 0.0) or 0.0)) >= 10:
                     self._refresh_server_status_sync()
                 pairs = self._get_server_pairs(only_available=True)
                 with self.queue_lock:
@@ -6684,7 +6684,10 @@ Get-CimInstance Win32_Process |
         repeat_count = 0
         last_key = None
         for m, l, channel in batch:
-            key = (str(m).strip(), l, channel)
+            msg_str = str(m).strip()
+            code_m = _RE_PROJECT_CODE.search(msg_str)
+            code_id = (code_m.group(1) or code_m.group(2)) if code_m else ""
+            key = (msg_str, l, channel, code_id)
             if key == last_key:
                 repeat_count += 1
             else:
