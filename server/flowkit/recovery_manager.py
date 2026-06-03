@@ -624,8 +624,16 @@ class RecoveryManager:
             debug_port = 19200 + (api_port - 8100)
             proxy_port = 1081 + (api_port - 8100)
 
-            # Step 1: Kill Chrome (with timeout to prevent hang)
-            if login:
+            # Step 1: Kill Chrome (skip if not running — e.g., standby instance)
+            chrome_running = False
+            try:
+                debug_port = 19200 + (api_port - 8100)
+                import urllib.request
+                urllib.request.urlopen(f"http://127.0.0.1:{debug_port}/json", timeout=2)
+                chrome_running = True
+            except Exception:
+                pass
+            if chrome_running:
                 try:
                     await asyncio.wait_for(
                         loop.run_in_executor(None, lambda: kill_chrome(instance_name)),
