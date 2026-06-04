@@ -1897,7 +1897,15 @@ class FlowKitGUI(tk.Tk):
                 pass
 
             git_root = SUITE_ROOT if not _IS_STANDALONE else BASE_DIR
+            git_ok = False
             if git_available:
+                # Init git repo if not exists (one-time setup for VMs)
+                git_dir = Path(git_root) / ".git"
+                if not git_dir.exists():
+                    self._log("Git init (lan dau)...", "INFO")
+                    subprocess.run(["git", "init"], cwd=str(git_root),
+                                   capture_output=True, timeout=30)
+                # Ensure remote
                 result = subprocess.run(
                     ["git", "remote", "get-url", "origin"],
                     cwd=str(git_root), capture_output=True, text=True, timeout=10,
@@ -1912,14 +1920,23 @@ class FlowKitGUI(tk.Tk):
                         ["git", "remote", "set-url", "origin", GITHUB_GIT_URL],
                         cwd=str(git_root), capture_output=True, timeout=10,
                     )
-
+                # Fetch + reset (fast — only downloads changes)
+                self._log("Git fetch...", "INFO")
                 for cmd in [
                     ["git", "fetch", "origin", "main"],
                     ["git", "checkout", "main"],
                     ["git", "reset", "--hard", "origin/main"],
                 ]:
-                    subprocess.run(cmd, cwd=str(git_root), capture_output=True, text=True, timeout=120)
-            else:
+                    r = subprocess.run(cmd, cwd=str(git_root),
+                                       capture_output=True, text=True, timeout=120)
+                    if r.returncode != 0:
+                        self._log(f"Git error: {' '.join(cmd)}: {r.stderr[:100]}", "WARN")
+                        break
+                else:
+                    git_ok = True
+                    self._log("Git update OK", "OK")
+
+            if not git_ok:
                 import ssl
                 ssl_context = ssl.create_default_context()
                 ssl_context.check_hostname = False
