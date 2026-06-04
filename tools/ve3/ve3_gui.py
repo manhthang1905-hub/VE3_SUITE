@@ -2830,8 +2830,8 @@ foreach ($pid in $children) {{
         self.after(500, self._refresh_project_views)
         self.after(3000, self._process_monitor_tick)
         # Auto-start queue after 60s
-        self._auto_start_countdown = 60
-        self._log("[QUEUE] Tu dong chay sau 60 giay... (bam STOP de huy)", "INFO")
+        self._auto_start_countdown = 30
+        self._log("[QUEUE] Tu dong chay sau 30s... (bam STOP hoac Update de huy)", "INFO")
         self.after(1000, self._auto_start_tick)
 
     def _auto_start_tick(self):
