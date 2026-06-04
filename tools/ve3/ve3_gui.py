@@ -2886,13 +2886,21 @@ foreach ($pid in $children) {{
         except Exception as e:
             self._log(f"[RESTART] cleanup error: {e}", "ERROR")
 
-        self._log("=== Cho 5s roi restart GUI... ===", "WARN")
-        self.after(5000, self._exec_restart)
+        self._log("=== Cho 15s roi restart GUI... ===", "WARN")
+        self.after(15000, self._exec_restart)
 
     def _exec_restart(self):
-        """Replace current process with fresh GUI."""
-        import sys
-        os.execv(sys.executable, [sys.executable] + sys.argv)
+        """Replace current process with fresh GUI. Fallback if execv fails."""
+        import sys, subprocess
+        try:
+            os.execv(sys.executable, [sys.executable] + sys.argv)
+        except Exception as e:
+            self._log(f"[RESTART] os.execv failed: {e} — fallback subprocess", "ERROR")
+            try:
+                subprocess.Popen([sys.executable] + sys.argv)
+            except Exception:
+                pass
+            os._exit(1)
 
     def refresh_process_monitor_now(self):
         self._start_process_monitor_refresh(manual=True)

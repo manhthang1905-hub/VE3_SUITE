@@ -1390,25 +1390,29 @@ class FlowKitGUI(tk.Tk):
         threading.Thread(target=_tail_gateway_log, daemon=True).start()
 
     def _scheduled_restart(self):
-        """Auto-restart: stop everything → wait for cleanup → start again."""
+        """Auto-restart: kill everything → restart GUI process (clean memory)."""
         self._restart_timer_id = None
         self._restart_at = 0
         hours = int(self._restart_hours.get() or 3)
-        self._log(f"=== AUTO-RESTART ({hours}h) — stopping all ===", "WARN")
+        self._log(f"=== AUTO-RESTART ({hours}h) — kill all + restart GUI ===", "WARN")
         self._on_stop()
-        # Lock buttons during cleanup wait — prevent user interference
         self._start_btn.config(state='disabled', bg='#475569', text="Restarting...")
         self._stop_btn.config(state='disabled')
-        self._restart_countdown_label.config(text="Cho 20s...", fg=YELLOW)
-        self._pending_restart_id = self.after(20000, self._do_restart_start)
+        self._restart_countdown_label.config(text="Cho 15s...", fg=YELLOW)
+        self._pending_restart_id = self.after(15000, self._exec_restart)
 
-    def _do_restart_start(self):
-        """Called 20s after stop — everything should be dead by now."""
+    def _exec_restart(self):
+        """Replace current process with fresh GUI. Fallback if execv fails."""
         self._pending_restart_id = None
-        self._restart_countdown_label.config(text="")
-        self._start_btn.config(text="START FLOWKIT")
-        self._log("=== AUTO-RESTART — starting fresh ===", "INFO")
-        self._on_start()
+        try:
+            os.execv(sys.executable, [sys.executable] + sys.argv)
+        except Exception as e:
+            self._log(f"[RESTART] os.execv failed: {e} — fallback", "ERROR")
+            try:
+                subprocess.Popen([sys.executable] + sys.argv)
+            except Exception:
+                pass
+            os._exit(1)
 
     def _on_stop(self):
         """Stop all processes."""
