@@ -107,6 +107,12 @@ class FlowKitGUI(tk.Tk):
         self._account_stats = []
         self._settings = self._load_gui_settings()
 
+        # Process supervision — track by role for auto-restart
+        self._gateway_proc = None
+        self._gateway_port_val = 5100
+        self._agent_procs = {}   # name → Popen
+        self._inst_configs = {}  # name → inst config dict
+
         self.protocol("WM_DELETE_WINDOW", self._on_close)
 
         self._notebook = ttk.Notebook(self)
@@ -1208,6 +1214,8 @@ class FlowKitGUI(tk.Tk):
         )
         with self._proc_lock:
             self._processes.append(proc)
+        self._agent_procs[inst['name']] = proc
+        self._inst_configs[inst['name']] = inst
         self._log(f"[{inst['name']}] Agent started: port {inst['api_port']} (PID {proc.pid})", "INFO")
 
     def _wait_agent_ready(self, api_port: int, timeout: float = 20.0) -> bool:
@@ -1242,6 +1250,8 @@ class FlowKitGUI(tk.Tk):
         )
         with self._proc_lock:
             self._processes.append(proc)
+        self._gateway_proc = proc
+        self._gateway_port_val = port
         self._log(f"Gateway started: port {port} (PID {proc.pid})", "INFO")
 
         # Tail gateway.log to GUI (show recovery/self-heal/403 messages)
@@ -1395,13 +1405,63 @@ class FlowKitGUI(tk.Tk):
             pass
 
     def _poll_loop(self):
-        """Poll gateway every 60s (light on resources)."""
+        """Poll gateway + supervise processes + rotate logs. Every 60s."""
+        cycle = 0
         while self._started:
-            self._poll_once()
-            # Cleanup dead processes (prevent zombie accumulation)
-            with self._proc_lock:
-                self._processes = [p for p in self._processes if p.poll() is None]
+            try:
+                self._poll_once()
+                self._supervise_processes()
+                with self._proc_lock:
+                    self._processes = [p for p in self._processes if p.poll() is None]
+                cycle += 1
+                if cycle % 10 == 0:
+                    self._rotate_logs()
+            except Exception as e:
+                self._log(f"[Supervisor] poll error: {e}", "ERROR")
             time.sleep(60)
+
+    def _supervise_processes(self):
+        """Auto-restart crashed gateway/agents. Core of 24/7 reliability."""
+        # Gateway
+        if self._gateway_proc and self._gateway_proc.poll() is not None:
+            self._log("Gateway CRASHED — auto-restarting...", "ERROR")
+            time.sleep(3)
+            self._start_gateway(self._gateway_port_val)
+
+        # Agents
+        for name, proc in list(self._agent_procs.items()):
+            if proc.poll() is not None:
+                cfg = self._inst_configs.get(name)
+                if cfg:
+                    self._log(f"[{name}] Agent CRASHED — auto-restarting...", "ERROR")
+                    self._start_agent(cfg)
+
+    def _rotate_logs(self):
+        """Truncate log files > 50MB to prevent disk full."""
+        try:
+            max_size = 50 * 1024 * 1024
+            keep_size = 5 * 1024 * 1024
+            for log_file in LOG_DIR.iterdir():
+                if log_file.suffix != '.log':
+                    continue
+                try:
+                    size = log_file.stat().st_size
+                except Exception:
+                    continue
+                if size <= max_size:
+                    continue
+                try:
+                    tail = b""
+                    with open(log_file, 'rb') as f:
+                        f.seek(-keep_size, 2)
+                        tail = f.read()
+                    with open(log_file, 'wb') as f:
+                        f.write(tail)
+                    self._log(f"[LogRotate] {log_file.name}: {size // 1_000_000}MB → {len(tail) // 1_000_000}MB", "INFO")
+                except Exception:
+                    pass
+        except Exception:
+            pass
 
     def _update_monitor(self):
         """Update monitor UI from polled data."""
