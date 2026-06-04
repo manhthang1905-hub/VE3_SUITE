@@ -159,11 +159,13 @@ def soft_clean_chrome_profile(chrome_dir: Path):
         "Download Service", "Feature Engagement Tracker", "GPUCache", "IndexedDB",
         "Local Storage", "optimization_guide_hint_cache_store", "parcel_tracking_db",
         "PersistentOriginTrials", "Safe Browsing Network", "Segmentation Platform",
-        "Service Worker", "Session Storage", "Sessions", "Shared Dictionary",
+        "Session Storage", "Sessions", "Shared Dictionary",
         "shared_proto_db", "Site Characteristics Database", "VideoDecodeStats",
         "WebStorage", "AutofillAiModelCache", "AutofillStrikeDatabase",
         "Collaboration", "DataSharing", "File System",
     }
+    # KEEP: Service Worker (extension MV3 needs it), Cookies, Login Data,
+    #       Preferences, Secure Preferences, Extension*, GCM Store, Network
     DELETE_FILES = {
         "Web Data", "Web Data-journal",
         "Account Web Data", "Account Web Data-journal",
