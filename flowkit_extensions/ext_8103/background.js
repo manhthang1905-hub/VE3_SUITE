@@ -261,7 +261,7 @@ function keepAlive() {
 function sendToAgent(msg) {
   // API responses (with msg.id) go via HTTP — immune to WS disconnect
   if (msg.id) {
-    fetch('http://127.0.0.1:8100/api/ext/callback', {
+    fetch('http://127.0.0.1:8103/api/ext/callback', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(msg),
@@ -365,20 +365,45 @@ async function handleSolveCaptcha(msg) {
 async function handleResetCaptcha(msg) {
   const { id } = msg;
   try {
-    console.log('[FlowAgent] Resetting reCAPTCHA: clearing ALL site data...');
+    console.log('[FlowAgent] Resetting reCAPTCHA: clearing cookies + refreshing Flow tab...');
 
-    // Clear ALL site data (cookies, cache, localStorage, etc.)
-    // Extension stays installed — browsingData only clears web content
+    // Clear ALL site data for Flow domains (cookies, cache, localStorage, etc.)
     await chrome.browsingData.remove(
-      { origins: ['https://labs.google', 'https://aisandbox-pa.googleapis.com', 'https://accounts.google.com'] },
+      { origins: ['https://labs.google', 'https://aisandbox-pa.googleapis.com'] },
       { cookies: true, cache: true, localStorage: true, serviceWorkers: true, indexedDB: true }
     );
+    console.log('[FlowAgent] Site data cleared');
 
-    // Clear flowKey — session is gone
+    // Refresh all Flow tabs
+    const tabs = await chrome.tabs.query({
+      url: ['https://labs.google/fx/tools/flow*', 'https://labs.google/fx/*/tools/flow*'],
+    });
+    for (const tab of tabs) {
+      await chrome.tabs.reload(tab.id, { bypassCache: true });
+    }
+
+    // Wait for page to reload (may redirect to login → user re-logs in → back to Flow)
+    await sleep(8000);
+
+    // Re-inject content script on all Flow tabs
+    const freshTabs = await chrome.tabs.query({
+      url: ['https://labs.google/fx/tools/flow*', 'https://labs.google/fx/*/tools/flow*'],
+    });
+    for (const tab of freshTabs) {
+      try {
+        await chrome.scripting.executeScript({
+          target: { tabId: tab.id },
+          files: ['content.js'],
+        });
+      } catch (e) { /* tab may not be ready */ }
+    }
+
+    // Capture fresh token
+    await captureTokenFromFlowTab();
+    // Reset flow key — force re-capture
     flowKey = null;
-    chrome.storage.local.remove(['flowKey']);
 
-    console.log('[FlowAgent] Site data cleared, flowKey reset. Needs full re-login.');
+    console.log('[FlowAgent] reCAPTCHA reset complete — waiting for re-login + fresh token');
     sendToAgent({ id, data: { ok: true, needsRelogin: true } });
   } catch (e) {
     console.error('[FlowAgent] Reset captcha failed:', e);
