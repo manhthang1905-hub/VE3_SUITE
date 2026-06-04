@@ -1806,31 +1806,19 @@ class FlowKitGUI(tk.Tk):
     # ============================================================
 
     def _get_remote_version(self) -> str:
-        """Get remote version from GitHub (commit count or VERSION file)."""
+        """Get remote version from GitHub VERSION file (no API, no rate limit)."""
         import ssl
         from urllib.request import urlopen, Request
-        ctx = ssl.create_default_context()
-        ctx.check_hostname = False
-        ctx.verify_mode = ssl.CERT_NONE
-        api_url = f"https://api.github.com/repos/{GITHUB_REPO}/commits?sha=main&per_page=1"
         try:
-            req = Request(api_url, headers={"User-Agent": "FlowKit-Updater"})
-            with urlopen(req, timeout=15, context=ctx) as resp:
-                link = resp.headers.get("Link", "")
-                if 'rel="last"' in link:
-                    import re
-                    m = re.search(r'[&?]page=(\d+)>;\s*rel="last"', link)
-                    if m:
-                        return f"1.0.{m.group(1)}"
-        except Exception as e:
-            print(f"[UPDATE] GitHub API error: {e}")
-        try:
+            ctx = ssl.create_default_context()
+            ctx.check_hostname = False
+            ctx.verify_mode = ssl.CERT_NONE
             url = f"https://raw.githubusercontent.com/{GITHUB_REPO}/main/VERSION"
             req = Request(url, headers={"User-Agent": "FlowKit-Updater"})
             with urlopen(req, timeout=15, context=ctx) as resp:
                 return resp.read().decode("utf-8").strip()
         except Exception as e:
-            print(f"[UPDATE] GitHub raw error: {e}")
+            print(f"[UPDATE] error: {e}")
             return ""
 
     def _on_check_update(self):
