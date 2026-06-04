@@ -2841,6 +2841,24 @@ foreach ($pid in $children) {{
         # Force immediate refresh for projects list on startup
         self.after(500, self._refresh_project_views)
         self.after(3000, self._process_monitor_tick)
+        # Auto-start queue after 60s
+        self._auto_start_countdown = 60
+        self._log("[QUEUE] Tu dong chay sau 60 giay... (bam STOP de huy)", "INFO")
+        self.after(1000, self._auto_start_tick)
+
+    def _auto_start_tick(self):
+        if not hasattr(self, '_auto_start_countdown') or self._auto_start_countdown <= 0:
+            return
+        if self.queue_running:
+            return
+        self._auto_start_countdown -= 1
+        if self._auto_start_countdown <= 0:
+            self._log("[QUEUE] Tu dong bat dau!", "OK")
+            self.toggle_queue_worker()
+        else:
+            if self._auto_start_countdown % 10 == 0:
+                self._log(f"[QUEUE] Tu dong chay sau {self._auto_start_countdown}s...", "INFO")
+            self.after(1000, self._auto_start_tick)
 
     def refresh_process_monitor_now(self):
         self._start_process_monitor_refresh(manual=True)
