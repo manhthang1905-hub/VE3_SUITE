@@ -163,7 +163,7 @@ class FlowKitGUI(tk.Tk):
         self._version_label.pack(side='left', padx=(6, 0))
 
         self._update_btn = tk.Button(
-            hdr, text="Check Update", command=self._on_check_update,
+            hdr, text="Update", command=self._on_check_update,
             bg='#0984e3', fg='#fff', font=('Segoe UI', 9, 'bold'),
             relief='flat', cursor='hand2', padx=10)
         self._update_btn.pack(side='right')
@@ -1834,10 +1834,12 @@ class FlowKitGUI(tk.Tk):
             return ""
 
     def _on_check_update(self):
+        self._cancel_autostart()
         self._update_btn.config(text="Checking...", state="disabled", fg='#FFA500')
-        threading.Thread(target=self._check_update_thread, daemon=True).start()
+        threading.Thread(target=self._check_and_update_thread, daemon=True).start()
 
-    def _check_update_thread(self):
+    def _check_and_update_thread(self):
+        """Check + update in one click. No second click needed."""
         try:
             local = self._version
             remote = self._get_remote_version()
@@ -1846,7 +1848,7 @@ class FlowKitGUI(tk.Tk):
                 self.after(0, lambda: self._update_btn.config(
                     text="Loi ket noi", state="normal", bg=RED, fg='#fff'))
                 self.after(5000, lambda: self._update_btn.config(
-                    text="Check Update", bg='#0984e3', fg='#fff'))
+                    text="Update", bg='#0984e3', fg='#fff'))
                 return
 
             has_update = False
@@ -1857,178 +1859,172 @@ class FlowKitGUI(tk.Tk):
             except (ValueError, IndexError):
                 has_update = remote != local
 
-            if has_update:
-                self.after(0, lambda: self._update_btn.config(
-                    text=f"Update v{remote}", state="normal",
-                    bg='#2E7D32', fg='#fff',
-                    command=self._run_update))
-                self.after(0, lambda: self._version_label.config(
-                    text=f"v{local}  >>  v{remote}", fg='#FFA500'))
-            else:
+            if not has_update:
                 self.after(0, lambda: self._update_btn.config(
                     text="Da moi nhat", state="normal", bg=GREEN, fg='#fff'))
                 self.after(5000, lambda: self._update_btn.config(
-                    text="Check Update", bg='#0984e3', fg='#fff'))
+                    text="Update", bg='#0984e3', fg='#fff'))
+                return
+
+            # Has update → run immediately (no second click)
+            self.after(0, lambda: self._version_label.config(
+                text=f"v{local}  >>  v{remote}", fg='#FFA500'))
+            self._do_update()
+
         except Exception as e:
             self.after(0, lambda: self._update_btn.config(
                 text="Loi", state="normal", bg=RED, fg='#fff'))
-            print(f"Check update error: {e}")
+            print(f"Update error: {e}")
             self.after(5000, lambda: self._update_btn.config(
-                text="Check Update", bg='#0984e3', fg='#fff'))
+                text="Update", bg='#0984e3', fg='#fff'))
 
-    def _run_update(self):
+    def _do_update(self):
+        """Download + apply update. Called from background thread."""
         import urllib.request
         import zipfile
 
-        def do_update():
-            self._update_btn.config(state="disabled", text="Dang cap nhat...", bg='#666', fg='#fff')
+        self._update_btn.config(state="disabled", text="Dang cap nhat...", bg='#666', fg='#fff')
 
+        try:
+            git_available = False
             try:
-                git_available = False
-                try:
-                    result = subprocess.run(
-                        ["git", "--version"],
-                        capture_output=True, text=True, timeout=10,
+                result = subprocess.run(
+                    ["git", "--version"],
+                    capture_output=True, text=True, timeout=10,
+                )
+                git_available = (result.returncode == 0)
+            except Exception:
+                pass
+
+            git_root = SUITE_ROOT if not _IS_STANDALONE else BASE_DIR
+            if git_available:
+                result = subprocess.run(
+                    ["git", "remote", "get-url", "origin"],
+                    cwd=str(git_root), capture_output=True, text=True, timeout=10,
+                )
+                if result.returncode != 0:
+                    subprocess.run(
+                        ["git", "remote", "add", "origin", GITHUB_GIT_URL],
+                        cwd=str(git_root), capture_output=True, timeout=10,
                     )
-                    git_available = (result.returncode == 0)
+                elif GITHUB_GIT_URL not in result.stdout.strip():
+                    subprocess.run(
+                        ["git", "remote", "set-url", "origin", GITHUB_GIT_URL],
+                        cwd=str(git_root), capture_output=True, timeout=10,
+                    )
+
+                for cmd in [
+                    ["git", "fetch", "origin", "main"],
+                    ["git", "checkout", "main"],
+                    ["git", "reset", "--hard", "origin/main"],
+                ]:
+                    subprocess.run(cmd, cwd=str(git_root), capture_output=True, text=True, timeout=120)
+            else:
+                import ssl
+                ssl_context = ssl.create_default_context()
+                ssl_context.check_hostname = False
+                ssl_context.verify_mode = ssl.CERT_NONE
+
+                zip_path = BASE_DIR / "update_temp.zip"
+                extract_dir = BASE_DIR / "update_temp"
+
+                cache_buster = f"?nocache={int(time.time())}"
+                self._log(f"Downloading: {GITHUB_ZIP_URL}", "INFO")
+                with urllib.request.urlopen(GITHUB_ZIP_URL + cache_buster, context=ssl_context) as response:
+                    with open(str(zip_path), 'wb') as out_file:
+                        out_file.write(response.read())
+
+                with zipfile.ZipFile(str(zip_path), 'r') as zip_ref:
+                    zip_ref.extractall(str(extract_dir))
+
+                src_flowkit = extract_dir / "VE3_SUITE-main" / "server" / "flowkit"
+
+                if src_flowkit.exists():
+                    copied_files = []
+                    for py_file in src_flowkit.glob("*.py"):
+                        shutil.copy2(str(py_file), str(BASE_DIR / py_file.name))
+                        copied_files.append(py_file.name)
+                    self._log(f"Copied {len(copied_files)} .py files: {', '.join(sorted(copied_files)[:10])}...", "INFO")
+                    for bat_file in src_flowkit.glob("*.bat"):
+                        shutil.copy2(str(bat_file), str(BASE_DIR / bat_file.name))
+                    for txt_file in ("VERSION.txt",):
+                        src_txt = src_flowkit / txt_file
+                        if src_txt.exists():
+                            shutil.copy2(str(src_txt), str(BASE_DIR / txt_file))
+
+                    src_agent = src_flowkit / "agent"
+                    dst_agent = BASE_DIR / "agent"
+                    if src_agent.exists():
+                        dst_agent.mkdir(exist_ok=True)
+                        for py_file in src_agent.rglob("*.py"):
+                            rel = py_file.relative_to(src_agent)
+                            dst = dst_agent / rel
+                            dst.parent.mkdir(parents=True, exist_ok=True)
+                            shutil.copy2(str(py_file), str(dst))
+
+                    src_ext = src_flowkit / "flowkit_extensions"
+                    dst_ext = BASE_DIR / "flowkit_extensions"
+                    if src_ext.exists():
+                        for ext_dir in src_ext.iterdir():
+                            if ext_dir.is_dir():
+                                dst_sub = dst_ext / ext_dir.name
+                                if dst_sub.exists():
+                                    shutil.rmtree(str(dst_sub))
+                                shutil.copytree(str(ext_dir), str(dst_sub))
+
+                src_server_root = extract_dir / "VE3_SUITE-main" / "server"
+                for shared_file in ("google_login.py", "requirements.txt"):
+                    src = src_server_root / shared_file
+                    if src.exists():
+                        shutil.copy2(str(src), str(BASE_DIR / shared_file))
+                for ipv6_path in [src_flowkit / "ipv6_proxy.py",
+                                  src_server_root / "modules" / "ipv6_proxy.py"]:
+                    if ipv6_path.exists():
+                        shutil.copy2(str(ipv6_path), str(BASE_DIR / "ipv6_proxy.py"))
+                        break
+
+                if zip_path.exists():
+                    zip_path.unlink()
+                if extract_dir.exists():
+                    shutil.rmtree(str(extract_dir))
+
+            remote_ver = getattr(self, '_remote_version', '') or self._get_remote_version()
+            if remote_ver:
+                try:
+                    (BASE_DIR / "VERSION.txt").write_text(remote_ver + "\n", encoding="utf-8")
                 except Exception:
                     pass
-
-                git_root = SUITE_ROOT if not _IS_STANDALONE else BASE_DIR
-                if git_available:
-                    result = subprocess.run(
-                        ["git", "remote", "get-url", "origin"],
-                        cwd=str(git_root), capture_output=True, text=True, timeout=10,
-                    )
-                    if result.returncode != 0:
-                        subprocess.run(
-                            ["git", "remote", "add", "origin", GITHUB_GIT_URL],
-                            cwd=str(git_root), capture_output=True, timeout=10,
-                        )
-                    elif GITHUB_GIT_URL not in result.stdout.strip():
-                        subprocess.run(
-                            ["git", "remote", "set-url", "origin", GITHUB_GIT_URL],
-                            cwd=str(git_root), capture_output=True, timeout=10,
-                        )
-
-                    for cmd in [
-                        ["git", "fetch", "origin", "main"],
-                        ["git", "checkout", "main"],
-                        ["git", "reset", "--hard", "origin/main"],
-                    ]:
-                        subprocess.run(cmd, cwd=str(git_root), capture_output=True, text=True, timeout=120)
-                else:
-                    import ssl
-                    ssl_context = ssl.create_default_context()
-                    ssl_context.check_hostname = False
-                    ssl_context.verify_mode = ssl.CERT_NONE
-
-                    zip_path = BASE_DIR / "update_temp.zip"
-                    extract_dir = BASE_DIR / "update_temp"
-
-                    cache_buster = f"?nocache={int(time.time())}"
-                    self._log(f"Downloading: {GITHUB_ZIP_URL}", "INFO")
-                    with urllib.request.urlopen(GITHUB_ZIP_URL + cache_buster, context=ssl_context) as response:
-                        with open(str(zip_path), 'wb') as out_file:
-                            out_file.write(response.read())
-
-                    with zipfile.ZipFile(str(zip_path), 'r') as zip_ref:
-                        zip_ref.extractall(str(extract_dir))
-
-                    src_flowkit = extract_dir / "VE3_SUITE-main" / "server" / "flowkit"
-
-                    if src_flowkit.exists():
-                        copied_files = []
-                        for py_file in src_flowkit.glob("*.py"):
-                            shutil.copy2(str(py_file), str(BASE_DIR / py_file.name))
-                            copied_files.append(py_file.name)
-                        self._log(f"Copied {len(copied_files)} .py files: {', '.join(sorted(copied_files)[:10])}...", "INFO")
-                        for bat_file in src_flowkit.glob("*.bat"):
-                            shutil.copy2(str(bat_file), str(BASE_DIR / bat_file.name))
-                        for txt_file in ("VERSION.txt",):
-                            src_txt = src_flowkit / txt_file
-                            if src_txt.exists():
-                                shutil.copy2(str(src_txt), str(BASE_DIR / txt_file))
-
-                        src_agent = src_flowkit / "agent"
-                        dst_agent = BASE_DIR / "agent"
-                        if src_agent.exists():
-                            dst_agent.mkdir(exist_ok=True)
-                            for py_file in src_agent.rglob("*.py"):
-                                rel = py_file.relative_to(src_agent)
-                                dst = dst_agent / rel
-                                dst.parent.mkdir(parents=True, exist_ok=True)
-                                shutil.copy2(str(py_file), str(dst))
-
-                        src_ext = src_flowkit / "flowkit_extensions"
-                        dst_ext = BASE_DIR / "flowkit_extensions"
-                        if src_ext.exists():
-                            for ext_dir in src_ext.iterdir():
-                                if ext_dir.is_dir():
-                                    dst_sub = dst_ext / ext_dir.name
-                                    if dst_sub.exists():
-                                        shutil.rmtree(str(dst_sub))
-                                    shutil.copytree(str(ext_dir), str(dst_sub))
-
-                    src_server_root = extract_dir / "VE3_SUITE-main" / "server"
-                    for shared_file in ("google_login.py", "requirements.txt"):
-                        src = src_server_root / shared_file
-                        if src.exists():
-                            shutil.copy2(str(src), str(BASE_DIR / shared_file))
-                    # ipv6_proxy.py is in flowkit dir, not modules
-                    for ipv6_path in [src_flowkit / "ipv6_proxy.py",
-                                      src_server_root / "modules" / "ipv6_proxy.py"]:
-                        if ipv6_path.exists():
-                            shutil.copy2(str(ipv6_path), str(BASE_DIR / "ipv6_proxy.py"))
-                            break
-
-                    if zip_path.exists():
-                        zip_path.unlink()
-                    if extract_dir.exists():
-                        shutil.rmtree(str(extract_dir))
-
-                remote_ver = getattr(self, '_remote_version', '') or self._get_remote_version()
-                if remote_ver:
+                if not _IS_STANDALONE:
                     try:
-                        (BASE_DIR / "VERSION.txt").write_text(remote_ver + "\n", encoding="utf-8")
+                        (SUITE_ROOT / "VERSION").write_text(remote_ver + "\n", encoding="utf-8")
                     except Exception:
                         pass
-                    if not _IS_STANDALONE:
-                        try:
-                            (SUITE_ROOT / "VERSION").write_text(remote_ver + "\n", encoding="utf-8")
-                        except Exception:
-                            pass
 
-                new_ver = _get_auto_version()
-                self._version = new_ver
-                self.after(0, lambda: self._version_label.config(
-                    text=f"v{new_ver}", fg=GREEN))
-                self.after(0, lambda: self._update_btn.config(
-                    text=f"v{new_ver} OK! Restart...", bg='#00ff88', fg='#000'))
-                self.after(0, lambda: self.title(f"FlowKit Server v{new_ver}"))
+            new_ver = _get_auto_version()
+            self._version = new_ver
+            self.after(0, lambda: self._version_label.config(
+                text=f"v{new_ver}", fg=GREEN))
+            self.after(0, lambda: self._update_btn.config(
+                text=f"v{new_ver} OK! Restart...", bg='#00ff88', fg='#000'))
+            self.after(0, lambda: self.title(f"FlowKit Server v{new_ver}"))
 
-                def _restart_after_update():
-                    for proc in self._processes:
-                        try:
-                            proc.kill()
-                        except Exception:
-                            pass
-                    self._processes.clear()
-                    os.execv(sys.executable, [sys.executable] + sys.argv)
+            def _restart_after_update():
+                if self._started:
+                    self._on_stop()
+                time.sleep(3)
+                os.execv(sys.executable, [sys.executable] + sys.argv)
 
-                self.after(2000, _restart_after_update)
+            self.after(2000, _restart_after_update)
 
-            except Exception as e:
-                self._update_btn.config(text="LOI", bg=RED, fg='#fff')
-                print(f"Update error: {e}")
-                from tkinter import messagebox
-                messagebox.showerror("Loi cap nhat", f"Loi: {e}\n\nThu tai thu cong:\n{GITHUB_ZIP_URL}")
-            finally:
-                self.after(5000, lambda: self._update_btn.config(
-                    state="normal", text="Check Update", bg='#0984e3', fg='#fff',
-                    command=self._on_check_update))
-
-        threading.Thread(target=do_update, daemon=True).start()
+        except Exception as e:
+            self._update_btn.config(text="LOI", bg=RED, fg='#fff')
+            print(f"Update error: {e}")
+            from tkinter import messagebox
+            messagebox.showerror("Loi cap nhat", f"Loi: {e}\n\nThu tai thu cong:\n{GITHUB_ZIP_URL}")
+        finally:
+            self.after(5000, lambda: self._update_btn.config(
+                state="normal", text="Update", bg='#0984e3', fg='#fff',
+                command=self._on_check_update))
 
     # ============================================================
     # Cleanup

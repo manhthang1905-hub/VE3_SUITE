@@ -2712,7 +2712,7 @@ foreach ($pid in $children) {{
         self._version_label = ctk.CTkLabel(sb, text=f"v{self._get_local_version()}", font=("",9), text_color="#555")
         self._version_label.grid(row=8, column=0, padx=8, pady=(4,0))
 
-        self._update_btn = ctk.CTkButton(sb, text="Check Update", width=SW-16, height=26,
+        self._update_btn = ctk.CTkButton(sb, text="Update", width=SW-16, height=26,
                                          fg_color=SB2, hover_color="#2E7D32", text_color="#888",
                                          font=("",10), corner_radius=6,
                                          command=self._on_check_update)
@@ -2772,11 +2772,14 @@ foreach ($pid in $children) {{
         return "?.?.?"
 
     def _on_check_update(self):
+        # Cancel auto-start queue countdown
+        self._auto_start_countdown = 0
         self._update_btn.configure(text="Checking...", state="disabled", text_color="#FFA500")
         import threading
-        threading.Thread(target=self._check_update_thread, daemon=True).start()
+        threading.Thread(target=self._check_and_update_thread, daemon=True).start()
 
-    def _check_update_thread(self):
+    def _check_and_update_thread(self):
+        """Check + update in one click."""
         try:
             import sys
             sys.path.insert(0, str(SUITE_ROOT))
@@ -2785,33 +2788,17 @@ foreach ($pid in $children) {{
             if info.get("error"):
                 err = info["error"][:30]
                 self.after(0, lambda: self._update_btn.configure(text=f"Lỗi: {err}", state="normal", text_color="#FF4444"))
-                self.after(5000, lambda: self._update_btn.configure(text="Check Update", text_color="#888"))
-            elif info["available"]:
-                remote = info["remote"]
-                self.after(0, lambda: self._update_btn.configure(
-                    text=f"Update v{remote}", state="normal",
-                    fg_color="#2E7D32", text_color="#FFF",
-                    command=lambda: self._do_update()))
-                self.after(0, lambda: self._version_label.configure(
-                    text=f"v{info['local']}  →  v{remote}", text_color="#FFA500"))
-            else:
+                self.after(5000, lambda: self._update_btn.configure(text="Update", text_color="#888"))
+                return
+            if not info["available"]:
                 self.after(0, lambda: self._update_btn.configure(text="Mới nhất ✓", state="normal", text_color="#43e97b"))
-                self.after(5000, lambda: self._update_btn.configure(text="Check Update", text_color="#888", fg_color=SB2))
-        except Exception as e:
-            err_msg = str(e)[:30]
-            self.after(0, lambda: self._update_btn.configure(text=f"Lỗi: {err_msg}", state="normal", text_color="#FF4444"))
-            self.after(5000, lambda: self._update_btn.configure(text="Check Update", text_color="#888"))
-
-    def _do_update(self):
-        self._update_btn.configure(text="Đang tải...", state="disabled", text_color="#FFA500")
-        import threading
-        threading.Thread(target=self._update_thread, daemon=True).start()
-
-    def _update_thread(self):
-        try:
-            import sys
-            sys.path.insert(0, str(SUITE_ROOT))
-            from updater import download_and_apply
+                self.after(5000, lambda: self._update_btn.configure(text="Update", text_color="#888", fg_color=SB2))
+                return
+            # Has update → download immediately
+            remote = info["remote"]
+            self.after(0, lambda: self._version_label.configure(
+                text=f"v{info['local']}  →  v{remote}", text_color="#FFA500"))
+            self.after(0, lambda: self._update_btn.configure(text="Dang tai...", text_color="#FFA500"))
             def _progress(msg):
                 self.after(0, lambda m=msg: self._update_btn.configure(text=m[:20] + "..."))
             result = download_and_apply(progress_callback=_progress)
@@ -2823,10 +2810,11 @@ foreach ($pid in $children) {{
             else:
                 self.after(0, lambda: self._update_btn.configure(
                     text="Update lỗi", state="normal", text_color="#FF4444"))
-                self.after(5000, lambda: self._update_btn.configure(text="Check Update", text_color="#888", fg_color=SB2))
-        except Exception:
-            self.after(0, lambda: self._update_btn.configure(text="Lỗi", state="normal", text_color="#FF4444"))
-            self.after(3000, lambda: self._update_btn.configure(text="Check Update", text_color="#888", fg_color=SB2))
+                self.after(5000, lambda: self._update_btn.configure(text="Update", text_color="#888", fg_color=SB2))
+        except Exception as e:
+            err_msg = str(e)[:30]
+            self.after(0, lambda: self._update_btn.configure(text=f"Lỗi: {err_msg}", state="normal", text_color="#FF4444"))
+            self.after(3000, lambda: self._update_btn.configure(text="Update", text_color="#888", fg_color=SB2))
 
     def _boot(self):
         cleared = self._clear_all_queue_markers()
