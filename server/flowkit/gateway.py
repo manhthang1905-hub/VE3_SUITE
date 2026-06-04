@@ -1137,6 +1137,10 @@ async def startup():
                 "yes" if _recovery_manager._ipv6_client else "no",
                 len(_recovery_manager._all_accounts))
 
+    # FA mode: transition all instances from "setting_up" → active/standby
+    # Safe because gateway only starts after all instances finish setup (flowkit_gui.py)
+    _recovery_manager.fa_mark_all_ready()
+
     # Start health checker
     asyncio.create_task(health_check_loop())
 

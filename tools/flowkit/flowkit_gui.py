@@ -231,6 +231,39 @@ class FlowKitGUI(tk.Tk):
         except Exception:
             pass
 
+        # ── Fixed Account Mode ──
+        fa_frame = tk.LabelFrame(p, text=" Fixed Account ", bg=BG2, fg=FG2,
+                                  font=('Segoe UI', 8, 'bold'), bd=1, relief='groove')
+        fa_frame.pack(fill='x', padx=10, pady=2)
+        fa_row = tk.Frame(fa_frame, bg=BG2)
+        fa_row.pack(fill='x', padx=6, pady=4)
+        self._fixed_account_var = tk.BooleanVar(value=False)
+        self._fa_checkbox = tk.Checkbutton(
+            fa_row, text="Co dinh tai khoan", variable=self._fixed_account_var,
+            bg=BG2, fg=FG, selectcolor=BG, activebackground=BG2,
+            font=('Segoe UI', 9), command=self._on_fa_toggle)
+        self._fa_checkbox.pack(side='left')
+        tk.Label(fa_row, text="Dong thoi:", bg=BG2, fg=FG,
+                 font=('Segoe UI', 9)).pack(side='left', padx=(16, 0))
+        self._fa_concurrent = tk.Spinbox(
+            fa_row, from_=1, to=20, width=4, bg=BG, fg=FG,
+            insertbackground=FG, font=('Consolas', 10), bd=1, relief='solid')
+        self._fa_concurrent.pack(side='left', padx=4)
+        self._fa_concurrent.delete(0, 'end')
+        self._fa_concurrent.insert(0, "2")
+        self._fa_info = tk.Label(fa_frame, text="", bg=BG2, fg=FG2,
+                                  font=('Segoe UI', 8))
+        self._fa_info.pack(padx=6, pady=(0, 2), anchor='w')
+        # Load saved values
+        try:
+            self._fixed_account_var.set(self._settings.get('fixed_account_enabled', False))
+            saved_concurrent = self._settings.get('fixed_account_concurrent', 2)
+            self._fa_concurrent.delete(0, 'end')
+            self._fa_concurrent.insert(0, str(saved_concurrent))
+        except Exception:
+            pass
+        self._on_fa_toggle()
+
         # ── Google Accounts ──
         f = tk.LabelFrame(p, text=" Tai khoan Google (email|password|2fa_secret) ",
                           bg=BG2, fg=FG2, font=('Segoe UI', 8, 'bold'), bd=1, relief='groove')
@@ -352,6 +385,19 @@ class FlowKitGUI(tk.Tk):
         self._chrome_info.config(text=f"Tim thay {count} Chrome: {names}" if count else "Khong tim thay Chrome Portable!")
 
     # ============================================================
+    def _on_fa_toggle(self):
+        if self._fixed_account_var.get():
+            total = len(getattr(self, '_chrome_dirs', [])) or 6
+            try:
+                concurrent = int(self._fa_concurrent.get() or 2)
+            except Exception:
+                concurrent = 2
+            self._fa_info.config(
+                text=f"Login {total} Chrome, chay {concurrent} dong thoi. 403 → swap Chrome.",
+                fg=BLUE)
+        else:
+            self._fa_info.config(text="", fg=FG2)
+
     # Settings
     # ============================================================
     def _load_settings(self):
@@ -372,6 +418,10 @@ class FlowKitGUI(tk.Tk):
             if accounts:
                 self._accounts_text.delete('1.0', 'end')
                 self._accounts_text.insert('1.0', accounts)
+            self._fixed_account_var.set(data.get('fixed_account_enabled', False))
+            self._fa_concurrent.delete(0, 'end')
+            self._fa_concurrent.insert(0, str(data.get('fixed_account_concurrent', 2)))
+            self._on_fa_toggle()
         except Exception:
             pass
 
@@ -405,6 +455,8 @@ class FlowKitGUI(tk.Tk):
             'cooldown': int(self._cooldown.get() or 300),
             'accounts': self._accounts_text.get('1.0', 'end').strip(),
             'chrome_count': self._get_chrome_count(),
+            'fixed_account_enabled': self._fixed_account_var.get(),
+            'fixed_account_concurrent': int(self._fa_concurrent.get() or 2),
         }
         self._settings = data
         SETTINGS_FILE.write_text(json.dumps(data, indent=2), encoding='utf-8')
@@ -471,6 +523,15 @@ class FlowKitGUI(tk.Tk):
         ipv6_cfg['pool_url'] = self._pool_url.get().strip()
         config['ipv6'] = ipv6_cfg
 
+        # Fixed Account config
+        fa_enabled = self._fixed_account_var.get()
+        fa_concurrent = int(self._fa_concurrent.get() or 2)
+        config['fixed_account'] = {
+            'enabled': fa_enabled,
+            'concurrent': fa_concurrent,
+            'cooldown_seconds': int(self._cooldown.get() or 300),
+        }
+
         # Update instance count based on detected Chromes + chrome_count limit
         chrome_count = 0
         try:
@@ -483,7 +544,9 @@ class FlowKitGUI(tk.Tk):
         instances = []
         for i, chrome_dir in enumerate(self._chrome_dirs):
             enabled = True
-            if chrome_count > 0 and i >= chrome_count:
+            if fa_enabled:
+                enabled = True
+            elif chrome_count > 0 and i >= chrome_count:
                 enabled = False
             instances.append({
                 'name': f'flowkit-{i + 1}',
@@ -545,6 +608,11 @@ class FlowKitGUI(tk.Tk):
             except Exception as e:
                 self._log(f"IPv6 Pool error: {e}", "ERROR")
 
+        # Fixed Account mode
+        fa_cfg = config.get('fixed_account', {})
+        fa_enabled = fa_cfg.get('enabled', False)
+        fa_concurrent = fa_cfg.get('concurrent', 2)
+
         # Chrome count limiting — BEFORE IPv6 to only request IPs we need
         chrome_count = 0
         try:
@@ -553,7 +621,11 @@ class FlowKitGUI(tk.Tk):
                 chrome_count = int(val)
         except Exception:
             pass
-        if chrome_count > 0:
+        if fa_enabled:
+            for inst in instances:
+                inst['enabled'] = True
+            self._log(f"Fixed Account mode: ALL {len(instances)} instances enabled, {fa_concurrent} concurrent", "INFO")
+        elif chrome_count > 0:
             for i, inst in enumerate(instances):
                 inst['enabled'] = (i < chrome_count)
             self._log(f"Chrome count limited to {chrome_count}/{len(instances)}", "INFO")
@@ -603,27 +675,27 @@ class FlowKitGUI(tk.Tk):
             else:
                 self._log("WARNING: No IPv6 for any instance — using direct connection", "WARN")
 
-        # Save accounts mapping for recovery auto-login + account pool
+        # Build account map — account 1 = Chrome 1, account 2 = Chrome 2, fixed
+        enabled = [(i, inst) for i, inst in enumerate(instances)
+                   if inst.get('enabled', True) and i < len(self._chrome_dirs)]
+        account_map = {}
         if accounts:
-            account_map = {}
             for i, inst in enumerate(instances):
                 if not inst.get('enabled', True):
                     continue
                 acc = accounts[i % len(accounts)]
                 account_map[inst["name"]] = {
-                    "id": acc["email"],
-                    "password": acc["password"],
+                    "id": acc["email"], "password": acc["password"],
                     "totp_secret": acc.get("totp_secret", ""),
                 }
-            try:
-                accounts_file = BASE_DIR / "config" / ".flow_accounts.json"
-                accounts_file.parent.mkdir(exist_ok=True)
-                accounts_file.write_text(json.dumps(account_map), encoding="utf-8")
-            except Exception:
-                pass
+        try:
+            accounts_file = BASE_DIR / "config" / ".flow_accounts.json"
+            accounts_file.parent.mkdir(exist_ok=True)
+            accounts_file.write_text(json.dumps(account_map), encoding="utf-8")
+        except Exception:
+            pass
 
-        # Per-instance pipeline: each instance independently does
-        # setup_chrome → start_agent → wait_ready → start_chrome → apply_cdp
+        # Per-instance pipeline
         setup_concurrency = max(1, int(os.getenv("CHROME_SETUP_CONCURRENCY", "6")))
         setup_stagger = max(0.0, float(os.getenv("CHROME_SETUP_STAGGER_SEC", "3.0")))
 
@@ -631,9 +703,6 @@ class FlowKitGUI(tk.Tk):
         ready_count = [0]
         ready_lock = threading.Lock()
         ready_event = threading.Event()
-
-        enabled = [(i, inst) for i, inst in enumerate(instances)
-                   if inst.get('enabled', True) and i < len(self._chrome_dirs)]
 
         self._log(f"Starting {len(enabled)} instance pipelines (concurrency={setup_concurrency})...", "INFO")
 
@@ -671,14 +740,16 @@ class FlowKitGUI(tk.Tk):
             with setup_sem:
                 while not setup_ok:
                     attempt += 1
+                    if fa_enabled and attempt > 5:
+                        self._log(f"[{name}] Setup FAILED after 5 attempts — skipped", "ERROR")
+                        break
                     if attempt > 1:
                         from chrome_setup import _kill_chrome_for_dir
                         _kill_chrome_for_dir(chrome_dir)
-                        # Try different account on login failure
-                        if account_info and accounts and len(accounts) > 1:
+                        # FA mode: NEVER rotate accounts — each Chrome = fixed account
+                        if not fa_enabled and account_info and accounts and len(accounts) > 1:
                             old_email = account_info['id']
                             tried_accounts.add(old_email)
-                            # Find untried account
                             new_acc = None
                             for a in accounts:
                                 if a['email'] not in tried_accounts:
@@ -692,7 +763,6 @@ class FlowKitGUI(tk.Tk):
                                 }
                                 self._log(f"[{name}] Login fail → doi account: {old_email} → {new_acc['email']}", "WARN")
                             elif len(tried_accounts) >= len(accounts):
-                                # All accounts tried, reset and wait longer
                                 tried_accounts.clear()
                                 self._log(f"[{name}] Het account, cho 60s roi thu lai tu dau...", "WARN")
                                 time.sleep(60)
@@ -726,42 +796,50 @@ class FlowKitGUI(tk.Tk):
                 self._log(f"[{name}] Agent not ready after 20s", "WARN")
 
             # ── Step 3: Start Chrome subprocess + apply CDP ──
-            self._start_chrome(chrome_dir, inst_cfg, proxy_arg)
-            time.sleep(5)
-            try:
-                from chrome_setup import apply_chrome_cdp
-                apply_chrome_cdp(
-                    debug_port=debug_port,
-                    ext_dir=ext_dir,
-                    instance_name=name,
-                    window_args=win_args,
-                    log_func=lambda msg, n=name: self._log(f"[{n}] {msg}", "INFO"),
-                )
-            except Exception as e:
-                self._log(f"[{name}] CDP apply error: {e}", "WARN")
-
-            # Minimize Chrome to save GPU/RAM (extension works when minimized)
-            try:
-                from DrissionPage import ChromiumPage, ChromiumOptions
-                _co = ChromiumOptions()
-                _co.set_address(f"127.0.0.1:{debug_port}")
-                _p = ChromiumPage(_co)
-                _p.run_cdp('Browser.getWindowForTarget')
-                info = _p.run_cdp('Browser.getWindowForTarget')
-                wid = info.get('windowId')
-                if wid:
-                    _p.run_cdp('Browser.setWindowBounds', windowId=wid,
-                               bounds={'windowState': 'minimized'})
+            # Fixed Account: only start Chrome for first M instances (standby = no Chrome)
+            is_active = not fa_enabled or idx < fa_concurrent
+            if is_active and not setup_ok:
+                self._log(f"[{name}] Setup FAILED — skip Chrome start, agent only", "ERROR")
+                is_active = False
+            if is_active:
+                self._start_chrome(chrome_dir, inst_cfg, proxy_arg)
+                time.sleep(5)
                 try:
-                    _p.disconnect()
+                    from chrome_setup import apply_chrome_cdp
+                    apply_chrome_cdp(
+                        debug_port=debug_port,
+                        ext_dir=ext_dir,
+                        instance_name=name,
+                        window_args=win_args,
+                        log_func=lambda msg, n=name: self._log(f"[{n}] {msg}", "INFO"),
+                    )
+                except Exception as e:
+                    self._log(f"[{name}] CDP apply error: {e}", "WARN")
+
+                # Minimize Chrome to save GPU/RAM (extension works when minimized)
+                try:
+                    from DrissionPage import ChromiumPage, ChromiumOptions
+                    _co = ChromiumOptions()
+                    _co.set_address(f"127.0.0.1:{debug_port}")
+                    _p = ChromiumPage(_co)
+                    _p.run_cdp('Browser.getWindowForTarget')
+                    info = _p.run_cdp('Browser.getWindowForTarget')
+                    wid = info.get('windowId')
+                    if wid:
+                        _p.run_cdp('Browser.setWindowBounds', windowId=wid,
+                                   bounds={'windowState': 'minimized'})
+                    try:
+                        _p.disconnect()
+                    except Exception:
+                        pass
                 except Exception:
                     pass
-            except Exception:
-                pass
-
-            self._log(f"[{name}] Instance READY", "OK")
-            with ready_lock:
-                ready_count[0] += 1
+                self._log(f"[{name}] Instance READY (active)", "OK")
+            else:
+                self._log(f"[{name}] Instance STANDBY (Chrome not started, agent ready)", "OK")
+            if setup_ok:
+                with ready_lock:
+                    ready_count[0] += 1
             ready_event.set()
 
         # Launch all pipelines with stagger
@@ -773,23 +851,31 @@ class FlowKitGUI(tk.Tk):
             if setup_stagger > 0:
                 time.sleep(setup_stagger)
 
-        # Gateway starts when first instance is ready (or 120s timeout)
-        if ready_event.wait(timeout=120):
-            self._log("Starting Gateway (instance ready)...", "OK")
+        if fa_enabled:
+            # FA mode: ALL instances must finish setup before gateway starts
+            # Prevents recovery from picking half-setup instances as standby
+            for t in pipeline_threads:
+                t.join(timeout=300)
+            with ready_lock:
+                total_ready = ready_count[0]
+            self._log(f"All {total_ready} instances setup done. Starting Gateway...", "OK")
+            self._start_gateway(gateway_port)
+            self._poll_thread = threading.Thread(target=self._poll_loop, daemon=True)
+            self._poll_thread.start()
         else:
-            self._log("Starting Gateway (timeout — no instances ready yet)...", "WARN")
-        self._start_gateway(gateway_port)
+            # Normal mode: gateway starts when first instance is ready
+            if ready_event.wait(timeout=120):
+                self._log("Starting Gateway (instance ready)...", "OK")
+            else:
+                self._log("Starting Gateway (timeout — no instances ready yet)...", "WARN")
+            self._start_gateway(gateway_port)
+            self._poll_thread = threading.Thread(target=self._poll_loop, daemon=True)
+            self._poll_thread.start()
+            for t in pipeline_threads:
+                t.join(timeout=180)
+            with ready_lock:
+                total_ready = ready_count[0]
 
-        # Start monitoring immediately so GUI shows instance status during startup
-        self._poll_thread = threading.Thread(target=self._poll_loop, daemon=True)
-        self._poll_thread.start()
-
-        # Wait for remaining pipelines
-        for t in pipeline_threads:
-            t.join(timeout=180)
-
-        with ready_lock:
-            total_ready = ready_count[0]
         self._log(f"FlowKit Server READY — {total_ready}/{len(enabled)} instances, gateway on port {gateway_port}", "OK")
 
     def _clear_chrome_profile(self, chrome_dir: Path, inst_name: str):
@@ -1325,19 +1411,10 @@ class FlowKitGUI(tk.Tk):
         self._stat_labels['failed'].config(text=str(self._stats.get('total_failed', 0)))
         self._stat_labels['cooling'].config(text=str(self._stats.get('instances_cooling', 0)))
 
-        # Workers — only rebuild if count changed (prevent widget leak)
-        active_count = len([w for w in self._workers if w.get('healthy') or w.get('available')
-                           or w.get('cooling') or w.get('extension_connected')])
-        prev_count = getattr(self, '_prev_worker_count', -1)
-        if active_count != prev_count:
-            for widget in self._workers_frame.winfo_children():
-                widget.destroy()
-            self._prev_worker_count = active_count
-        else:
-            # Update existing cards in-place (skip rebuild)
-            pass
+        # Workers — dedupe by name, always clear + rebuild
+        for widget in self._workers_frame.winfo_children():
+            widget.destroy()
 
-        # Load current account mapping
         account_map = {}
         try:
             accounts_file = BASE_DIR / "config" / ".flow_accounts.json"
@@ -1346,18 +1423,21 @@ class FlowKitGUI(tk.Tk):
         except Exception:
             pass
 
-        active_workers = [w for w in self._workers if w.get('healthy') or w.get('available')
-                          or w.get('cooling') or w.get('extension_connected')]
-        if not active_workers:
-            active_workers = [w for w in self._workers
-                              if w.get('name', '') in account_map or w.get('total_completed', 0) > 0]
+        # Dedupe workers by name (prevent duplicates)
+        seen = set()
+        workers = []
+        for w in self._workers:
+            name = w.get('name', '')
+            if name and name not in seen:
+                seen.add(name)
+                workers.append(w)
 
-        for i, w in enumerate(active_workers):
-            card = tk.Frame(self._workers_frame, bg=BG, bd=1, relief='solid',
-                            highlightbackground=BORDER)
-            card.pack(side='left', fill='both', padx=2, pady=2, expand=True)
+        for i, w in enumerate(workers):
+            name = w.get('name', '?')
+            ext_connected = w.get('extension_connected', False)
+            is_healthy = w.get('healthy', False)
 
-            # Status color
+            # Determine status
             if w.get('cooling'):
                 border_color = ORANGE
                 status_text = f"COOL {w.get('cooling_remaining', 0)}s"
@@ -1366,24 +1446,29 @@ class FlowKitGUI(tk.Tk):
                 border_color = ORANGE
                 status_text = f"429 {w.get('quota_remaining', 0)}s"
                 status_fg = ORANGE
-            elif w.get('available'):
+            elif ext_connected and w.get('available'):
                 border_color = GREEN
-                status_text = "READY"
+                status_text = "READY" if w.get('processing', 0) == 0 else "BUSY"
                 status_fg = GREEN
-            elif w.get('healthy'):
+            elif ext_connected and is_healthy:
                 border_color = YELLOW
                 status_text = "BUSY" if w.get('processing', 0) > 0 else "WAIT"
                 status_fg = YELLOW
+            elif is_healthy and not ext_connected:
+                border_color = '#555'
+                status_text = "STANDBY"
+                status_fg = '#888'
             else:
                 border_color = RED
                 status_text = "DOWN"
                 status_fg = RED
 
-            card.config(highlightbackground=border_color)
+            card = tk.Frame(self._workers_frame, bg=BG, bd=1, relief='solid',
+                            highlightbackground=border_color)
+            card.pack(side='left', fill='both', padx=2, pady=2, expand=True)
 
-            name = w.get('name', '?')
             tk.Label(card, text=name, font=('Segoe UI', 9, 'bold'),
-                     fg=FG, bg=BG).pack(padx=6, pady=(4, 1))
+                     fg=FG if ext_connected else '#666', bg=BG).pack(padx=6, pady=(4, 1))
             tk.Label(card, text=status_text, font=('Segoe UI', 8, 'bold'),
                      fg=status_fg, bg=BG).pack()
 
@@ -1392,10 +1477,10 @@ class FlowKitGUI(tk.Tk):
             if email:
                 short = email.split('@')[0][:12]
                 tk.Label(card, text=short, font=('Consolas', 7),
-                         fg=BLUE, bg=BG).pack()
+                         fg=BLUE if ext_connected else '#555', bg=BG).pack()
 
-            ext = "Ext: OK" if w.get('extension_connected') else "Ext: --"
-            ext_fg = GREEN if w.get('extension_connected') else RED
+            ext = "Ext: OK" if ext_connected else "Ext: --"
+            ext_fg = GREEN if ext_connected else '#555'
             tk.Label(card, text=ext, font=('Consolas', 8), fg=ext_fg, bg=BG).pack()
 
             c403 = w.get('consecutive_403', 0)

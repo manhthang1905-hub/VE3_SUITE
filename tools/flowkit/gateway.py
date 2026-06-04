@@ -254,13 +254,13 @@ def _pick_instance() -> Optional[AgentInstance]:
     return chosen
 
 
-def _pick_instance_for_retry(exclude: list[str]) -> Optional[AgentInstance]:
+def _pick_instance_for_retry(exclude: list) -> Optional[AgentInstance]:
     """Pick instance excluding already-tried ones."""
     available = [i for i in instances if i.available and i.name not in exclude]
     if not available:
-        # If all excluded, try any that's not cooling
-        available = [i for i in instances if i.enabled and i.healthy and not i.is_cooling
-                     and i.name not in exclude]
+        # Fallback: must have extension connected (skip standby instances)
+        available = [i for i in instances if i.enabled and i.healthy and i.extension_connected
+                     and not i.is_cooling and i.name not in exclude]
     if not available:
         return None
     available.sort(key=lambda i: (i.processing_count, i.consecutive_403))
@@ -1088,15 +1088,23 @@ async def startup():
     global _recovery_manager
 
     # Initialize instances
-    enabled_configs = [cfg for cfg in CONFIG.get("instances", []) if cfg.get("enabled", True)]
-    for cfg in enabled_configs:
-        instances.append(AgentInstance(cfg))
+    fa_enabled = CONFIG.get("fixed_account", {}).get("enabled", False)
+    all_configs = CONFIG.get("instances", [])
+    if fa_enabled:
+        for cfg in all_configs:
+            instances.append(AgentInstance(cfg))
+        logger.info("Gateway: Fixed Account mode — %d instances, %d concurrent",
+                    len(instances), CONFIG.get("fixed_account", {}).get("concurrent", 2))
+    else:
+        enabled_configs = [cfg for cfg in all_configs if cfg.get("enabled", True)]
+        for cfg in enabled_configs:
+            instances.append(AgentInstance(cfg))
     logger.info("Gateway initialized with %d instances", len(instances))
 
     # Initialize recovery manager
     _recovery_manager = RecoveryManager(
         config=CONFIG,
-        instances_config=enabled_configs,
+        instances_config=all_configs if fa_enabled else [cfg for cfg in all_configs if cfg.get("enabled", True)],
         on_cooldown_clear=_clear_cooldown,
     )
     # Load ALL accounts from GUI config (full list), then assign active from .flow_accounts
@@ -1128,6 +1136,10 @@ async def startup():
     logger.info("Recovery manager initialized (IPv6: %s, accounts: %d)",
                 "yes" if _recovery_manager._ipv6_client else "no",
                 len(_recovery_manager._all_accounts))
+
+    # FA mode: transition all instances from "setting_up" → active/standby
+    # Safe because gateway only starts after all instances finish setup (flowkit_gui.py)
+    _recovery_manager.fa_mark_all_ready()
 
     # Start health checker
     asyncio.create_task(health_check_loop())

@@ -740,14 +740,16 @@ class FlowKitGUI(tk.Tk):
             with setup_sem:
                 while not setup_ok:
                     attempt += 1
+                    if fa_enabled and attempt > 5:
+                        self._log(f"[{name}] Setup FAILED after 5 attempts — skipped", "ERROR")
+                        break
                     if attempt > 1:
                         from chrome_setup import _kill_chrome_for_dir
                         _kill_chrome_for_dir(chrome_dir)
-                        # Try different account on login failure
-                        if account_info and accounts and len(accounts) > 1:
+                        # FA mode: NEVER rotate accounts — each Chrome = fixed account
+                        if not fa_enabled and account_info and accounts and len(accounts) > 1:
                             old_email = account_info['id']
                             tried_accounts.add(old_email)
-                            # Find untried account
                             new_acc = None
                             for a in accounts:
                                 if a['email'] not in tried_accounts:
@@ -761,7 +763,6 @@ class FlowKitGUI(tk.Tk):
                                 }
                                 self._log(f"[{name}] Login fail → doi account: {old_email} → {new_acc['email']}", "WARN")
                             elif len(tried_accounts) >= len(accounts):
-                                # All accounts tried, reset and wait longer
                                 tried_accounts.clear()
                                 self._log(f"[{name}] Het account, cho 60s roi thu lai tu dau...", "WARN")
                                 time.sleep(60)
@@ -797,6 +798,9 @@ class FlowKitGUI(tk.Tk):
             # ── Step 3: Start Chrome subprocess + apply CDP ──
             # Fixed Account: only start Chrome for first M instances (standby = no Chrome)
             is_active = not fa_enabled or idx < fa_concurrent
+            if is_active and not setup_ok:
+                self._log(f"[{name}] Setup FAILED — skip Chrome start, agent only", "ERROR")
+                is_active = False
             if is_active:
                 self._start_chrome(chrome_dir, inst_cfg, proxy_arg)
                 time.sleep(5)
@@ -833,8 +837,9 @@ class FlowKitGUI(tk.Tk):
                 self._log(f"[{name}] Instance READY (active)", "OK")
             else:
                 self._log(f"[{name}] Instance STANDBY (Chrome not started, agent ready)", "OK")
-            with ready_lock:
-                ready_count[0] += 1
+            if setup_ok:
+                with ready_lock:
+                    ready_count[0] += 1
             ready_event.set()
 
         # Launch all pipelines with stagger
@@ -846,23 +851,31 @@ class FlowKitGUI(tk.Tk):
             if setup_stagger > 0:
                 time.sleep(setup_stagger)
 
-        # Gateway starts when first instance is ready (or 120s timeout)
-        if ready_event.wait(timeout=120):
-            self._log("Starting Gateway (instance ready)...", "OK")
+        if fa_enabled:
+            # FA mode: ALL instances must finish setup before gateway starts
+            # Prevents recovery from picking half-setup instances as standby
+            for t in pipeline_threads:
+                t.join(timeout=300)
+            with ready_lock:
+                total_ready = ready_count[0]
+            self._log(f"All {total_ready} instances setup done. Starting Gateway...", "OK")
+            self._start_gateway(gateway_port)
+            self._poll_thread = threading.Thread(target=self._poll_loop, daemon=True)
+            self._poll_thread.start()
         else:
-            self._log("Starting Gateway (timeout — no instances ready yet)...", "WARN")
-        self._start_gateway(gateway_port)
+            # Normal mode: gateway starts when first instance is ready
+            if ready_event.wait(timeout=120):
+                self._log("Starting Gateway (instance ready)...", "OK")
+            else:
+                self._log("Starting Gateway (timeout — no instances ready yet)...", "WARN")
+            self._start_gateway(gateway_port)
+            self._poll_thread = threading.Thread(target=self._poll_loop, daemon=True)
+            self._poll_thread.start()
+            for t in pipeline_threads:
+                t.join(timeout=180)
+            with ready_lock:
+                total_ready = ready_count[0]
 
-        # Start monitoring immediately so GUI shows instance status during startup
-        self._poll_thread = threading.Thread(target=self._poll_loop, daemon=True)
-        self._poll_thread.start()
-
-        # Wait for remaining pipelines
-        for t in pipeline_threads:
-            t.join(timeout=180)
-
-        with ready_lock:
-            total_ready = ready_count[0]
         self._log(f"FlowKit Server READY — {total_ready}/{len(enabled)} instances, gateway on port {gateway_port}", "OK")
 
     def _clear_chrome_profile(self, chrome_dir: Path, inst_name: str):

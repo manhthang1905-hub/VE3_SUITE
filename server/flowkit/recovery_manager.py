@@ -130,11 +130,8 @@ class RecoveryManager:
 
         if self._fa_enabled:
             self._fa_all_names = [cfg["name"] for cfg in instances_config]
-            for i, name in enumerate(self._fa_all_names):
-                if i < self._fa_concurrent:
-                    self._fa_states[name] = "active"
-                else:
-                    self._fa_states[name] = "standby"
+            for name in self._fa_all_names:
+                self._fa_states[name] = "setting_up"
             logger.info("[Recovery] Fixed Account mode: %d total, %d concurrent",
                         len(self._fa_all_names), self._fa_concurrent)
 
@@ -143,6 +140,26 @@ class RecoveryManager:
         self._account_usage: Dict[str, int] = {}
         self._account_last_assigned: Dict[str, int] = {}
         self._account_assign_seq = 0
+
+    def fa_mark_all_ready(self):
+        """Transition all instances from setting_up → active/standby.
+
+        Called by gateway after startup confirms all instances finished setup.
+        Defense in depth: even if gateway starts early, recovery won't touch
+        setting_up instances.
+        """
+        if not self._fa_enabled:
+            return
+        for i, name in enumerate(self._fa_all_names):
+            if self._fa_states.get(name) != "setting_up":
+                continue
+            if i < self._fa_concurrent:
+                self._fa_states[name] = "active"
+            else:
+                self._fa_states[name] = "standby"
+        active = sum(1 for s in self._fa_states.values() if s == "active")
+        standby = sum(1 for s in self._fa_states.values() if s == "standby")
+        logger.info("[Recovery] FA ready: %d active, %d standby", active, standby)
 
     def set_accounts(self, accounts: List[dict], instances: List[dict]):
         """Map accounts to instances for auto-login during recovery."""
@@ -297,7 +314,7 @@ class RecoveryManager:
         # FA mode: don't self-heal instances that are cooling/standby (intentionally no Chrome)
         if self._fa_enabled:
             fa_state = self._fa_states.get(instance_name, "")
-            if fa_state in ("cooling", "standby", "starting"):
+            if fa_state in ("cooling", "standby", "starting", "setting_up"):
                 logger.info("[SelfHeal] %s: skip — FA mode, state=%s", instance_name, fa_state)
                 return
 
@@ -409,19 +426,20 @@ class RecoveryManager:
     async def _fa_swap_chrome(self, instance_name: str) -> bool:
         """Fixed Account swap: replace 403'd Chrome with a standby Chrome.
 
-        Lock is held only for state changes + standby selection (fast).
-        setup_chrome runs OUTSIDE lock so other swaps can proceed.
+        Retry design:
+        - Tries ALL available standbys before giving up
+        - Failed standby → back to "standby" (not cooling — it wasn't 403'd)
+        - If no standbys left → wait for earliest cooldown → retry
+        - Max 3 rounds to prevent infinite loop
         """
         loop = asyncio.get_running_loop()
-        standby_name = None
 
-        # ── Phase 1: Quick state changes under lock ──
+        # ── Phase 1: Cleanup failed instance ──
         async with self._fa_swap_lock:
             cfg = self.instances_config.get(instance_name)
             if not cfg:
                 return False
 
-            # Soft-clean + kill old Chrome
             try:
                 from launcher import soft_clean_chrome_profile, kill_chrome
                 chrome_dir = (BASE_DIR / cfg["chrome_path"]).resolve().parent.parent.parent
@@ -431,69 +449,75 @@ class RecoveryManager:
             except Exception as e:
                 logger.warning("[FA-Swap] %s: cleanup error: %s", instance_name, e)
 
-            # Mark cooling
             self._fa_states[instance_name] = "cooling"
             self._fa_cooling_until[instance_name] = time.time() + self._fa_cooldown
             logger.info("[FA-Swap] %s: cooling for %ds", instance_name, self._fa_cooldown)
 
-            # Expire old cooldowns
-            now = time.time()
-            for name in self._fa_all_names:
-                if self._fa_states.get(name) == "cooling":
-                    until = self._fa_cooling_until.get(name, 0)
-                    if until > 0 and now >= until:
-                        self._fa_states[name] = "standby"
-                        logger.info("[FA-Swap] %s: cooldown expired -> standby", name)
+        # ── Phase 2: Try all available standbys (retry loop) ──
+        # Range: enough for all standbys + cooldown wait + full retry
+        tried = set()
+        max_rounds = len(self._fa_all_names) * 2
+        for _round in range(max_rounds):
+            standby_name = None
 
-            # Pick standby (round-robin)
-            n = len(self._fa_all_names)
-            for i in range(n):
-                idx = (self._fa_round_robin_idx + i) % n
-                name = self._fa_all_names[idx]
-                if self._fa_states.get(name) == "standby":
-                    standby_name = name
-                    self._fa_round_robin_idx = (idx + 1) % n
-                    self._fa_states[standby_name] = "starting"
-                    break
+            async with self._fa_swap_lock:
+                now = time.time()
+                for name in self._fa_all_names:
+                    if self._fa_states.get(name) == "cooling":
+                        until = self._fa_cooling_until.get(name, 0)
+                        if until > 0 and now >= until:
+                            self._fa_states[name] = "standby"
+                            logger.info("[FA-Swap] %s: cooldown expired -> standby", name)
 
-        # ── Phase 2: Wait for cooldown if no standby ──
-        if not standby_name:
-            logger.info("[FA-Swap] No standby — waiting for cooldown...")
-            earliest_name = None
-            earliest_time = float("inf")
-            for name, until in self._fa_cooling_until.items():
-                if until < earliest_time:
-                    earliest_time = until
-                    earliest_name = name
-            if earliest_name:
+                n = len(self._fa_all_names)
+                for i in range(n):
+                    idx = (self._fa_round_robin_idx + i) % n
+                    name = self._fa_all_names[idx]
+                    if name in tried:
+                        continue
+                    if self._fa_states.get(name) == "standby":
+                        standby_name = name
+                        self._fa_round_robin_idx = (idx + 1) % n
+                        self._fa_states[standby_name] = "starting"
+                        break
+
+            if not standby_name:
+                earliest_time = float("inf")
+                for name, until in self._fa_cooling_until.items():
+                    if name not in tried and until < earliest_time:
+                        earliest_time = until
+                if earliest_time == float("inf"):
+                    logger.warning("[FA-Swap] %s: no standby or cooling instances left", instance_name)
+                    return False
                 wait_secs = max(0, earliest_time - time.time())
                 if wait_secs > 0:
+                    logger.info("[FA-Swap] No standby — waiting %.0fs for cooldown", wait_secs)
                     await asyncio.sleep(wait_secs)
-                async with self._fa_swap_lock:
-                    self._fa_states[earliest_name] = "starting"
-                standby_name = earliest_name
+                # After cooldown wait: clear tried — standbys may work now
+                tried.clear()
+                continue
 
-        if not standby_name:
-            logger.warning("[FA-Swap] %s: no standby found", instance_name)
-            return False
+            # ── Phase 3: Start standby Chrome (outside lock) ──
+            new_ip = ""
+            if self._ipv6_client:
+                new_ip = self._rotate_ipv6(standby_name, "fa_swap")
 
-        # ── Phase 3: Start standby Chrome OUTSIDE lock (slow) ──
-        new_ip = ""
-        if self._ipv6_client:
-            new_ip = self._rotate_ipv6(standby_name, "fa_swap")
+            success = await self._restart_chrome_instance(standby_name, new_ipv6=new_ip)
 
-        success = await self._restart_chrome_instance(standby_name, new_ipv6=new_ip)
+            async with self._fa_swap_lock:
+                if success:
+                    self._fa_states[standby_name] = "active"
+                    logger.info("[FA-Swap] %s -> %s: swap OK", instance_name, standby_name)
+                    return True
+                else:
+                    # Back to standby — it wasn't 403'd, just failed to start
+                    self._fa_states[standby_name] = "standby"
+                    tried.add(standby_name)
+                    logger.warning("[FA-Swap] %s -> %s: FAILED, trying next...",
+                                   instance_name, standby_name)
 
-        async with self._fa_swap_lock:
-            if success:
-                self._fa_states[standby_name] = "active"
-                logger.info("[FA-Swap] %s -> %s: swap OK", instance_name, standby_name)
-            else:
-                self._fa_states[standby_name] = "cooling"
-                self._fa_cooling_until[standby_name] = time.time() + self._fa_cooldown
-                logger.warning("[FA-Swap] %s -> %s: swap FAILED", instance_name, standby_name)
-
-        return success
+        logger.warning("[FA-Swap] %s: all swap attempts exhausted", instance_name)
+        return False
 
     async def _level1_reset_captcha(self, instance_name: str) -> bool:
         """Level 1: Reset captcha via extension API."""

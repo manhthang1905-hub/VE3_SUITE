@@ -117,11 +117,49 @@ class RecoveryManager:
         self._recovery_tasks: Dict[str, asyncio.Task] = {}
         self._accounts: Dict[str, dict] = {}
 
+        # Fixed Account mode
+        fa_cfg = config.get("fixed_account", {})
+        self._fa_enabled = fa_cfg.get("enabled", False)
+        self._fa_concurrent = fa_cfg.get("concurrent", 2)
+        self._fa_cooldown = fa_cfg.get("cooldown_seconds", 300)
+        self._fa_states: Dict[str, str] = {}  # name → "active"/"standby"/"cooling"
+        self._fa_cooling_until: Dict[str, float] = {}  # name → timestamp
+        self._fa_all_names: List[str] = []  # ordered list of ALL instance names
+        self._fa_swap_lock = asyncio.Lock()
+        self._fa_round_robin_idx = 0
+
+        if self._fa_enabled:
+            self._fa_all_names = [cfg["name"] for cfg in instances_config]
+            for name in self._fa_all_names:
+                self._fa_states[name] = "setting_up"
+            logger.info("[Recovery] Fixed Account mode: %d total, %d concurrent",
+                        len(self._fa_all_names), self._fa_concurrent)
+
         # Account pool for rotation (like chrome_pool.py get_next_account)
         self._all_accounts: List[dict] = []
         self._account_usage: Dict[str, int] = {}
         self._account_last_assigned: Dict[str, int] = {}
         self._account_assign_seq = 0
+
+    def fa_mark_all_ready(self):
+        """Transition all instances from setting_up → active/standby.
+
+        Called by gateway after startup confirms all instances finished setup.
+        Defense in depth: even if gateway starts early, recovery won't touch
+        setting_up instances.
+        """
+        if not self._fa_enabled:
+            return
+        for i, name in enumerate(self._fa_all_names):
+            if self._fa_states.get(name) != "setting_up":
+                continue
+            if i < self._fa_concurrent:
+                self._fa_states[name] = "active"
+            else:
+                self._fa_states[name] = "standby"
+        active = sum(1 for s in self._fa_states.values() if s == "active")
+        standby = sum(1 for s in self._fa_states.values() if s == "standby")
+        logger.info("[Recovery] FA ready: %d active, %d standby", active, standby)
 
     def set_accounts(self, accounts: List[dict], instances: List[dict]):
         """Map accounts to instances for auto-login during recovery."""
@@ -273,6 +311,13 @@ class RecoveryManager:
         if instance_name not in self.states:
             return
 
+        # FA mode: don't self-heal instances that are cooling/standby (intentionally no Chrome)
+        if self._fa_enabled:
+            fa_state = self._fa_states.get(instance_name, "")
+            if fa_state in ("cooling", "standby", "starting", "setting_up"):
+                logger.info("[SelfHeal] %s: skip — FA mode, state=%s", instance_name, fa_state)
+                return
+
         state = self.states[instance_name]
         if state.recovering:
             return
@@ -304,7 +349,8 @@ class RecoveryManager:
                                    "Will retry when pool has IPs.", instance_name)
                     state.recovering = False
                     return
-                self._rotate_account_for_instance(instance_name)
+                if not self._fa_enabled:
+                    self._rotate_account_for_instance(instance_name)
 
             success = await self._restart_chrome_instance(instance_name, new_ipv6=new_ip)
 
@@ -335,20 +381,12 @@ class RecoveryManager:
         try:
             success = False
 
-            # Try current level, escalate on failure
-            if level <= 1 and state.level_attempts[1] < self.level1_max:
-                state.level_attempts[1] += 1
-                success = await self._level1_reset_captcha(instance_name)
-                if success:
-                    pass  # done
-                else:
-                    logger.info("[Recovery] %s Level 1 failed, escalating to L2", instance_name)
-                    state.recovery_level = 2
-                    level = 2
-
-            if not success and level <= 2 and state.level_attempts[2] < self.level2_max:
+            if self._fa_enabled:
+                # Fixed Account mode: 403 → swap Chrome immediately (different account)
+                logger.info("[Recovery] %s FA mode → SWAP Chrome (kill old, start standby)", instance_name)
+                success = await self._fa_swap_chrome(instance_name)
+            elif not success and level <= 2 and state.level_attempts[2] < self.level2_max:
                 state.level_attempts[2] += 1
-                # Rotate account before L2 restart
                 self._rotate_account_for_instance(instance_name)
                 success = await self._level2_rotate_ipv6(instance_name)
                 if not success:
@@ -356,7 +394,7 @@ class RecoveryManager:
                     state.recovery_level = 3
                     level = 3
 
-            if not success and state.level_attempts[3] < self.level3_max:
+            if not success and not self._fa_enabled and state.level_attempts[3] < self.level3_max:
                 state.recovery_level = 3
                 state.level_attempts[3] += 1
                 # Rotate account before L3 restart
@@ -384,6 +422,102 @@ class RecoveryManager:
             logger.exception("[Recovery] %s error: %s", instance_name, e)
         finally:
             state.recovering = False
+
+    async def _fa_swap_chrome(self, instance_name: str) -> bool:
+        """Fixed Account swap: replace 403'd Chrome with a standby Chrome.
+
+        Retry design:
+        - Tries ALL available standbys before giving up
+        - Failed standby → back to "standby" (not cooling — it wasn't 403'd)
+        - If no standbys left → wait for earliest cooldown → retry
+        - Max 3 rounds to prevent infinite loop
+        """
+        loop = asyncio.get_running_loop()
+
+        # ── Phase 1: Cleanup failed instance ──
+        async with self._fa_swap_lock:
+            cfg = self.instances_config.get(instance_name)
+            if not cfg:
+                return False
+
+            try:
+                from launcher import soft_clean_chrome_profile, kill_chrome
+                chrome_dir = (BASE_DIR / cfg["chrome_path"]).resolve().parent.parent.parent
+                await loop.run_in_executor(None, soft_clean_chrome_profile, chrome_dir)
+                await loop.run_in_executor(None, kill_chrome, instance_name)
+                logger.info("[FA-Swap] %s: soft-cleaned + killed", instance_name)
+            except Exception as e:
+                logger.warning("[FA-Swap] %s: cleanup error: %s", instance_name, e)
+
+            self._fa_states[instance_name] = "cooling"
+            self._fa_cooling_until[instance_name] = time.time() + self._fa_cooldown
+            logger.info("[FA-Swap] %s: cooling for %ds", instance_name, self._fa_cooldown)
+
+        # ── Phase 2: Try all available standbys (retry loop) ──
+        # Range: enough for all standbys + cooldown wait + full retry
+        tried = set()
+        max_rounds = len(self._fa_all_names) * 2
+        for _round in range(max_rounds):
+            standby_name = None
+
+            async with self._fa_swap_lock:
+                now = time.time()
+                for name in self._fa_all_names:
+                    if self._fa_states.get(name) == "cooling":
+                        until = self._fa_cooling_until.get(name, 0)
+                        if until > 0 and now >= until:
+                            self._fa_states[name] = "standby"
+                            logger.info("[FA-Swap] %s: cooldown expired -> standby", name)
+
+                n = len(self._fa_all_names)
+                for i in range(n):
+                    idx = (self._fa_round_robin_idx + i) % n
+                    name = self._fa_all_names[idx]
+                    if name in tried:
+                        continue
+                    if self._fa_states.get(name) == "standby":
+                        standby_name = name
+                        self._fa_round_robin_idx = (idx + 1) % n
+                        self._fa_states[standby_name] = "starting"
+                        break
+
+            if not standby_name:
+                earliest_time = float("inf")
+                for name, until in self._fa_cooling_until.items():
+                    if name not in tried and until < earliest_time:
+                        earliest_time = until
+                if earliest_time == float("inf"):
+                    logger.warning("[FA-Swap] %s: no standby or cooling instances left", instance_name)
+                    return False
+                wait_secs = max(0, earliest_time - time.time())
+                if wait_secs > 0:
+                    logger.info("[FA-Swap] No standby — waiting %.0fs for cooldown", wait_secs)
+                    await asyncio.sleep(wait_secs)
+                # After cooldown wait: clear tried — standbys may work now
+                tried.clear()
+                continue
+
+            # ── Phase 3: Start standby Chrome (outside lock) ──
+            new_ip = ""
+            if self._ipv6_client:
+                new_ip = self._rotate_ipv6(standby_name, "fa_swap")
+
+            success = await self._restart_chrome_instance(standby_name, new_ipv6=new_ip)
+
+            async with self._fa_swap_lock:
+                if success:
+                    self._fa_states[standby_name] = "active"
+                    logger.info("[FA-Swap] %s -> %s: swap OK", instance_name, standby_name)
+                    return True
+                else:
+                    # Back to standby — it wasn't 403'd, just failed to start
+                    self._fa_states[standby_name] = "standby"
+                    tried.add(standby_name)
+                    logger.warning("[FA-Swap] %s -> %s: FAILED, trying next...",
+                                   instance_name, standby_name)
+
+        logger.warning("[FA-Swap] %s: all swap attempts exhausted", instance_name)
+        return False
 
     async def _level1_reset_captcha(self, instance_name: str) -> bool:
         """Level 1: Reset captcha via extension API."""
@@ -470,7 +604,9 @@ class RecoveryManager:
         new_ip = await loop.run_in_executor(None, self._rotate_ipv6, instance_name, "403_L2")
         if not new_ip:
             return False
-        return await self._restart_chrome_instance(instance_name, new_ipv6=new_ip)
+        # FA mode: skip setup_chrome (account already logged in, just restart with new IPv6)
+        skip_login = self._fa_enabled
+        return await self._restart_chrome_instance(instance_name, new_ipv6=new_ip, login=not skip_login)
 
     async def _level3_restart_chrome(self, instance_name: str) -> bool:
         """Level 3: Get NEW IPv6 + full restart from scratch."""
@@ -481,11 +617,12 @@ class RecoveryManager:
                     instance_name, f"IPv6={new_ip}" if new_ip else "fingerprint-only")
         return await self._restart_chrome_instance(instance_name, new_ipv6=new_ip)
 
-    async def _restart_chrome_instance(self, instance_name: str, new_ipv6: str = "") -> bool:
-        """Restart Chrome from scratch — y hệt startup.
+    async def _restart_chrome_instance(self, instance_name: str, new_ipv6: str = "",
+                                       clean: bool = True, login: bool = True) -> bool:
+        """Restart Chrome — full or partial.
 
-        Flow: kill Chrome → update IPv6 → setup_chrome (login+Flow+project) →
-              start Chrome subprocess → wait extension → apply CDP
+        login=True (default): kill → IPv6 → setup_chrome (login+Flow) → start Chrome → CDP
+        login=False (FA swap): kill → IPv6 → start Chrome directly (already logged in) → CDP
         """
         cfg = self.instances_config.get(instance_name)
         if not cfg:
@@ -501,15 +638,24 @@ class RecoveryManager:
             debug_port = 19200 + (api_port - 8100)
             proxy_port = 1081 + (api_port - 8100)
 
-            # Step 1: Kill Chrome (with timeout to prevent hang)
+            # Step 1: Kill Chrome (skip if not running — e.g., standby instance)
+            chrome_running = False
             try:
-                await asyncio.wait_for(
-                    loop.run_in_executor(None, lambda: kill_chrome(instance_name)),
-                    timeout=30,
-                )
-            except asyncio.TimeoutError:
-                logger.warning("[Recovery] %s: kill_chrome timeout (30s), forcing continue", instance_name)
-            await asyncio.sleep(8)  # Windows needs 5-10s to release debug port
+                debug_port = 19200 + (api_port - 8100)
+                import urllib.request
+                urllib.request.urlopen(f"http://127.0.0.1:{debug_port}/json", timeout=2)
+                chrome_running = True
+            except Exception:
+                pass
+            if chrome_running:
+                try:
+                    await asyncio.wait_for(
+                        loop.run_in_executor(None, lambda: kill_chrome(instance_name)),
+                        timeout=30,
+                    )
+                except asyncio.TimeoutError:
+                    logger.warning("[Recovery] %s: kill_chrome timeout (30s), forcing continue", instance_name)
+                await asyncio.sleep(8)  # Windows needs 5-10s to release debug port
 
             # Step 2: Full IPv6 setup + update proxy
             proxy_arg = ""
@@ -541,51 +687,60 @@ class RecoveryManager:
                 except Exception:
                     pass
                 try:
-                    Path(f".ipv6_override_{proxy_port}").write_text(new_ipv6)
+                    (BASE_DIR / f".ipv6_override_{proxy_port}").write_text(new_ipv6)
+                    logger.info("[Recovery] %s: override file written, waiting for proxy to pick up...", instance_name)
                 except Exception:
                     pass
-                await asyncio.sleep(2)
+                # Wait for: NDP DAD (3s) + proxy override poll (1s) + buffer
+                await asyncio.sleep(5)
                 proxy_arg = f"socks5://127.0.0.1:{proxy_port}"
             elif cfg.get("ipv6"):
                 proxy_arg = f"socks5://127.0.0.1:{proxy_port}"
 
             # Step 3: setup_chrome — retry with different account if login fails
-            account = self._get_account(instance_name)
-            from chrome_setup import setup_chrome
-            ok = False
-            for _login_try in range(3):
-                try:
-                    ok = await asyncio.wait_for(
-                        loop.run_in_executor(
-                            None,
-                            lambda: setup_chrome(
-                                chrome_dir=chrome_dir, ext_dir=ext_dir, port=debug_port,
-                                account=account, proxy_arg=proxy_arg,
-                                log_func=lambda msg: logger.info("[Recovery] %s: %s", instance_name, msg),
-                                instance_name=instance_name,
+            if login:
+                account = self._get_account(instance_name)
+                from chrome_setup import setup_chrome
+                ok = False
+                for _login_try in range(3):
+                    try:
+                        ok = await asyncio.wait_for(
+                            loop.run_in_executor(
+                                None,
+                                lambda: setup_chrome(
+                                    chrome_dir=chrome_dir, ext_dir=ext_dir, port=debug_port,
+                                    account=account, proxy_arg=proxy_arg,
+                                    log_func=lambda msg: logger.info("[Recovery] %s: %s", instance_name, msg),
+                                    instance_name=instance_name,
+                                ),
                             ),
-                        ),
-                        timeout=180,
-                    )
-                except asyncio.TimeoutError:
-                    logger.warning("[Recovery] %s: setup_chrome TIMEOUT (180s)", instance_name)
-                    ok = False
-                if ok:
-                    break
-                # Login failed → try different account
-                if account and self._all_accounts:
-                    old_email = account.get("id", "?")
-                    self._rotate_account_for_instance(instance_name)
-                    account = self._get_account(instance_name)
-                    logger.warning("[Recovery] %s: setup fail → doi account %s → %s",
-                                   instance_name, old_email, account.get("id", "?") if account else "?")
-                    await loop.run_in_executor(None, lambda: kill_chrome(instance_name))
-                    await asyncio.sleep(3)
-                else:
-                    break
-            if not ok:
-                logger.warning("[Recovery] %s: setup_chrome FAILED after %d attempts", instance_name, _login_try + 1)
-                return False
+                            timeout=180,
+                        )
+                    except asyncio.TimeoutError:
+                        logger.warning("[Recovery] %s: setup_chrome TIMEOUT (180s)", instance_name)
+                        ok = False
+                    if ok:
+                        break
+                    # Login failed → try different account (NOT in FA mode — accounts are fixed)
+                    if self._fa_enabled:
+                        logger.warning("[Recovery] %s: setup fail — FA mode, keep same account, retry", instance_name)
+                        await loop.run_in_executor(None, lambda: kill_chrome(instance_name))
+                        await asyncio.sleep(3)
+                    elif account and self._all_accounts:
+                        old_email = account.get("id", "?")
+                        self._rotate_account_for_instance(instance_name)
+                        account = self._get_account(instance_name)
+                        logger.warning("[Recovery] %s: setup fail → doi account %s → %s",
+                                       instance_name, old_email, account.get("id", "?") if account else "?")
+                        await loop.run_in_executor(None, lambda: kill_chrome(instance_name))
+                        await asyncio.sleep(3)
+                    else:
+                        break
+                if not ok:
+                    logger.warning("[Recovery] %s: setup_chrome FAILED after %d attempts", instance_name, _login_try + 1)
+                    return False
+            else:
+                logger.info("[Recovery] %s: skip login (Fixed Account — already logged in)", instance_name)
 
             # Step 4: Start Chrome subprocess (extension connects to agent)
             cfg_start = {**cfg, "ipv6": new_ipv6} if new_ipv6 else cfg
