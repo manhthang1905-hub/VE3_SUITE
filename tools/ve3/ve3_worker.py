@@ -2698,8 +2698,7 @@ Generator/context error:
             thumbnails = []
 
         if not thumbnails:
-            self.log("Khong co thumbnail prompt pending -> fallback copy anh nhan vat")
-            self._fallback_copy_thumbnail_from_character(wb)
+            self.log("Khong co thumbnail prompt pending -> skip (server tao thumb)")
             return
 
         self.log(f"Thumbnail can tao: {len(thumbnails)}")
