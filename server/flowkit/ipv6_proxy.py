@@ -434,7 +434,7 @@ class IPv6SocksProxy:
                 self._fail_in_window = 0
             self._last_fail_time = now
             self._fail_in_window += 1
-            if self._fail_in_window >= 3 and not self._rotating and self.pool_url:
+            if self._fail_in_window >= 10 and not self._rotating and self.pool_url:
                 t = threading.Thread(target=self._auto_rotate_ipv6, daemon=True)
                 t.start()
             # Write health file for gateway to detect dead IPv6
