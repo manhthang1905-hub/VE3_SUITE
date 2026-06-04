@@ -1265,6 +1265,17 @@ class FlowKitGUI(tk.Tk):
         except Exception:
             return ""
 
+    def _rotate_log_file(self, log_file: Path):
+        """Rename old log to .bak before creating new one. Keeps 1 backup."""
+        if log_file.exists():
+            bak = log_file.with_suffix('.log.bak')
+            try:
+                if bak.exists():
+                    bak.unlink()
+                log_file.rename(bak)
+            except Exception:
+                pass
+
     def _start_agent(self, inst: dict):
         """Start FlowKit agent for an instance."""
         env = os.environ.copy()
@@ -1281,7 +1292,8 @@ class FlowKitGUI(tk.Tk):
                 pass
 
         log_file = LOG_DIR / f"{inst['name']}.log"
-        fh = open(log_file, 'a', encoding='utf-8')
+        self._rotate_log_file(log_file)
+        fh = open(log_file, 'w', encoding='utf-8')
         self._agent_log_fhs[inst['name']] = fh
         with self._proc_lock:
             self._log_handles.append(fh)
@@ -1327,7 +1339,8 @@ class FlowKitGUI(tk.Tk):
         self._gateway_tail_gen += 1
 
         log_file = LOG_DIR / "gateway.log"
-        fh = open(log_file, 'a', encoding='utf-8')
+        self._rotate_log_file(log_file)
+        fh = open(log_file, 'w', encoding='utf-8')
         self._gateway_log_fh = fh
         with self._proc_lock:
             self._log_handles.append(fh)
@@ -1421,6 +1434,22 @@ class FlowKitGUI(tk.Tk):
         self._agent_log_fhs.clear()
         self._agent_procs.clear()
         self._restart_times.clear()
+
+        # Stop IPv6 proxies (release ports for restart)
+        for proxy in getattr(self, '_ipv6_proxies', []):
+            try:
+                proxy.stop()
+            except Exception:
+                pass
+        self._ipv6_proxies = []
+
+        # Stop NDP keepalive threads
+        try:
+            from ipv6_proxy import stop_ndp_keepalive
+            for port in range(1081, 1111):
+                stop_ndp_keepalive(port)
+        except Exception:
+            pass
 
         self._kill_all_chrome()
         self._kill_flowkit_python()
@@ -1587,17 +1616,12 @@ class FlowKitGUI(tk.Tk):
                     self._start_agent(cfg)
 
     def _rotate_logs(self):
-        """Check log file sizes. Warn if too large (can't truncate open files on Windows)."""
+        """Delete .bak files older than 24h to prevent disk accumulation."""
         try:
-            for log_file in LOG_DIR.iterdir():
-                if log_file.suffix != '.log':
-                    continue
-                try:
-                    size_mb = log_file.stat().st_size // (1024 * 1024)
-                    if size_mb > 100:
-                        self._log(f"[LogRotate] {log_file.name} = {size_mb}MB — consider restarting", "WARN")
-                except Exception:
-                    pass
+            cutoff = time.time() - 86400
+            for f in LOG_DIR.iterdir():
+                if f.suffix == '.bak' and f.stat().st_mtime < cutoff:
+                    f.unlink()
         except Exception:
             pass
 
