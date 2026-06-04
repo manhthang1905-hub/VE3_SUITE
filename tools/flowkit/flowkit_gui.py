@@ -815,6 +815,8 @@ class FlowKitGUI(tk.Tk):
             attempt = 0
             with setup_sem:
                 while not setup_ok:
+                    if not self._started:
+                        return
                     attempt += 1
                     if fa_enabled and attempt > 5:
                         self._log(f"[{name}] Setup FAILED after 5 attempts — skipped", "ERROR")
@@ -865,6 +867,8 @@ class FlowKitGUI(tk.Tk):
                         self._log(f"[{name}] Setup error: {e}", "ERROR")
 
             # ── Step 2: Start agent (port 9222+i now free) ──
+            if not self._started:
+                return
             self._start_agent(inst_cfg)
             if self._wait_agent_ready(inst_cfg['api_port'], timeout=20):
                 self._log(f"[{name}] Agent ready", "OK")
