@@ -277,6 +277,36 @@ class FlowKitGUI(tk.Tk):
             pass
         self._on_fa_toggle()
 
+        # ── Auto Restart ──
+        ar_frame = tk.LabelFrame(p, text=" Auto Restart ", bg=BG2, fg=FG2,
+                                  font=('Segoe UI', 8, 'bold'), bd=1, relief='groove')
+        ar_frame.pack(fill='x', padx=10, pady=2)
+        ar_row = tk.Frame(ar_frame, bg=BG2)
+        ar_row.pack(fill='x', padx=6, pady=4)
+        self._auto_restart_var = tk.BooleanVar(value=True)
+        tk.Checkbutton(ar_row, text="Tu dong restart", variable=self._auto_restart_var,
+                       bg=BG2, fg=FG, selectcolor=BG, activebackground=BG2,
+                       font=('Segoe UI', 9)).pack(side='left')
+        tk.Label(ar_row, text="Sau:", bg=BG2, fg=FG,
+                 font=('Segoe UI', 9)).pack(side='left', padx=(16, 0))
+        self._restart_hours = tk.Spinbox(
+            ar_row, from_=1, to=24, width=4, bg=BG, fg=FG,
+            insertbackground=FG, font=('Consolas', 10), bd=1, relief='solid')
+        self._restart_hours.pack(side='left', padx=4)
+        self._restart_hours.delete(0, 'end')
+        self._restart_hours.insert(0, "3")
+        tk.Label(ar_row, text="gio", bg=BG2, fg=FG,
+                 font=('Segoe UI', 9)).pack(side='left')
+        self._restart_countdown_label = tk.Label(
+            ar_frame, text="", bg=BG2, fg=FG2, font=('Segoe UI', 8))
+        self._restart_countdown_label.pack(padx=6, pady=(0, 2), anchor='w')
+        try:
+            self._auto_restart_var.set(self._settings.get('auto_restart_enabled', True))
+            self._restart_hours.delete(0, 'end')
+            self._restart_hours.insert(0, str(self._settings.get('auto_restart_hours', 3)))
+        except Exception:
+            pass
+
         # ── Google Accounts ──
         f = tk.LabelFrame(p, text=" Tai khoan Google (email|password|2fa_secret) ",
                           bg=BG2, fg=FG2, font=('Segoe UI', 8, 'bold'), bd=1, relief='groove')
@@ -435,6 +465,9 @@ class FlowKitGUI(tk.Tk):
             self._fa_concurrent.delete(0, 'end')
             self._fa_concurrent.insert(0, str(data.get('fixed_account_concurrent', 2)))
             self._on_fa_toggle()
+            self._auto_restart_var.set(data.get('auto_restart_enabled', True))
+            self._restart_hours.delete(0, 'end')
+            self._restart_hours.insert(0, str(data.get('auto_restart_hours', 3)))
         except Exception:
             pass
 
@@ -470,6 +503,8 @@ class FlowKitGUI(tk.Tk):
             'chrome_count': self._get_chrome_count(),
             'fixed_account_enabled': self._fixed_account_var.get(),
             'fixed_account_concurrent': int(self._fa_concurrent.get() or 2),
+            'auto_restart_enabled': self._auto_restart_var.get(),
+            'auto_restart_hours': int(self._restart_hours.get() or 3),
         }
         self._settings = data
         SETTINGS_FILE.write_text(json.dumps(data, indent=2), encoding='utf-8')
@@ -528,7 +563,16 @@ class FlowKitGUI(tk.Tk):
         self._stop_btn.config(state='normal')
         self._notebook.select(self._monitor_frame)
 
-        self._log("Starting FlowKit Server...", "INFO")
+        # Schedule auto-restart
+        self._restart_timer_id = None
+        self._restart_at = 0
+        if self._auto_restart_var.get():
+            hours = int(self._restart_hours.get() or 3)
+            self._restart_at = time.time() + hours * 3600
+            self._restart_timer_id = self.after(hours * 3600 * 1000, self._scheduled_restart)
+            self._log(f"Starting FlowKit Server... (auto-restart sau {hours}h)", "INFO")
+        else:
+            self._log("Starting FlowKit Server...", "INFO")
 
         # Update config.yaml with GUI settings
         self._update_config()
@@ -1318,8 +1362,30 @@ class FlowKitGUI(tk.Tk):
                 pass
         threading.Thread(target=_tail_gateway_log, daemon=True).start()
 
+    def _scheduled_restart(self):
+        """Auto-restart: stop everything → wait for cleanup → start again."""
+        self._restart_timer_id = None
+        self._restart_at = 0
+        hours = int(self._restart_hours.get() or 3)
+        self._log(f"=== AUTO-RESTART ({hours}h) — stopping all ===", "WARN")
+        self._on_stop()
+        self._restart_countdown_label.config(text="Restarting in 20s...", fg=YELLOW)
+        self.after(20000, self._do_restart_start)
+
+    def _do_restart_start(self):
+        """Called 20s after stop — everything should be dead by now."""
+        self._restart_countdown_label.config(text="")
+        self._log("=== AUTO-RESTART — starting fresh ===", "INFO")
+        self._on_start()
+
     def _on_stop(self):
         """Stop all processes."""
+        # Cancel scheduled restart
+        if getattr(self, '_restart_timer_id', None):
+            self.after_cancel(self._restart_timer_id)
+            self._restart_timer_id = None
+        self._restart_at = 0
+
         self._log("Stopping FlowKit Server...", "WARN")
         self._started = False
 
@@ -1467,6 +1533,14 @@ class FlowKitGUI(tk.Tk):
                 cycle += 1
                 if cycle % 10 == 0:
                     self._rotate_logs()
+                # Update restart countdown
+                if self._restart_at:
+                    remaining = self._restart_at - time.time()
+                    if remaining > 0:
+                        h = int(remaining // 3600)
+                        m = int((remaining % 3600) // 60)
+                        self.after(0, lambda h=h, m=m: self._restart_countdown_label.config(
+                            text=f"Restart sau {h}h{m:02d}m", fg=FG2))
             except Exception as e:
                 self._log(f"[Supervisor] poll error: {e}", "ERROR")
             time.sleep(60)
