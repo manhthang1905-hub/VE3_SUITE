@@ -143,7 +143,9 @@ class FlowKitGUI(tk.Tk):
         self._detect_chromes()
 
         self._autostart_remaining = 15
-        self._autostart_id = self.after(1000, self._autostart_tick)
+        self._autostart_id = None
+        if self._autostart_var.get():
+            self._autostart_id = self.after(1000, self._autostart_tick)
 
     # ============================================================
     # Setup Page
@@ -278,30 +280,35 @@ class FlowKitGUI(tk.Tk):
             pass
         self._on_fa_toggle()
 
-        # ── Auto Restart ──
-        ar_frame = tk.LabelFrame(p, text=" Auto Restart ", bg=BG2, fg=FG2,
-                                  font=('Segoe UI', 8, 'bold'), bd=1, relief='groove')
-        ar_frame.pack(fill='x', padx=10, pady=2)
-        ar_row = tk.Frame(ar_frame, bg=BG2)
-        ar_row.pack(fill='x', padx=6, pady=4)
-        self._auto_restart_var = tk.BooleanVar(value=True)
-        tk.Checkbutton(ar_row, text="Tu dong restart", variable=self._auto_restart_var,
+        # ── Tu dong ──
+        auto_frame = tk.LabelFrame(p, text=" Tu dong ", bg=BG2, fg=FG2,
+                                    font=('Segoe UI', 8, 'bold'), bd=1, relief='groove')
+        auto_frame.pack(fill='x', padx=10, pady=2)
+        auto_row1 = tk.Frame(auto_frame, bg=BG2)
+        auto_row1.pack(fill='x', padx=6, pady=(4, 0))
+        self._autostart_var = tk.BooleanVar(value=True)
+        tk.Checkbutton(auto_row1, text="Tu dong chay khi mo GUI", variable=self._autostart_var,
                        bg=BG2, fg=FG, selectcolor=BG, activebackground=BG2,
                        font=('Segoe UI', 9)).pack(side='left')
-        tk.Label(ar_row, text="Sau:", bg=BG2, fg=FG,
-                 font=('Segoe UI', 9)).pack(side='left', padx=(16, 0))
+        auto_row2 = tk.Frame(auto_frame, bg=BG2)
+        auto_row2.pack(fill='x', padx=6, pady=(2, 4))
+        self._auto_restart_var = tk.BooleanVar(value=True)
+        tk.Checkbutton(auto_row2, text="Tu dong restart sau", variable=self._auto_restart_var,
+                       bg=BG2, fg=FG, selectcolor=BG, activebackground=BG2,
+                       font=('Segoe UI', 9)).pack(side='left')
         self._restart_hours = tk.Spinbox(
-            ar_row, from_=1, to=24, width=4, bg=BG, fg=FG,
+            auto_row2, from_=1, to=24, width=4, bg=BG, fg=FG,
             insertbackground=FG, font=('Consolas', 10), bd=1, relief='solid')
         self._restart_hours.pack(side='left', padx=4)
         self._restart_hours.delete(0, 'end')
         self._restart_hours.insert(0, "3")
-        tk.Label(ar_row, text="gio", bg=BG2, fg=FG,
+        tk.Label(auto_row2, text="gio", bg=BG2, fg=FG,
                  font=('Segoe UI', 9)).pack(side='left')
         self._restart_countdown_label = tk.Label(
-            ar_frame, text="", bg=BG2, fg=FG2, font=('Segoe UI', 8))
+            auto_frame, text="", bg=BG2, fg=FG2, font=('Segoe UI', 8))
         self._restart_countdown_label.pack(padx=6, pady=(0, 2), anchor='w')
         try:
+            self._autostart_var.set(self._settings.get('autostart_enabled', True))
             self._auto_restart_var.set(self._settings.get('auto_restart_enabled', True))
             self._restart_hours.delete(0, 'end')
             self._restart_hours.insert(0, str(self._settings.get('auto_restart_hours', 3)))
@@ -504,6 +511,7 @@ class FlowKitGUI(tk.Tk):
             'chrome_count': self._get_chrome_count(),
             'fixed_account_enabled': self._fixed_account_var.get(),
             'fixed_account_concurrent': int(self._fa_concurrent.get() or 2),
+            'autostart_enabled': self._autostart_var.get(),
             'auto_restart_enabled': self._auto_restart_var.get(),
             'auto_restart_hours': int(self._restart_hours.get() or 3),
         }
