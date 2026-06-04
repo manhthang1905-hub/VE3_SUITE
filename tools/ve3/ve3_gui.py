@@ -2831,6 +2831,8 @@ foreach ($pid in $children) {{
         self.after(3000, self._process_monitor_tick)
         # Auto-start queue after 60s
         self._auto_start_countdown = 30
+        self._auto_restart_at = 0
+        self._pending_restart_id = None
         self._log("[QUEUE] Tu dong chay sau 30s... (bam STOP hoac Update de huy)", "INFO")
         self.after(1000, self._auto_start_tick)
 
@@ -2843,10 +2845,47 @@ foreach ($pid in $children) {{
         if self._auto_start_countdown <= 0:
             self._log("[QUEUE] Tu dong bat dau!", "OK")
             self.toggle_queue_worker()
+            # Schedule auto-restart after 12h
+            self._schedule_auto_restart()
         else:
             if self._auto_start_countdown % 10 == 0:
                 self._log(f"[QUEUE] Tu dong chay sau {self._auto_start_countdown}s...", "INFO")
             self.after(1000, self._auto_start_tick)
+
+    def _schedule_auto_restart(self):
+        """Schedule stop + restart after 12h to reset all errors."""
+        hours = 12
+        self._auto_restart_at = _time.time() + hours * 3600
+        if self._pending_restart_id:
+            self.after_cancel(self._pending_restart_id)
+        self._pending_restart_id = self.after(hours * 3600 * 1000, self._do_auto_restart)
+        self._log(f"[QUEUE] Auto-restart sau {hours}h", "INFO")
+
+    def _do_auto_restart(self):
+        """Stop queue → wait 30s for cleanup → start again."""
+        self._pending_restart_id = None
+        self._auto_restart_at = 0
+        self._log("=== AUTO-RESTART 12h — stopping queue ===", "WARN")
+        if self.queue_running:
+            self.queue_stop_requested = True
+            self.btn_go.configure(text="Restarting...", fg_color="#555")
+            self.pages["home"].btn_run_center.configure(text="Restarting...", fg_color="#555")
+        # Wait for queue to fully stop, then restart
+        self.after(1000, self._wait_queue_stop_then_restart)
+
+    def _wait_queue_stop_then_restart(self):
+        """Poll until queue actually stopped, then wait 30s and restart."""
+        if self.queue_running:
+            self.after(2000, self._wait_queue_stop_then_restart)
+            return
+        self._log("=== Queue stopped. Cho 30s roi chay lai... ===", "WARN")
+        self.after(30000, self._restart_queue)
+
+    def _restart_queue(self):
+        """Start queue fresh + schedule next restart."""
+        self._log("=== AUTO-RESTART — starting fresh ===", "OK")
+        self.toggle_queue_worker()
+        self._schedule_auto_restart()
 
     def refresh_process_monitor_now(self):
         self._start_process_monitor_refresh(manual=True)
@@ -5320,6 +5359,11 @@ Get-CimInstance Win32_Process |
     def toggle_queue_worker(self):
         if self.queue_running:
             self.queue_stop_requested = True
+            # Cancel auto-restart if user manually stops
+            if self._pending_restart_id:
+                self.after_cancel(self._pending_restart_id)
+                self._pending_restart_id = None
+                self._auto_restart_at = 0
             self.btn_go.configure(text="Stopping...", fg_color="#555")
             self.pages["home"].btn_run_center.configure(text="Stopping...", fg_color="#555")
             self._log("[QUEUE] Dang yeu cau dung sau task hien tai...", "WARN")
@@ -5354,6 +5398,9 @@ Get-CimInstance Win32_Process |
             self._log(f"[QUEUE] Da don {cleared} lock cu truoc khi start.", "WARN", "ve3")
         self.queue_running = True
         self.queue_stop_requested = False
+        # Schedule auto-restart 12h (reset all errors periodically)
+        if not self._pending_restart_id:
+            self._schedule_auto_restart()
         with self.queue_lock:
             self.queue_active_excel.clear()
             self.queue_active_ve3.clear()
