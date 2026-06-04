@@ -98,16 +98,18 @@ def start_ndp_keepalive(ipv6, gateway, port_key, log_func=print):
     stop_ndp_keepalive(port_key)
     _ndp_keepalive_stop[port_key] = threading.Event()
 
+    stop_event = _ndp_keepalive_stop[port_key]
+
     def _loop():
         gw = gateway or ':'.join(ipv6.split(':')[:4]) + '::1'
         import subprocess as _sp
-        while not _ndp_keepalive_stop[port_key].is_set():
+        while not stop_event.is_set():
             try:
                 _sp.run(f'ping -6 -n 1 -w 3000 -S {ipv6} {gw}',
                         shell=True, capture_output=True, timeout=10)
             except Exception:
                 pass
-            _ndp_keepalive_stop[port_key].wait(20)
+            stop_event.wait(20)
 
     t = threading.Thread(target=_loop, daemon=True)
     t.start()
