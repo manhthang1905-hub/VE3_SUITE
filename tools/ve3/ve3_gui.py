@@ -2853,7 +2853,7 @@ foreach ($pid in $children) {{
             self.after(1000, self._auto_start_tick)
 
     def _schedule_auto_restart(self):
-        """Schedule stop + restart after 12h to reset all errors."""
+        """Schedule full GUI restart after 12h to reset all errors."""
         hours = 12
         self._auto_restart_at = _time.time() + hours * 3600
         if self._pending_restart_id:
@@ -2862,30 +2862,37 @@ foreach ($pid in $children) {{
         self._log(f"[QUEUE] Auto-restart sau {hours}h", "INFO")
 
     def _do_auto_restart(self):
-        """Stop queue → wait 30s for cleanup → start again."""
+        """Kill everything (like closing GUI) → restart GUI process."""
         self._pending_restart_id = None
         self._auto_restart_at = 0
-        self._log("=== AUTO-RESTART 12h — stopping queue ===", "WARN")
-        if self.queue_running:
+        self._log("=== AUTO-RESTART 12h — kill all + restart GUI ===", "WARN")
+
+        # Same cleanup as _on_close: kill queue, subprocesses, Chrome, agents
+        try:
             self.queue_stop_requested = True
-            self.btn_go.configure(text="Restarting...", fg_color="#555")
-            self.pages["home"].btn_run_center.configure(text="Restarting...", fg_color="#555")
-        # Wait for queue to fully stop, then restart
-        self.after(1000, self._wait_queue_stop_then_restart)
+            self.music_stop_requested = True
+            if self.worker:
+                try:
+                    self.worker.stop()
+                except Exception:
+                    pass
+            with self.queue_lock:
+                all_procs = list(self.queue_ve3_procs.values()) + list(self.queue_music_procs.values())
+            for proc in all_procs:
+                if proc and proc.poll() is None:
+                    self._kill_pid_tree(proc.pid)
+            self._kill_own_child_processes()
+            self._kill_extension_instances()
+        except Exception as e:
+            self._log(f"[RESTART] cleanup error: {e}", "ERROR")
 
-    def _wait_queue_stop_then_restart(self):
-        """Poll until queue actually stopped, then wait 30s and restart."""
-        if self.queue_running:
-            self.after(2000, self._wait_queue_stop_then_restart)
-            return
-        self._log("=== Queue stopped. Cho 30s roi chay lai... ===", "WARN")
-        self.after(30000, self._restart_queue)
+        self._log("=== Cho 5s roi restart GUI... ===", "WARN")
+        self.after(5000, self._exec_restart)
 
-    def _restart_queue(self):
-        """Start queue fresh + schedule next restart."""
-        self._log("=== AUTO-RESTART — starting fresh ===", "OK")
-        self.toggle_queue_worker()
-        self._schedule_auto_restart()
+    def _exec_restart(self):
+        """Replace current process with fresh GUI."""
+        import sys
+        os.execv(sys.executable, [sys.executable] + sys.argv)
 
     def refresh_process_monitor_now(self):
         self._start_process_monitor_refresh(manual=True)
