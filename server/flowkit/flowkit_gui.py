@@ -116,6 +116,7 @@ class FlowKitGUI(tk.Tk):
         self._agent_log_fhs = {}  # name → file handle
         self._inst_configs = {}   # name → inst config dict
         self._restart_times = {}  # "gateway"/name → list of timestamps
+        self._pending_restart_id = None
 
         self.protocol("WM_DELETE_WINDOW", self._on_close)
 
@@ -927,10 +928,11 @@ class FlowKitGUI(tk.Tk):
                 time.sleep(setup_stagger)
 
         if fa_enabled:
-            # FA mode: ALL instances must finish setup before gateway starts
-            # Prevents recovery from picking half-setup instances as standby
             for t in pipeline_threads:
                 t.join(timeout=300)
+            if not self._started:
+                self._log("Startup aborted (stopped during setup)", "WARN")
+                return
             with ready_lock:
                 total_ready = ready_count[0]
             self._log(f"All {total_ready} instances setup done. Starting Gateway...", "OK")
@@ -938,11 +940,13 @@ class FlowKitGUI(tk.Tk):
             self._poll_thread = threading.Thread(target=self._poll_loop, daemon=True)
             self._poll_thread.start()
         else:
-            # Normal mode: gateway starts when first instance is ready
             if ready_event.wait(timeout=120):
                 self._log("Starting Gateway (instance ready)...", "OK")
             else:
                 self._log("Starting Gateway (timeout — no instances ready yet)...", "WARN")
+            if not self._started:
+                self._log("Startup aborted (stopped during setup)", "WARN")
+                return
             self._start_gateway(gateway_port)
             self._poll_thread = threading.Thread(target=self._poll_loop, daemon=True)
             self._poll_thread.start()
@@ -1369,21 +1373,28 @@ class FlowKitGUI(tk.Tk):
         hours = int(self._restart_hours.get() or 3)
         self._log(f"=== AUTO-RESTART ({hours}h) — stopping all ===", "WARN")
         self._on_stop()
-        self._restart_countdown_label.config(text="Restarting in 20s...", fg=YELLOW)
-        self.after(20000, self._do_restart_start)
+        # Lock buttons during cleanup wait — prevent user interference
+        self._start_btn.config(state='disabled', bg='#475569', text="Restarting...")
+        self._stop_btn.config(state='disabled')
+        self._restart_countdown_label.config(text="Cho 20s...", fg=YELLOW)
+        self._pending_restart_id = self.after(20000, self._do_restart_start)
 
     def _do_restart_start(self):
         """Called 20s after stop — everything should be dead by now."""
+        self._pending_restart_id = None
         self._restart_countdown_label.config(text="")
+        self._start_btn.config(text="START FLOWKIT")
         self._log("=== AUTO-RESTART — starting fresh ===", "INFO")
         self._on_start()
 
     def _on_stop(self):
         """Stop all processes."""
-        # Cancel scheduled restart
-        if getattr(self, '_restart_timer_id', None):
-            self.after_cancel(self._restart_timer_id)
-            self._restart_timer_id = None
+        # Cancel all pending restart timers
+        for attr in ('_restart_timer_id', '_pending_restart_id'):
+            tid = getattr(self, attr, None)
+            if tid:
+                self.after_cancel(tid)
+                setattr(self, attr, None)
         self._restart_at = 0
 
         self._log("Stopping FlowKit Server...", "WARN")
