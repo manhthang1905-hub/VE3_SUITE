@@ -270,164 +270,173 @@ def _pick_instance_for_retry(exclude: list) -> Optional[AgentInstance]:
 # ─── Health Checker ──────────────────────────────────────────
 
 async def health_check_loop():
-    """Periodically check agent health + self-heal unhealthy instances."""
+    """Periodically check agent health + self-heal unhealthy instances.
+
+    Outer while+try: restart httpx client on fatal error.
+    Inner try blocks: isolate self-heal/proxy/watchdog so one crash doesn't kill monitoring.
+    """
     while True:
-      try:
-        async with httpx.AsyncClient(timeout=5.0) as client:
-         while True:
-            for inst in instances:
-                if not inst.enabled:
-                    continue
-                try:
-                    resp = await client.get(f"{inst.base_url}/health")
-                    if resp.status_code == 200:
-                        data = resp.json()
-                        inst.healthy = True
-                        inst.extension_connected = data.get("extension_connected", False)
-                        inst.flow_key_present = data.get("flow_key_present", False)
-                        agent_403 = data.get("consecutive_403", 0)
-                        inst.consecutive_403 = max(inst.consecutive_403, agent_403)
-                    else:
-                        inst.healthy = False
-                except Exception:
-                    inst.healthy = False
-                inst.last_health_check = time.time()
+        try:
+            async with httpx.AsyncClient(timeout=5.0) as client:
+                while True:
+                    # ── Health check each instance ──
+                    for inst in instances:
+                        if not inst.enabled:
+                            continue
+                        try:
+                            resp = await client.get(f"{inst.base_url}/health")
+                            if resp.status_code == 200:
+                                data = resp.json()
+                                inst.healthy = True
+                                inst.extension_connected = data.get("extension_connected", False)
+                                inst.flow_key_present = data.get("flow_key_present", False)
+                                agent_403 = data.get("consecutive_403", 0)
+                                inst.consecutive_403 = max(inst.consecutive_403, agent_403)
+                            else:
+                                inst.healthy = False
+                        except Exception:
+                            inst.healthy = False
+                        inst.last_health_check = time.time()
 
-            # Self-heal: auto-restart instances that are down
-            # Wrapped in try-except — this section must never kill health_check_loop
-            try:
-              UNHEALTHY_THRESHOLD = 3
-              if _recovery_manager:
-                now = time.time()
-                for inst in instances:
-                    if not inst.enabled:
-                        continue
-                    # Instance is working fine — reset everything
-                    if inst.healthy and inst.extension_connected and inst.flow_key_present:
-                        inst.was_healthy_once = True
-                        inst.consecutive_unhealthy = 0
-                        if inst.self_heal_failures > 0:
-                            inst.self_heal_failures = 0
-                            inst.next_self_heal_at = 0
-                        continue
-                    # Skip instances that never finished startup
-                    if not inst.was_healthy_once:
-                        continue
-                    # Count consecutive unhealthy — don't act on momentary blips
-                    inst.consecutive_unhealthy += 1
-                    if inst.consecutive_unhealthy < UNHEALTHY_THRESHOLD:
-                        continue
-                    # Skip if cooling (403 recovery handles that) or quota exhausted
-                    if inst.is_cooling or inst.is_quota_exhausted:
-                        continue
-                    # Skip if already recovering
-                    rec_state = _recovery_manager.states.get(inst.name)
-                    if rec_state and rec_state.recovering:
-                        continue
-                    # Backoff check
-                    if now < inst.next_self_heal_at:
-                        continue
-                    # Trigger self-heal — rotate IPv6+account from 2nd attempt
-                    inst.self_heal_failures += 1
-                    if inst.self_heal_failures > 5:
-                        if inst.self_heal_failures == 6:
-                            logger.warning(
-                                "[SelfHeal] %s: 5 attempts failed — PAUSING 10min "
-                                "(possible: no IPv6, all accounts blocked, or Chrome crash)",
-                                inst.name)
-                        inst.next_self_heal_at = now + 600
-                        if inst.self_heal_failures > 8:
-                            inst.self_heal_failures = 0
-                        continue
-                    rotate_ipv6 = inst.self_heal_failures >= 2
-                    logger.warning(
-                        "[SelfHeal] %s down for %d checks (healthy=%s, ext=%s, flowKey=%s), "
-                        "attempt #%d%s",
-                        inst.name, inst.consecutive_unhealthy,
-                        inst.healthy, inst.extension_connected,
-                        inst.flow_key_present, inst.self_heal_failures,
-                        " + IPv6/account rotate" if rotate_ipv6 else "",
-                    )
-                    _recovery_manager.trigger_self_heal(inst.name, rotate_ipv6=rotate_ipv6)
-                    delay = min(60 * inst.self_heal_failures, 300)
-                    inst.next_self_heal_at = now + delay
-
-            except Exception as e:
-                logger.exception("[HealthCheck] self-heal error: %s", e)
-
-            # Proxy health check + FA state audit
-            try:
-              # Detect dead IPv6
-              if _recovery_manager:
-                for inst in instances:
-                    if not inst.enabled:
-                        continue
-                    cfg = CONFIG.get("instances", [])
-                    inst_cfg = next((c for c in cfg if c.get("name") == inst.name), None)
-                    if not inst_cfg or not inst_cfg.get("ipv6"):
-                        continue
-                    proxy_port = 1081 + (inst.api_port - 8100)
-                    health_file = Path(__file__).parent / f".proxy_health_{proxy_port}"
+                    # ── Self-heal: auto-restart unhealthy instances ──
                     try:
-                        if health_file.exists():
-                            cf = int(health_file.read_text().strip())
-                            if cf >= 5:
-                                rec_state = _recovery_manager.states.get(inst.name)
-                                if rec_state and not rec_state.recovering:
-                                    logger.warning(
-                                        "[ProxyHealth] %s: proxy has %d connect failures → IPv6 DEAD → rotate + restart",
-                                        inst.name, cf,
-                                    )
-                                    _recovery_manager.trigger_self_heal(inst.name, rotate_ipv6=True)
-                    except Exception:
-                        pass
+                        _self_heal_check()
+                    except Exception as e:
+                        logger.exception("[HealthCheck] self-heal error: %s", e)
 
-              # FA state audit: reset "starting" stuck > 5min
-              if _recovery_manager and _recovery_manager._fa_enabled:
-                  now_fa = time.time()
-                  for name in _recovery_manager._fa_all_names:
-                      fa_st = _recovery_manager._fa_states.get(name)
-                      if fa_st == "starting":
-                          since = _recovery_manager._fa_starting_since.get(name, 0)
-                          if since and now_fa - since > 300:
-                              _recovery_manager._fa_states[name] = "standby"
-                              _recovery_manager._fa_starting_since.pop(name, None)
-                              logger.warning("[FA-Audit] %s: stuck 'starting' >5min → standby", name)
-            except Exception as e:
-                logger.exception("[HealthCheck] proxy/FA-audit error: %s", e)
+                    # ── Proxy health + FA state audit ──
+                    try:
+                        _proxy_and_fa_audit()
+                    except Exception as e:
+                        logger.exception("[HealthCheck] proxy/FA-audit error: %s", e)
 
-            # Task watchdog: kill stuck tasks
-            try:
-                now = time.time()
-                for task_id, task in list(tasks.items()):
-                    if task["status"] != "processing":
-                        continue
-                    started_at = task.get("started_at", 0)
-                    if not started_at:
-                        continue
-                    elapsed = now - started_at
-                    if elapsed > TASK_WATCHDOG_TIMEOUT:
-                        worker_name = task.get("worker", "?")
-                        task["status"] = "failed"
-                        task["error"] = f"Task watchdog timeout after {int(elapsed)}s"
-                        stats["total_failed"] += 1
+                    # ── Task watchdog ──
+                    try:
+                        _task_watchdog()
+                    except Exception as e:
+                        logger.exception("[HealthCheck] watchdog error: %s", e)
+
+                    await asyncio.sleep(10)
+        except Exception as e:
+            logger.exception("[HealthCheck] fatal error, restarting in 30s: %s", e)
+            await asyncio.sleep(30)
+
+
+def _self_heal_check():
+    """Self-heal: restart instances that were healthy but are now down."""
+    if not _recovery_manager:
+        return
+    UNHEALTHY_THRESHOLD = 3
+    now = time.time()
+    for inst in instances:
+        if not inst.enabled:
+            continue
+        if inst.healthy and inst.extension_connected and inst.flow_key_present:
+            inst.was_healthy_once = True
+            inst.consecutive_unhealthy = 0
+            if inst.self_heal_failures > 0:
+                inst.self_heal_failures = 0
+                inst.next_self_heal_at = 0
+            continue
+        if not inst.was_healthy_once:
+            continue
+        inst.consecutive_unhealthy += 1
+        if inst.consecutive_unhealthy < UNHEALTHY_THRESHOLD:
+            continue
+        if inst.is_cooling or inst.is_quota_exhausted:
+            continue
+        rec_state = _recovery_manager.states.get(inst.name)
+        if rec_state and rec_state.recovering:
+            continue
+        if now < inst.next_self_heal_at:
+            continue
+        inst.self_heal_failures += 1
+        if inst.self_heal_failures > 5:
+            if inst.self_heal_failures == 6:
+                logger.warning(
+                    "[SelfHeal] %s: 5 attempts failed — PAUSING 10min "
+                    "(possible: no IPv6, all accounts blocked, or Chrome crash)",
+                    inst.name)
+            inst.next_self_heal_at = now + 600
+            if inst.self_heal_failures > 8:
+                inst.self_heal_failures = 0
+            continue
+        rotate_ipv6 = inst.self_heal_failures >= 2
+        logger.warning(
+            "[SelfHeal] %s down for %d checks (healthy=%s, ext=%s, flowKey=%s), "
+            "attempt #%d%s",
+            inst.name, inst.consecutive_unhealthy,
+            inst.healthy, inst.extension_connected,
+            inst.flow_key_present, inst.self_heal_failures,
+            " + IPv6/account rotate" if rotate_ipv6 else "",
+        )
+        _recovery_manager.trigger_self_heal(inst.name, rotate_ipv6=rotate_ipv6)
+        delay = min(60 * inst.self_heal_failures, 300)
+        inst.next_self_heal_at = now + delay
+
+
+def _proxy_and_fa_audit():
+    """Detect dead IPv6 proxies + reset stuck FA states."""
+    if not _recovery_manager:
+        return
+    for inst in instances:
+        if not inst.enabled:
+            continue
+        cfg_list = CONFIG.get("instances", [])
+        inst_cfg = next((c for c in cfg_list if c.get("name") == inst.name), None)
+        if not inst_cfg or not inst_cfg.get("ipv6"):
+            continue
+        proxy_port = 1081 + (inst.api_port - 8100)
+        health_file = Path(__file__).parent / f".proxy_health_{proxy_port}"
+        try:
+            if health_file.exists():
+                cf = int(health_file.read_text().strip())
+                if cf >= 5:
+                    rec_state = _recovery_manager.states.get(inst.name)
+                    if rec_state and not rec_state.recovering:
                         logger.warning(
-                            "[Watchdog] %s: task %s timeout (%.0fs > %ds) → mark failed, trigger self-heal",
-                            worker_name, task_id[:8], elapsed, TASK_WATCHDOG_TIMEOUT,
-                        )
-                        for inst in instances:
-                            if inst.name == worker_name:
-                                inst.total_failed += 1
-                                if _recovery_manager:
-                                    _recovery_manager.trigger_self_heal(inst.name)
-                                break
-            except Exception as e:
-                logger.exception("[HealthCheck] watchdog error: %s", e)
+                            "[ProxyHealth] %s: %d connect failures → IPv6 DEAD → rotate",
+                            inst.name, cf)
+                        _recovery_manager.trigger_self_heal(inst.name, rotate_ipv6=True)
+        except Exception:
+            pass
+    # FA state audit: reset "starting" stuck > 5min
+    if _recovery_manager._fa_enabled:
+        now_fa = time.time()
+        for name in _recovery_manager._fa_all_names:
+            if _recovery_manager._fa_states.get(name) == "starting":
+                since = _recovery_manager._fa_starting_since.get(name, 0)
+                if since and now_fa - since > 300:
+                    _recovery_manager._fa_states[name] = "standby"
+                    _recovery_manager._fa_starting_since.pop(name, None)
+                    logger.warning("[FA-Audit] %s: stuck 'starting' >5min → standby", name)
 
-            await asyncio.sleep(10)
-      except Exception as e:
-        logger.exception("[HealthCheck] fatal error, restarting in 30s: %s", e)
-        await asyncio.sleep(30)
+
+def _task_watchdog():
+    """Kill tasks stuck in processing longer than TASK_WATCHDOG_TIMEOUT."""
+    now = time.time()
+    for task_id, task in list(tasks.items()):
+        if task["status"] != "processing":
+            continue
+        started_at = task.get("started_at", 0)
+        if not started_at:
+            continue
+        elapsed = now - started_at
+        if elapsed > TASK_WATCHDOG_TIMEOUT:
+            worker_name = task.get("worker", "?")
+            task["status"] = "failed"
+            task["error"] = f"Task watchdog timeout after {int(elapsed)}s"
+            stats["total_failed"] += 1
+            logger.warning(
+                "[Watchdog] %s: task %s timeout (%.0fs > %ds) → mark failed, trigger self-heal",
+                worker_name, task_id[:8], elapsed, TASK_WATCHDOG_TIMEOUT,
+            )
+            for inst in instances:
+                if inst.name == worker_name:
+                    inst.total_failed += 1
+                    if _recovery_manager:
+                        _recovery_manager.trigger_self_heal(inst.name)
+                    break
 
 
 # ─── Task Processing ────────────────────────────────────────
