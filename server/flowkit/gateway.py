@@ -391,7 +391,7 @@ def _proxy_and_fa_audit():
         try:
             if health_file.exists():
                 cf = int(health_file.read_text().strip())
-                if cf >= 20:
+                if cf >= 5:
                     rec_state = _recovery_manager.states.get(inst.name)
                     if rec_state and not rec_state.recovering:
                         logger.warning(

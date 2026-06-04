@@ -59,7 +59,21 @@ def setup_ipv6_on_interface(new_ip, gateway, iface="Ethernet", old_ip="", log_fu
         except Exception:
             pass
         # Update default route to new gateway (critical after rotate —
-        # old gateway was deleted, without this ALL IPv6 traffic dies)
+        # old gateway deleted → ALL IPv6 dies without this)
+        # Delete ALL existing ::/0 routes on this interface first,
+        # then add new one. Prevents stale/duplicate default routes.
+        try:
+            show = _sp.run(f'netsh interface ipv6 show route prefix=::/0 interface="{iface}"',
+                           shell=True, capture_output=True, text=True, timeout=10)
+            for line in (show.stdout or "").splitlines():
+                if '::' in line and '/' not in line:
+                    parts = line.split()
+                    for p in parts:
+                        if '::' in p and p != '::/0':
+                            _sp.run(f'netsh interface ipv6 delete route ::/0 "{iface}" {p}',
+                                    shell=True, capture_output=True, timeout=5)
+        except Exception:
+            pass
         try:
             _sp.run(f'netsh interface ipv6 add route ::/0 "{iface}" {gateway}',
                     shell=True, capture_output=True, timeout=10)
@@ -441,7 +455,7 @@ class IPv6SocksProxy:
                 self._fail_in_window = 0
             self._last_fail_time = now
             self._fail_in_window += 1
-            if self._fail_in_window >= 10 and not self._rotating and self.pool_url:
+            if self._fail_in_window >= 3 and not self._rotating and self.pool_url:
                 t = threading.Thread(target=self._auto_rotate_ipv6, daemon=True)
                 t.start()
             # Write health file for gateway to detect dead IPv6
