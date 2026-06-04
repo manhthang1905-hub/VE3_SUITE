@@ -141,6 +141,9 @@ class FlowKitGUI(tk.Tk):
         self._load_settings()
         self._detect_chromes()
 
+        self._autostart_remaining = 15
+        self._autostart_id = self.after(1000, self._autostart_tick)
+
     # ============================================================
     # Setup Page
     # ============================================================
@@ -498,7 +501,25 @@ class FlowKitGUI(tk.Tk):
     # ============================================================
     # Start / Stop
     # ============================================================
+    def _cancel_autostart(self):
+        if self._autostart_id:
+            self.after_cancel(self._autostart_id)
+            self._autostart_id = None
+        self._start_btn.config(text="START FLOWKIT")
+
+    def _autostart_tick(self):
+        if self._started:
+            return
+        self._autostart_remaining -= 1
+        if self._autostart_remaining <= 0:
+            self._autostart_id = None
+            self._on_start()
+            return
+        self._start_btn.config(text=f"START FLOWKIT ({self._autostart_remaining}s)")
+        self._autostart_id = self.after(1000, self._autostart_tick)
+
     def _on_start(self):
+        self._cancel_autostart()
         if self._started:
             return
         self._save_settings()
