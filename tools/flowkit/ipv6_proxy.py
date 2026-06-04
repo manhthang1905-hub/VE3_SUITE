@@ -58,6 +58,13 @@ def setup_ipv6_on_interface(new_ip, gateway, iface="Ethernet", old_ip="", log_fu
                     shell=True, capture_output=True, timeout=10)
         except Exception:
             pass
+        # Update default route to new gateway (critical after rotate —
+        # old gateway was deleted, without this ALL IPv6 traffic dies)
+        try:
+            _sp.run(f'netsh interface ipv6 add route ::/0 "{iface}" {gateway}',
+                    shell=True, capture_output=True, timeout=10)
+        except Exception:
+            pass
     gw = gateway or ':'.join(new_ip.split(':')[:4]) + '::1'
     try:
         _sp.run(f'ping -6 -n 2 -w 3000 -S {new_ip} {gw}',
