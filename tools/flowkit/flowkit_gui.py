@@ -54,29 +54,27 @@ PROTECTED_PATHS = {
 
 
 def _get_auto_version() -> str:
-    if not _IS_STANDALONE:
-        try:
-            result = subprocess.run(
-                ["git", "rev-list", "--count", "HEAD"],
-                cwd=str(SUITE_ROOT), capture_output=True, text=True, timeout=5,
-            )
-            if result.returncode == 0:
-                ver = f"1.0.{result.stdout.strip()}"
-                try:
-                    (BASE_DIR / "VERSION.txt").write_text(ver + "\n", encoding="utf-8")
-                except Exception:
-                    pass
-                return ver
-        except Exception:
-            pass
-    for vf in (BASE_DIR / "VERSION.txt", BASE_DIR / "VERSION"):
+    # 1. VERSION file at repo root (always correct after git checkout)
+    for vf in (SUITE_ROOT / "VERSION", BASE_DIR / "VERSION.txt", BASE_DIR / "VERSION"):
         try:
             if vf.exists():
                 txt = vf.read_text(encoding="utf-8-sig").split("\n")[0].strip()
-                if txt:
+                if txt and len(txt) > 3:
                     return txt
         except Exception:
             pass
+    # 2. Fallback: git rev-list (dev machine only, not shallow clone)
+    try:
+        result = subprocess.run(
+            ["git", "rev-list", "--count", "HEAD"],
+            cwd=str(SUITE_ROOT), capture_output=True, text=True, timeout=5,
+        )
+        if result.returncode == 0:
+            count = int(result.stdout.strip())
+            if count > 10:
+                return f"1.0.{count}"
+    except Exception:
+        pass
     return "?"
 
 
@@ -1908,10 +1906,9 @@ class FlowKitGUI(tk.Tk):
                         cwd=str(git_root), capture_output=True, timeout=10,
                     )
                 self._log("Git fetch...", "INFO")
-                r = subprocess.run(["git", "fetch", "origin", "main"],
-                                   cwd=str(git_root), capture_output=True, text=True, timeout=120)
+                r = subprocess.run(["git", "fetch", "--depth=1", "origin", "main"],
+                                   cwd=str(git_root), capture_output=True, text=True, timeout=60)
                 if r.returncode == 0:
-                    # -B: create/reset branch, -f: force overwrite local changes
                     r2 = subprocess.run(["git", "checkout", "-f", "-B", "main", "origin/main"],
                                         cwd=str(git_root), capture_output=True, text=True, timeout=60)
                     if r2.returncode == 0:
