@@ -1525,33 +1525,36 @@ class FlowKitGUI(tk.Tk):
             pass
 
     def _kill_flowkit_python(self):
-        """Kill python subprocesses spawned by FlowKit (agent, gateway)."""
-        markers = ("flowkit\\agent", "flowkit/agent", "flowkit\\gateway", "flowkit/gateway")
+        """Kill FlowKit agents + gateway by port (precise, won't kill other tools)."""
+        CF = 0x08000000
+        gw_port = getattr(self, '_gateway_port_val', 5100)
         try:
-            proc = subprocess.run(
-                ['wmic', 'process', 'where',
-                 'name="python.exe" or name="pythonw.exe"',
-                 'get', 'ProcessId,CommandLine', '/FORMAT:CSV'],
-                capture_output=True, text=True, timeout=8,
-                creationflags=0x08000000,
-            )
-            for line in (proc.stdout or "").splitlines():
-                s = line.strip()
-                if not s:
+            result = subprocess.run(
+                'netstat -ano -p tcp',
+                shell=True, capture_output=True, text=True, timeout=10,
+                creationflags=CF)
+            my_pid = str(os.getpid())
+            pids = set()
+            for line in result.stdout.splitlines():
+                if 'LISTENING' not in line:
                     continue
-                if not any(m in s.lower() for m in markers):
+                parts = line.split()
+                if len(parts) < 5:
                     continue
-                parts = s.rsplit(',', 1)
-                if len(parts) == 2:
-                    try:
-                        pid = int(parts[1].strip())
-                        subprocess.run(
-                            ['taskkill', '/F', '/T', '/PID', str(pid)],
-                            capture_output=True, timeout=5,
-                            creationflags=0x08000000,
-                        )
-                    except Exception:
-                        pass
+                try:
+                    port = int(parts[1].rsplit(':', 1)[1])
+                except Exception:
+                    continue
+                if port == gw_port or 8100 <= port <= 8129:
+                    pid = parts[-1]
+                    if pid != my_pid and pid != '0':
+                        pids.add(pid)
+            for pid in pids:
+                try:
+                    subprocess.run(['taskkill', '/F', '/T', '/PID', pid],
+                                   capture_output=True, timeout=5, creationflags=CF)
+                except Exception:
+                    pass
         except Exception:
             pass
 
