@@ -140,6 +140,10 @@ class FlowKitGUI(tk.Tk):
         self._load_settings()
         self._detect_chromes()
 
+        # Kill leftover Chrome/agents from previous run (crash or restart)
+        self._kill_all_chrome()
+        self._kill_flowkit_python()
+
         self._autostart_remaining = 15
         self._autostart_id = None
         if self._autostart_var.get():
@@ -1402,17 +1406,14 @@ class FlowKitGUI(tk.Tk):
         self._pending_restart_id = self.after(15000, self._exec_restart)
 
     def _exec_restart(self):
-        """Replace current process with fresh GUI. Fallback if execv fails."""
+        """Start new GUI process then exit. Safe on Windows (no process chaining)."""
         self._pending_restart_id = None
         try:
-            os.execv(sys.executable, [sys.executable] + sys.argv)
+            subprocess.Popen([sys.executable] + sys.argv,
+                             creationflags=subprocess.CREATE_NEW_PROCESS_GROUP)
         except Exception as e:
-            self._log(f"[RESTART] os.execv failed: {e} — fallback", "ERROR")
-            try:
-                subprocess.Popen([sys.executable] + sys.argv)
-            except Exception:
-                pass
-            os._exit(1)
+            self._log(f"[RESTART] failed: {e}", "ERROR")
+        os._exit(0)
 
     def _on_stop(self):
         """Stop all processes."""

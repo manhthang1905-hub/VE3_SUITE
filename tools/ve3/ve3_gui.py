@@ -2890,17 +2890,14 @@ foreach ($pid in $children) {{
         self.after(15000, self._exec_restart)
 
     def _exec_restart(self):
-        """Replace current process with fresh GUI. Fallback if execv fails."""
+        """Start new GUI process then exit. Safe on Windows (no process chaining)."""
         import sys, subprocess
         try:
-            os.execv(sys.executable, [sys.executable] + sys.argv)
+            subprocess.Popen([sys.executable] + sys.argv,
+                             creationflags=subprocess.CREATE_NEW_PROCESS_GROUP)
         except Exception as e:
-            self._log(f"[RESTART] os.execv failed: {e} — fallback subprocess", "ERROR")
-            try:
-                subprocess.Popen([sys.executable] + sys.argv)
-            except Exception:
-                pass
-            os._exit(1)
+            self._log(f"[RESTART] failed: {e}", "ERROR")
+        os._exit(0)
 
     def refresh_process_monitor_now(self):
         self._start_process_monitor_refresh(manual=True)
