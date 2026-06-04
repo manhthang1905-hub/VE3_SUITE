@@ -1825,7 +1825,7 @@ class FlowKitGUI(tk.Tk):
         except Exception as e:
             print(f"[UPDATE] GitHub API error: {e}")
         try:
-            url = f"https://raw.githubusercontent.com/{GITHUB_REPO}/main/server/flowkit/VERSION.txt"
+            url = f"https://raw.githubusercontent.com/{GITHUB_REPO}/main/VERSION"
             req = Request(url, headers={"User-Agent": "FlowKit-Updater"})
             with urlopen(req, timeout=15, context=ctx) as resp:
                 return resp.read().decode("utf-8").strip()
@@ -1899,7 +1899,6 @@ class FlowKitGUI(tk.Tk):
             git_root = SUITE_ROOT if not _IS_STANDALONE else BASE_DIR
             git_ok = False
             if git_available:
-                # Init git repo if not exists (one-time setup for VMs)
                 git_dir = Path(git_root) / ".git"
                 if not git_dir.exists():
                     self._log("Git init (lan dau)...", "INFO")
@@ -1920,21 +1919,20 @@ class FlowKitGUI(tk.Tk):
                         ["git", "remote", "set-url", "origin", GITHUB_GIT_URL],
                         cwd=str(git_root), capture_output=True, timeout=10,
                     )
-                # Fetch + reset (fast — only downloads changes)
                 self._log("Git fetch...", "INFO")
-                for cmd in [
-                    ["git", "fetch", "origin", "main"],
-                    ["git", "checkout", "main"],
-                    ["git", "reset", "--hard", "origin/main"],
-                ]:
-                    r = subprocess.run(cmd, cwd=str(git_root),
-                                       capture_output=True, text=True, timeout=120)
-                    if r.returncode != 0:
-                        self._log(f"Git error: {' '.join(cmd)}: {r.stderr[:100]}", "WARN")
-                        break
+                r = subprocess.run(["git", "fetch", "origin", "main"],
+                                   cwd=str(git_root), capture_output=True, text=True, timeout=120)
+                if r.returncode == 0:
+                    # -B: create/reset branch, -f: force overwrite local changes
+                    r2 = subprocess.run(["git", "checkout", "-f", "-B", "main", "origin/main"],
+                                        cwd=str(git_root), capture_output=True, text=True, timeout=60)
+                    if r2.returncode == 0:
+                        git_ok = True
+                        self._log("Git update OK", "OK")
+                    else:
+                        self._log(f"Git checkout error: {r2.stderr[:100]}", "WARN")
                 else:
-                    git_ok = True
-                    self._log("Git update OK", "OK")
+                    self._log(f"Git fetch error: {r.stderr[:100]}", "WARN")
 
             if not git_ok:
                 import ssl
