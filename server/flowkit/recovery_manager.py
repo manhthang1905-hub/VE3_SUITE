@@ -127,6 +127,7 @@ class RecoveryManager:
         self._fa_all_names: List[str] = []  # ordered list of ALL instance names
         self._fa_swap_lock = asyncio.Lock()
         self._fa_round_robin_idx = 0
+        self._fa_starting_since: Dict[str, float] = {}
 
         if self._fa_enabled:
             self._fa_all_names = [cfg["name"] for cfg in instances_config]
@@ -299,7 +300,12 @@ class RecoveryManager:
             return
 
         task = asyncio.create_task(self._run_recovery(instance_name))
-        task.add_done_callback(lambda t, n=instance_name: self._recovery_tasks.pop(n, None))
+        def _on_done(t, n=instance_name):
+            self._recovery_tasks.pop(n, None)
+            st = self.states.get(n)
+            if st:
+                st.recovering = False
+        task.add_done_callback(_on_done)
         self._recovery_tasks[instance_name] = task
 
     def trigger_self_heal(self, instance_name: str, rotate_ipv6: bool = False):
@@ -327,7 +333,12 @@ class RecoveryManager:
             return
 
         task = asyncio.create_task(self._run_self_heal(instance_name, rotate_ipv6))
-        task.add_done_callback(lambda t, n=instance_name: self._recovery_tasks.pop(n, None))
+        def _on_heal_done(t, n=instance_name):
+            self._recovery_tasks.pop(n, None)
+            st = self.states.get(n)
+            if st:
+                st.recovering = False
+        task.add_done_callback(_on_heal_done)
         self._recovery_tasks[instance_name] = task
 
     async def _run_self_heal(self, instance_name: str, rotate_ipv6: bool = False):
@@ -479,6 +490,7 @@ class RecoveryManager:
                         standby_name = name
                         self._fa_round_robin_idx = (idx + 1) % n
                         self._fa_states[standby_name] = "starting"
+                        self._fa_starting_since[standby_name] = time.time()
                         break
 
             if not standby_name:
@@ -505,12 +517,12 @@ class RecoveryManager:
             success = await self._restart_chrome_instance(standby_name, new_ipv6=new_ip)
 
             async with self._fa_swap_lock:
+                self._fa_starting_since.pop(standby_name, None)
                 if success:
                     self._fa_states[standby_name] = "active"
                     logger.info("[FA-Swap] %s -> %s: swap OK", instance_name, standby_name)
                     return True
                 else:
-                    # Back to standby — it wasn't 403'd, just failed to start
                     self._fa_states[standby_name] = "standby"
                     tried.add(standby_name)
                     logger.warning("[FA-Swap] %s -> %s: FAILED, trying next...",

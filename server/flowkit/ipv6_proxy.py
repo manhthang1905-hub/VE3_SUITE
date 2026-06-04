@@ -418,6 +418,10 @@ class IPv6SocksProxy:
             return sock
 
         except Exception as e:
+            try:
+                sock.close()
+            except Exception:
+                pass
             self._connect_failures += 1
             if not getattr(self, '_connect_fail_logged', 0) or getattr(self, '_connect_fail_logged', 0) < 3:
                 self.log(f"[IPv6-Proxy] IPv6 connect failed to {host}:{port}: {e}")
@@ -477,10 +481,11 @@ class IPv6SocksProxy:
         except Exception:
             pass
         finally:
-            try:
-                remote.close()
-            except Exception:
-                pass
+            for s in (remote, client):
+                try:
+                    s.close()
+                except Exception:
+                    pass
 
 
 # Global proxy instance

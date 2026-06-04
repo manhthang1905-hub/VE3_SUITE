@@ -271,8 +271,10 @@ def _pick_instance_for_retry(exclude: list) -> Optional[AgentInstance]:
 
 async def health_check_loop():
     """Periodically check agent health + self-heal unhealthy instances."""
-    async with httpx.AsyncClient(timeout=5.0) as client:
-        while True:
+    while True:
+      try:
+        async with httpx.AsyncClient(timeout=5.0) as client:
+         while True:
             for inst in instances:
                 if not inst.enabled:
                     continue
@@ -292,10 +294,10 @@ async def health_check_loop():
                 inst.last_health_check = time.time()
 
             # Self-heal: auto-restart instances that are down
-            # Only for instances that WERE healthy before (not during initial startup)
-            # Require 3 consecutive unhealthy checks (~30s) before triggering
-            UNHEALTHY_THRESHOLD = 3
-            if _recovery_manager:
+            # Wrapped in try-except — this section must never kill health_check_loop
+            try:
+              UNHEALTHY_THRESHOLD = 3
+              if _recovery_manager:
                 now = time.time()
                 for inst in instances:
                     if not inst.enabled:
@@ -350,8 +352,13 @@ async def health_check_loop():
                     delay = min(60 * inst.self_heal_failures, 300)
                     inst.next_self_heal_at = now + delay
 
-            # Proxy health check: detect dead IPv6 (y het chrome_pool.py lines 1017-1025)
-            if _recovery_manager:
+            except Exception as e:
+                logger.exception("[HealthCheck] self-heal error: %s", e)
+
+            # Proxy health check + FA state audit
+            try:
+              # Detect dead IPv6
+              if _recovery_manager:
                 for inst in instances:
                     if not inst.enabled:
                         continue
@@ -375,32 +382,52 @@ async def health_check_loop():
                     except Exception:
                         pass
 
-            # Task watchdog: kill stuck tasks (y het chrome_pool.py lines 906-927)
-            now = time.time()
-            for task_id, task in list(tasks.items()):
-                if task["status"] != "processing":
-                    continue
-                started_at = task.get("started_at", 0)
-                if not started_at:
-                    continue
-                elapsed = now - started_at
-                if elapsed > TASK_WATCHDOG_TIMEOUT:
-                    worker_name = task.get("worker", "?")
-                    task["status"] = "failed"
-                    task["error"] = f"Task watchdog timeout after {int(elapsed)}s"
-                    stats["total_failed"] += 1
-                    logger.warning(
-                        "[Watchdog] %s: task %s timeout (%.0fs > %ds) → mark failed, trigger self-heal",
-                        worker_name, task_id[:8], elapsed, TASK_WATCHDOG_TIMEOUT,
-                    )
-                    for inst in instances:
-                        if inst.name == worker_name:
-                            inst.total_failed += 1
-                            if _recovery_manager:
-                                _recovery_manager.trigger_self_heal(inst.name)
-                            break
+              # FA state audit: reset "starting" stuck > 5min
+              if _recovery_manager and _recovery_manager._fa_enabled:
+                  now_fa = time.time()
+                  for name in _recovery_manager._fa_all_names:
+                      fa_st = _recovery_manager._fa_states.get(name)
+                      if fa_st == "starting":
+                          since = _recovery_manager._fa_starting_since.get(name, 0)
+                          if since and now_fa - since > 300:
+                              _recovery_manager._fa_states[name] = "standby"
+                              _recovery_manager._fa_starting_since.pop(name, None)
+                              logger.warning("[FA-Audit] %s: stuck 'starting' >5min → standby", name)
+            except Exception as e:
+                logger.exception("[HealthCheck] proxy/FA-audit error: %s", e)
+
+            # Task watchdog: kill stuck tasks
+            try:
+                now = time.time()
+                for task_id, task in list(tasks.items()):
+                    if task["status"] != "processing":
+                        continue
+                    started_at = task.get("started_at", 0)
+                    if not started_at:
+                        continue
+                    elapsed = now - started_at
+                    if elapsed > TASK_WATCHDOG_TIMEOUT:
+                        worker_name = task.get("worker", "?")
+                        task["status"] = "failed"
+                        task["error"] = f"Task watchdog timeout after {int(elapsed)}s"
+                        stats["total_failed"] += 1
+                        logger.warning(
+                            "[Watchdog] %s: task %s timeout (%.0fs > %ds) → mark failed, trigger self-heal",
+                            worker_name, task_id[:8], elapsed, TASK_WATCHDOG_TIMEOUT,
+                        )
+                        for inst in instances:
+                            if inst.name == worker_name:
+                                inst.total_failed += 1
+                                if _recovery_manager:
+                                    _recovery_manager.trigger_self_heal(inst.name)
+                                break
+            except Exception as e:
+                logger.exception("[HealthCheck] watchdog error: %s", e)
 
             await asyncio.sleep(10)
+      except Exception as e:
+        logger.exception("[HealthCheck] fatal error, restarting in 30s: %s", e)
+        await asyncio.sleep(30)
 
 
 # ─── Task Processing ────────────────────────────────────────
@@ -1478,21 +1505,28 @@ async def trigger_recovery(name: str):
 async def cleanup_loop():
     """Periodically clean old tasks to prevent memory leak."""
     while True:
-        await asyncio.sleep(300)  # every 5 min
-        cutoff = time.time() - 600  # 10 min old (was 1 hour — too long for 24/7)
-        stale = [tid for tid, t in tasks.items()
-                 if t.get("created_at", 0) < cutoff and t["status"] in ("completed", "failed")]
-        # Also clean tasks stuck in processing/queued for > 30 min (watchdog missed)
-        stuck_cutoff = time.time() - 1800
-        stuck = [tid for tid, t in tasks.items()
-                 if t.get("created_at", 0) < stuck_cutoff and t["status"] in ("processing", "queued")]
-        for tid in stuck:
-            tasks[tid]["status"] = "failed"
-            tasks[tid]["error"] = "Cleanup: stuck task (>30min)"
-        for tid in stale:
-            del tasks[tid]
-        if stale or stuck:
-            logger.info("Cleanup: %d stale removed, %d stuck marked failed", len(stale), len(stuck))
+        await asyncio.sleep(300)
+        try:
+            cutoff = time.time() - 600
+            stale = [tid for tid, t in tasks.items()
+                     if t.get("created_at", 0) < cutoff and t["status"] in ("completed", "failed")]
+            stuck_cutoff = time.time() - 1800
+            stuck = [tid for tid, t in tasks.items()
+                     if t.get("created_at", 0) < stuck_cutoff and t["status"] in ("processing", "queued")]
+            for tid in stuck:
+                tasks[tid]["status"] = "failed"
+                tasks[tid]["error"] = "Cleanup: stuck task (>30min)"
+            for tid in stale + stuck:
+                tasks.pop(tid, None)
+            if stale or stuck:
+                logger.info("Cleanup: %d stale + %d stuck removed (total tasks: %d)",
+                            len(stale), len(stuck), len(tasks))
+            # Clamp processing_count — prevent negative drift over days
+            for inst in instances:
+                if inst.processing_count < 0:
+                    inst.processing_count = 0
+        except Exception as e:
+            logger.exception("[Cleanup] error: %s", e)
 
 
 @app.on_event("startup")

@@ -235,20 +235,24 @@ class IPv6SocksProxy:
             self._rotating = False
 
     def _watch_override_file(self):
-        """Poll .ipv6_override_{port} file every 10s for IP changes from recovery."""
+        """Poll .ipv6_override_{port} file for IP changes from recovery (1s interval)."""
         from pathlib import Path
         override_file = Path(__file__).parent / f".ipv6_override_{self.listen_port}"
+        last_mtime = 0
         while self._running:
             try:
                 if override_file.exists():
-                    new_ip = override_file.read_text().strip()
-                    if new_ip and new_ip != self.ipv6_address:
-                        self.log(f"[IPv6-Proxy] Override detected: {self.ipv6_address} → {new_ip}")
-                        self.set_ipv6(new_ip)
-                        start_ndp_keepalive(new_ip, "", self.listen_port, self.log)
+                    mtime = override_file.stat().st_mtime
+                    if mtime != last_mtime:
+                        new_ip = override_file.read_text().strip()
+                        if new_ip and new_ip != self.ipv6_address:
+                            self.log(f"[IPv6-Proxy] Override detected: {self.ipv6_address} -> {new_ip}")
+                            self.set_ipv6(new_ip)
+                            start_ndp_keepalive(new_ip, "", self.listen_port, self.log)
+                        last_mtime = mtime
             except Exception:
                 pass
-            time.sleep(10)
+            time.sleep(1)
 
     def _accept_loop(self):
         """Accept incoming connections."""
@@ -414,6 +418,10 @@ class IPv6SocksProxy:
             return sock
 
         except Exception as e:
+            try:
+                sock.close()
+            except Exception:
+                pass
             self._connect_failures += 1
             if not getattr(self, '_connect_fail_logged', 0) or getattr(self, '_connect_fail_logged', 0) < 3:
                 self.log(f"[IPv6-Proxy] IPv6 connect failed to {host}:{port}: {e}")
@@ -473,10 +481,11 @@ class IPv6SocksProxy:
         except Exception:
             pass
         finally:
-            try:
-                remote.close()
-            except Exception:
-                pass
+            for s in (remote, client):
+                try:
+                    s.close()
+                except Exception:
+                    pass
 
 
 # Global proxy instance
