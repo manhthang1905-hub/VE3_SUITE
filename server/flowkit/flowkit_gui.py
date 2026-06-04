@@ -110,8 +110,12 @@ class FlowKitGUI(tk.Tk):
         # Process supervision — track by role for auto-restart
         self._gateway_proc = None
         self._gateway_port_val = 5100
-        self._agent_procs = {}   # name → Popen
-        self._inst_configs = {}  # name → inst config dict
+        self._gateway_log_fh = None
+        self._gateway_tail_gen = 0
+        self._agent_procs = {}    # name → Popen
+        self._agent_log_fhs = {}  # name → file handle
+        self._inst_configs = {}   # name → inst config dict
+        self._restart_times = {}  # "gateway"/name → list of timestamps
 
         self.protocol("WM_DELETE_WINDOW", self._on_close)
 
@@ -1199,8 +1203,17 @@ class FlowKitGUI(tk.Tk):
         env['WS_PORT'] = str(inst['ws_port'])
         env['INSTANCE_NAME'] = inst['name']
 
+        # Close old log handle if restarting (prevent handle leak)
+        old_fh = self._agent_log_fhs.pop(inst['name'], None)
+        if old_fh:
+            try:
+                old_fh.close()
+            except Exception:
+                pass
+
         log_file = LOG_DIR / f"{inst['name']}.log"
         fh = open(log_file, 'a', encoding='utf-8')
+        self._agent_log_fhs[inst['name']] = fh
         with self._proc_lock:
             self._log_handles.append(fh)
 
@@ -1235,8 +1248,18 @@ class FlowKitGUI(tk.Tk):
 
     def _start_gateway(self, port: int):
         """Start the gateway."""
+        # Close old log handle if restarting
+        if self._gateway_log_fh:
+            try:
+                self._gateway_log_fh.close()
+            except Exception:
+                pass
+        # Stop old tail thread via generation counter
+        self._gateway_tail_gen += 1
+
         log_file = LOG_DIR / "gateway.log"
         fh = open(log_file, 'a', encoding='utf-8')
+        self._gateway_log_fh = fh
         with self._proc_lock:
             self._log_handles.append(fh)
 
@@ -1254,14 +1277,15 @@ class FlowKitGUI(tk.Tk):
         self._gateway_port_val = port
         self._log(f"Gateway started: port {port} (PID {proc.pid})", "INFO")
 
-        # Tail gateway.log to GUI (show recovery/self-heal/403 messages)
+        # Tail gateway.log to GUI — generation counter prevents duplicate threads
+        my_gen = self._gateway_tail_gen
         def _tail_gateway_log():
             try:
                 with open(log_file, 'r', encoding='utf-8', errors='replace') as rf:
                     rf.seek(0, 2)
-                    while self._started:
+                    while self._started and self._gateway_tail_gen == my_gen:
                         lines = rf.readlines()
-                        for line in lines[-10:]:  # max 10 lines per cycle
+                        for line in lines[-10:]:
                             line = line.strip()
                             if line and any(k in line.upper() for k in [
                                 'RECOVERY', 'SELFHEAL', 'COOLING', 'ROTATE',
@@ -1293,6 +1317,12 @@ class FlowKitGUI(tk.Tk):
             except Exception:
                 pass
         self._log_handles.clear()
+        self._gateway_log_fh = None
+        self._gateway_proc = None
+        self._gateway_tail_gen += 1
+        self._agent_log_fhs.clear()
+        self._agent_procs.clear()
+        self._restart_times.clear()
 
         self._kill_all_chrome()
         self._kill_flowkit_python()
@@ -1420,44 +1450,46 @@ class FlowKitGUI(tk.Tk):
                 self._log(f"[Supervisor] poll error: {e}", "ERROR")
             time.sleep(60)
 
+    def _can_restart(self, key: str) -> bool:
+        """Backoff: max 3 restarts per 5min per process."""
+        now = time.time()
+        times = self._restart_times.get(key, [])
+        times = [t for t in times if now - t < 300]
+        self._restart_times[key] = times
+        if len(times) >= 3:
+            return False
+        times.append(now)
+        return True
+
     def _supervise_processes(self):
         """Auto-restart crashed gateway/agents. Core of 24/7 reliability."""
         # Gateway
         if self._gateway_proc and self._gateway_proc.poll() is not None:
-            self._log("Gateway CRASHED — auto-restarting...", "ERROR")
-            time.sleep(3)
-            self._start_gateway(self._gateway_port_val)
+            if self._can_restart("gateway"):
+                self._log("Gateway CRASHED — auto-restarting...", "ERROR")
+                time.sleep(5)
+                self._start_gateway(self._gateway_port_val)
+            else:
+                self._log("Gateway keeps crashing — pausing restarts for 5min", "ERROR")
 
         # Agents
         for name, proc in list(self._agent_procs.items()):
             if proc.poll() is not None:
                 cfg = self._inst_configs.get(name)
-                if cfg:
+                if cfg and self._can_restart(name):
                     self._log(f"[{name}] Agent CRASHED — auto-restarting...", "ERROR")
                     self._start_agent(cfg)
 
     def _rotate_logs(self):
-        """Truncate log files > 50MB to prevent disk full."""
+        """Check log file sizes. Warn if too large (can't truncate open files on Windows)."""
         try:
-            max_size = 50 * 1024 * 1024
-            keep_size = 5 * 1024 * 1024
             for log_file in LOG_DIR.iterdir():
                 if log_file.suffix != '.log':
                     continue
                 try:
-                    size = log_file.stat().st_size
-                except Exception:
-                    continue
-                if size <= max_size:
-                    continue
-                try:
-                    tail = b""
-                    with open(log_file, 'rb') as f:
-                        f.seek(-keep_size, 2)
-                        tail = f.read()
-                    with open(log_file, 'wb') as f:
-                        f.write(tail)
-                    self._log(f"[LogRotate] {log_file.name}: {size // 1_000_000}MB → {len(tail) // 1_000_000}MB", "INFO")
+                    size_mb = log_file.stat().st_size // (1024 * 1024)
+                    if size_mb > 100:
+                        self._log(f"[LogRotate] {log_file.name} = {size_mb}MB — consider restarting", "WARN")
                 except Exception:
                     pass
         except Exception:
