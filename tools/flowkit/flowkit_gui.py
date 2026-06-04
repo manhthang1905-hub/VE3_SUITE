@@ -143,6 +143,13 @@ class FlowKitGUI(tk.Tk):
         # Kill leftover Chrome/agents from previous run (crash or restart)
         self._kill_all_chrome()
         self._kill_flowkit_python()
+        # Delete stale IPv6 override + health files (prevent dead IP on startup)
+        for pattern in (".ipv6_override_*", ".proxy_health_*"):
+            for f in BASE_DIR.glob(pattern):
+                try:
+                    f.unlink()
+                except Exception:
+                    pass
 
         self._autostart_remaining = 15
         self._autostart_id = None
@@ -1457,6 +1464,12 @@ class FlowKitGUI(tk.Tk):
             except Exception:
                 pass
         self._ipv6_proxies = []
+        # Delete override files (prevent stale IP on next start)
+        for f in BASE_DIR.glob(".ipv6_override_*"):
+            try:
+                f.unlink()
+            except Exception:
+                pass
 
         # Stop NDP keepalive threads
         try:
