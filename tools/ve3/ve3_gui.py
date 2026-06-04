@@ -2867,27 +2867,28 @@ foreach ($pid in $children) {{
         self._auto_restart_at = 0
         self._log("=== AUTO-RESTART 12h — kill all + restart GUI ===", "WARN")
 
-        # Same cleanup as _on_close: kill queue, subprocesses, Chrome, agents
-        try:
-            self.queue_stop_requested = True
-            self.music_stop_requested = True
-            if self.worker:
-                try:
-                    self.worker.stop()
-                except Exception:
-                    pass
-            with self.queue_lock:
-                all_procs = list(self.queue_ve3_procs.values()) + list(self.queue_music_procs.values())
-            for proc in all_procs:
-                if proc and proc.poll() is None:
-                    self._kill_pid_tree(proc.pid)
-            self._kill_own_child_processes()
-            self._kill_extension_instances()
-        except Exception as e:
-            self._log(f"[RESTART] cleanup error: {e}", "ERROR")
+        def _cleanup_and_restart():
+            try:
+                self.queue_stop_requested = True
+                self.music_stop_requested = True
+                if self.worker:
+                    try:
+                        self.worker.stop()
+                    except Exception:
+                        pass
+                with self.queue_lock:
+                    all_procs = list(self.queue_ve3_procs.values()) + list(self.queue_music_procs.values())
+                for proc in all_procs:
+                    if proc and proc.poll() is None:
+                        self._kill_pid_tree(proc.pid)
+                self._kill_own_child_processes()
+                self._kill_extension_instances()
+            except Exception as e:
+                self._log(f"[RESTART] cleanup error: {e}", "ERROR")
+            _time.sleep(15)
+            self._exec_restart()
 
-        self._log("=== Cho 15s roi restart GUI... ===", "WARN")
-        self.after(15000, self._exec_restart)
+        threading.Thread(target=_cleanup_and_restart, daemon=True).start()
 
     def _exec_restart(self):
         """Start new GUI process then exit. Safe on Windows (no process chaining)."""
