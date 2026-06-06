@@ -3450,24 +3450,18 @@ Scene {scene_id}:
         workbook: "PromptWorkbook"
     ) -> "StepResult":
         """
-        Step 8: Tạo 3 thumbnail prompts thu hút nhất dựa vào nội dung câu chuyện.
-
-        Output: sheet 'thumbnail' trong Excel
-        - v1 (portrait_main): Nhân vật chính đẹp/thu hút, người xem muốn hướng tới
-        - v2 (dramatic_scene): Cảnh kịch tính/tò mò nhất, nhân vật chính làm trọng tâm
-        - v3 (youtube_ctr): Công thức CTR YouTube - click-worthy nhất
-
-        Mỗi prompt có annotation nhân vật/bối cảnh như scenes: (nv1.png), (loc1.png)
+        Step 8: Generate 3 scroll-stopping thumbnail prompts using click-psychology formula.
+        Uses: CHARACTER + EMOTIONAL STATE + SOCIAL/INTERNAL CONFLICT + VISUAL SYMBOLISM
         """
         import time
         import re
+        import json
         step_start = time.time()
 
         self._log("\n" + "="*60)
-        self._log("[STEP 8/8] Tao thumbnail prompts...")
+        self._log("[STEP 8/8] Tao thumbnail prompts (v3 click-psychology)...")
         self._log("="*60)
 
-        # Check if already done
         try:
             step8_status = workbook.get_step_status("step_8")
             if step8_status.get("status") == "COMPLETED":
@@ -3478,59 +3472,129 @@ Scene {scene_id}:
         except Exception:
             pass
 
-        # Collect context
         story_analysis = workbook.get_story_analysis() or {}
         characters = workbook.get_characters()
-        locations = workbook.get_locations()
+        scenes = workbook.get_scenes() or []
 
-        # Filter: only non-child characters
         main_chars = [c for c in characters if not c.is_child]
-        # Find protagonist first
         protagonist = next((c for c in main_chars if c.role in ("main", "protagonist", "lead")), None)
         if not protagonist and main_chars:
             protagonist = main_chars[0]
-
         if not protagonist:
-            self._log("  WARN: Khong tim thay nhan vat chinh, dung char dau tien", "WARN")
             if characters:
                 protagonist = characters[0]
             else:
-                self._log("  ERROR: Khong co nhan vat nao!", "ERROR")
                 workbook.update_step_status("step_8", "ERROR", 0, 3, "No characters found")
                 workbook.save()
                 return StepResult("thumbnail_prompts", StepStatus.FAILED, "No characters")
 
-        # Build character info for API
-        char_info_lines = []
-        for c in main_chars[:5]:  # max 5 chars
-            char_info_lines.append(
-                f"  - {c.id} ({c.name}, role={c.role}): {c.character_lock or c.english_prompt}"
-            )
-        chars_info = "\n".join(char_info_lines)
-
-        loc_info_lines = []
-        for loc in (locations or [])[:5]:
-            loc_info_lines.append(f"  - {loc.id} ({loc.name}): {getattr(loc, 'location_lock', '') or getattr(loc, 'english_prompt', '')}")
-        locs_info = "\n".join(loc_info_lines) if loc_info_lines else "  (No locations defined)"
+        top_scenes = sorted(
+            [s for s in scenes if getattr(s, "img_prompt", "")],
+            key=lambda s: len(str(getattr(s, "srt_text", "") or "")),
+            reverse=True,
+        )[:6]
+        scene_brief = "\n".join(
+            f"- scene {getattr(s, 'scene_id', '')}: {str(getattr(s, 'srt_text', '') or '')[:120]}"
+            for s in top_scenes
+        ) or "- (no scene summary)"
 
         context_lock = story_analysis.get("context_lock", "")
-        setting = story_analysis.get("setting", {})
-        themes = story_analysis.get("themes", [])
-        visual_style = story_analysis.get("visual_style", {})
+        title_text = str(self.config.get("title", "") or "").strip()
+        thumb_text = str(self.config.get("text_thumb", "") or "").strip()
+        thumbnail_style = str(self.config.get("thumbnail_style", "") or self.config.get("image_style", "") or "").strip()
 
-        # Build available ref IDs for API
-        char_ids = [c.id for c in main_chars[:5]]
-        loc_ids = [loc.id for loc in (locations or [])[:5]] if locations else []
-
-        prompt = self.topic_prompts.step8_thumbnail(
-            setting=setting, themes=themes, visual_style=visual_style,
-            context_lock=context_lock, protagonist=protagonist,
-            chars_info=chars_info, locs_info=locs_info,
-            char_ids=char_ids, loc_ids=loc_ids
+        example_prompt = (
+            "psychological youtube thumbnail designed for extremely high click-through-rate, "
+            "emotional tension, visual curiosity, cinematic storytelling\n"
+            "use provided character reference, keep consistent branding style\n\n"
+            "scene composition:\n"
+            "one calm character with clean skin standing still in foreground, visibly different from everyone else\n"
+            "surrounding figures in background are tattooed silhouettes, slightly blurred, subtly judging, whispering, or staring\n"
+            "emotional atmosphere: feeling of being different, misunderstood, emotionally strong but isolated\n"
+            "expression/body language matters: slight discomfort, guarded posture, introspective mood, subtle emotional tension\n\n"
+            'visual psychology: create curiosity and emotional contradiction, viewer should instantly wonder "why are they different?"\n\n'
+            "composition: main character large (occupying 35-45% frame), asymmetrical framing, strong focus on face/body posture, background simplified\n"
+            "negative space reserved for text\n\n"
+            "TEXT STYLE (HIGH CTR YOUTUBE):\n"
+            'text: "NO SE TATUAN"\n\n'
+            "typography should feel emotionally charged, not flat\n"
+            '"NO SE" smaller, placed above left like a trigger word\n'
+            '"TATUAN" huge dominant word, partially cropped for impact\n'
+            "bold condensed font (Anton / Bebas Neue style)\n"
+            "black text on vivid yellow blocks (#FFD400)\n"
+            "imperfect alignment for energy, slightly layered composition\n"
+            "subtle depth shadow on yellow blocks only\n"
+            "slight tilt for dynamism (2-4 degrees max)\n"
+            "text should integrate into composition, not float awkwardly\n\n"
+            "cinematic lighting, dramatic contrast, emotional storytelling, subtle vignette, "
+            "eye-catching composition optimized for psychology niche thumbnails\n\n"
+            "youtube thumbnail designed to trigger curiosity, emotional recognition, and controversy\n"
+            "aspect ratio 16:9, ultra sharp"
         )
 
-        self._log(f"  Calling API for 3 thumbnail prompts...")
-        response = self._call_api(prompt, temperature=0.75, max_tokens=4096)
+        prompt_writer = f"""You are an elite YouTube thumbnail prompt writer for psychology niche faceless channels.
+Write 3 image-generation prompts. Your goal is STOPPING THE SCROLL, not beauty.
+
+VIDEO:
+- Title: {title_text or context_lock[:200] or "(untitled)"}
+- Thumbnail text: {thumb_text or "(empty)"}
+- Scene highlights: {scene_brief[:400]}
+- Character reference: {protagonist.id}.png (attached as image — DO NOT describe character appearance)
+- Channel style: {thumbnail_style or "psychology editorial illustration"}
+
+HERE IS A PERFECT EXAMPLE (study FORMAT, LENGTH, STYLE):
+
+---
+{example_prompt}
+---
+
+YOUR TASK: Write 3 prompts in EXACTLY this format. Each must be a DIFFERENT emotional concept.
+
+ABSOLUTE RULES:
+- CHARACTER DESCRIPTION IS FORBIDDEN. The reference image defines the character entirely. In the prompt, refer to the character ONLY as "character" — never add ANY physical descriptors like tiny, round-headed, faceless, small, cute, bean-shaped, white-headed, chubby, etc. The image AI will use the attached reference to know what the character looks like. If you describe the character even slightly, the image AI will create a WRONG character that doesn't match the reference.
+  WRONG: "one tiny round-headed character standing..."
+  WRONG: "a small faceless figure sitting..."
+  CORRECT: "character standing still in foreground..."
+  CORRECT: "character seated cross-legged..."
+- Only describe: POSE, EMOTION, BODY LANGUAGE (keywords like: guarded posture, slight discomfort, introspective mood)
+- Use NEWLINES between sections (not one giant paragraph)
+- Keep each section SHORT and PUNCHY (2-3 lines max per section)
+- Each prompt must have: social conflict OR visual surprise (shadow/reflection/split)
+- Text main word must be emotionally strongest (NEVER grammar words like no/se/the/de/un/au/i)
+- Formula: character + emotional state + social/internal conflict + visual symbolism
+
+TEXT STYLE IS LOCKED — copy this EXACT block into every prompt, only replace the text content and word names:
+
+TEXT STYLE (HIGH CTR YOUTUBE):
+text: "[thumb text here]"
+
+typography should feel emotionally charged, not flat
+"[secondary words]" smaller, placed above left like a trigger word
+"[main word]" huge dominant word, partially cropped for impact
+bold condensed font (Anton / Bebas Neue style)
+black text on vivid yellow blocks (#FFD400)
+imperfect alignment for energy, slightly layered composition
+subtle depth shadow on yellow blocks only
+slight tilt for dynamism (2-4 degrees max)
+text should integrate into composition, not float awkwardly
+
+DO NOT modify, rephrase, or add creative variations to the text style block above. Use it EXACTLY as written.
+
+Return ONLY valid JSON:
+{{
+  "main_word": "emotionally strongest word from thumb text",
+  "secondary_words": "remaining words",
+  "prompts": [
+    {{"version_desc": "portrait_main", "concept": "2-3 words", "img_prompt": "full prompt with newlines"}},
+    {{"version_desc": "dramatic_scene", "concept": "...", "img_prompt": "..."}},
+    {{"version_desc": "youtube_ctr", "concept": "...", "img_prompt": "..."}}
+  ]
+}}
+
+IMPORTANT: Each img_prompt must use \\n for newlines inside the JSON string."""
+
+        self._log(f"  Calling API for 3 scroll-stopping thumbnail prompts...")
+        response = self._call_api(prompt_writer, temperature=0.75, max_tokens=4096)
         if not response:
             self._log("  ERROR: API call failed!", "ERROR")
             workbook.update_step_status("step_8", "ERROR", 0, 3, "API failed")
@@ -3538,55 +3602,55 @@ Scene {scene_id}:
             return StepResult("thumbnail_prompts", StepStatus.FAILED, "API failed")
 
         data = self._extract_json(response)
-        if not data or "thumbnails" not in data:
+        if not isinstance(data, dict) or not isinstance(data.get("prompts"), list):
+            self._log("  First attempt failed, retrying...", "WARN")
+            response = self._call_api(prompt_writer, temperature=0.8, max_tokens=4096)
+            data = self._extract_json(response or "")
+
+        if not isinstance(data, dict) or not isinstance(data.get("prompts"), list):
             self._log("  ERROR: JSON parse failed!", "ERROR")
             workbook.update_step_status("step_8", "ERROR", 0, 3, "JSON parse failed")
             workbook.save()
             return StepResult("thumbnail_prompts", StepStatus.FAILED, "JSON parse failed")
 
-        thumbnails_data = data["thumbnails"]
-        if not thumbnails_data:
-            self._log("  ERROR: Empty thumbnails!", "ERROR")
-            workbook.update_step_status("step_8", "ERROR", 0, 3, "Empty response")
-            workbook.save()
-            return StepResult("thumbnail_prompts", StepStatus.FAILED, "Empty thumbnails")
+        def _postprocess(raw: str) -> str:
+            p = raw.strip()
+            p = re.sub(
+                r"\b(?:one\s+)?(?:tiny|small|little|cute|round-headed|bean-shaped|"
+                r"white-headed|chubby|faceless|minimalist|simple|stick-figure|"
+                r"blob-like|oval-headed|round|large-headed)\s+(?=character\b)",
+                "", p, flags=re.IGNORECASE,
+            )
+            p = re.sub(r"  +", " ", p)
+            if "aspect ratio 16:9" not in p:
+                p += "\n\nyoutube thumbnail designed to trigger curiosity, emotional recognition, and controversy\naspect ratio 16:9, ultra sharp"
+            if "#FFD400" not in p:
+                p = re.sub(r"#[0-9A-Fa-f]{6}", "#FFD400", p, count=1)
+            return p
 
-        # Clear existing thumbnails and save new ones
         workbook.clear_thumbnails()
-
         from modules.excel_manager import Thumbnail
         saved = 0
-        for item in thumbnails_data[:3]:
-            thumb_id = int(item.get("thumb_id", saved + 1))
+
+        for idx, item in enumerate(data["prompts"][:3], 1):
             img_prompt = str(item.get("img_prompt", "")).strip()
-            if not img_prompt:
+            if not img_prompt or len(img_prompt) < 100:
                 continue
+            img_prompt = _postprocess(img_prompt)
 
-            # Parse reference files from prompt (same logic as scenes)
-            chars_used = str(item.get("characters_used", "")).strip()
-            loc_used = str(item.get("location_used", "")).strip()
+            ref_files = [f"{protagonist.id}.png"]
 
-            # Build reference_files list
-            ref_files = []
-            char_ids_in_prompt = re.findall(r'\(([nN][vV]_?\d+)\.png\)', img_prompt)
-            loc_ids_in_prompt = re.findall(r'\(([lL][oO][cC]_?\d+)\.png\)', img_prompt)
-            for cid in set(char_ids_in_prompt):
-                ref_files.append(f"nv/{cid}.png")
-            for lid in set(loc_ids_in_prompt):
-                ref_files.append(f"loc/{lid}.png")
-
-            import json
             thumb = Thumbnail(
-                thumb_id=thumb_id,
-                version_desc=str(item.get("version_desc", Thumbnail.VERSION_DESCS.get(thumb_id, f"v{thumb_id}"))),
+                thumb_id=idx,
+                version_desc=str(item.get("version_desc", f"variant_{idx}")),
                 img_prompt=img_prompt,
-                characters_used=chars_used,
-                location_used=loc_used,
-                reference_files=json.dumps(ref_files) if ref_files else "",
+                characters_used=protagonist.id,
+                location_used="",
+                reference_files=json.dumps(ref_files),
             )
             workbook.add_thumbnail(thumb)
             saved += 1
-            self._log(f"  [v{thumb_id}] {thumb.version_desc}: {img_prompt[:80]}...")
+            self._log(f"  [v{idx}] {thumb.version_desc} ({item.get('concept','')}): {img_prompt[:80]}...")
 
         elapsed = round(time.time() - step_start, 1)
         workbook.update_step_status("step_8", "COMPLETED", saved, 3, f"{elapsed}s - {saved} thumbnails")

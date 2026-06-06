@@ -7787,18 +7787,15 @@ OUTPUT RULES:
         scene_brief: str,
     ) -> "StepResult":
         """
-        Generate psychology thumbnails with multi-step pipeline:
-        1. Extract CTR concept
-        2. Create visual scene
-        3. Design text layout
-        4. Combine into final prompt
-        5. Critic check
-        6. Rewrite if needed
+        Generate 3 genuinely different psychology thumbnail prompts.
+        Uses click-psychology formula: CHARACTER + EMOTIONAL CONTRADICTION +
+        SOCIAL/INTERNAL CONFLICT + VISUAL SYMBOLISM + HIGH CTR TYPOGRAPHY.
+        Goal is STOPPING THE SCROLL, not beauty.
         """
         import json
         from modules.excel_manager import Thumbnail
 
-        self._log(f"  [PSY-THUMB] Using {self.topic} thumbnail pipeline")
+        self._log(f"  [PSY-THUMB] Using {self.topic} thumbnail pipeline v3 (click-psychology)")
         style = self.psychology_style_profile or {}
         image_style = style.get("image_style", "")
         thumbnail_style = style.get("thumbnail_style", image_style)
@@ -7814,7 +7811,6 @@ OUTPUT RULES:
                 "no text",
                 "no extra text except the exact requested thumbnail text",
             )
-        # Resolve audience language for this channel (e.g. Spanish, Japanese, etc.)
         channel = resolve_psychology_reference_channel(
             self.config.get("reference_channel") or "", code,
         )
@@ -7822,228 +7818,320 @@ OUTPUT RULES:
         self._log(f"  [PSY-THUMB] Channel={channel}, language={channel_language}")
         audience_contract = self._audience_contract(strict=True)
 
-        # STEP 1: Extract CTR concept
-        concept_prompt = f"""
-You are a YouTube thumbnail strategist for psychology explainer channels.
+        # --- STEP 1: DeepSeek writes 3 complete scroll-stopping prompts directly ---
+        example_prompt = (
+            "psychological youtube thumbnail designed for extremely high click-through-rate, "
+            "emotional tension, visual curiosity, cinematic storytelling\n"
+            "use provided character reference, keep consistent branding style\n\n"
+            "scene composition:\n"
+            "one calm character with clean skin standing still in foreground, visibly different from everyone else\n"
+            "surrounding figures in background are tattooed silhouettes, slightly blurred, subtly judging, whispering, or staring\n"
+            "emotional atmosphere: feeling of being different, misunderstood, emotionally strong but isolated\n"
+            "expression/body language matters: slight discomfort, guarded posture, introspective mood, subtle emotional tension\n\n"
+            'visual psychology: create curiosity and emotional contradiction, viewer should instantly wonder "why are they different?"\n\n'
+            "composition: main character large (occupying 35-45% frame), asymmetrical framing, strong focus on face/body posture, background simplified\n"
+            "negative space reserved for text\n\n"
+            "TEXT STYLE (HIGH CTR YOUTUBE):\n"
+            'text: "NO SE TATUAN"\n\n'
+            "typography should feel emotionally charged, not flat\n"
+            '"NO SE" smaller, placed above left like a trigger word\n'
+            '"TATUAN" huge dominant word, partially cropped for impact\n'
+            "bold condensed font (Anton / Bebas Neue style)\n"
+            "black text on vivid yellow blocks (#FFD400)\n"
+            "imperfect alignment for energy, slightly layered composition\n"
+            "subtle depth shadow on yellow blocks only\n"
+            "slight tilt for dynamism (2-4 degrees max)\n"
+            "text should integrate into composition, not float awkwardly\n\n"
+            "cinematic lighting, dramatic contrast, emotional storytelling, subtle vignette, "
+            "eye-catching composition optimized for psychology niche thumbnails\n\n"
+            "youtube thumbnail designed to trigger curiosity, emotional recognition, and controversy\n"
+            "aspect ratio 16:9, ultra sharp"
+        )
 
-Input:
+        # Adapt niche description based on topic
+        topic_lower = (self.topic or "psychology").lower()
+        if "finance" in topic_lower or "history" in topic_lower:
+            niche_desc = "financial history and economics education"
+            niche_triggers = (
+                "High-CTR finance thumbnails trigger:\n"
+                "- revelation (\"I didn't know that about money\")\n"
+                "- contrarian shock (\"everything you believed is WRONG\")\n"
+                "- hidden power dynamics (\"who really controls this?\")\n"
+                "- data surprise (\"these numbers don't add up\")\n"
+                "- historical irony (\"history repeated itself and nobody noticed\")"
+            )
+        elif "success" in topic_lower:
+            niche_desc = "success mindset and self-improvement"
+            niche_triggers = (
+                "High-CTR success thumbnails trigger:\n"
+                "- aspiration gap (\"they have what I want\")\n"
+                "- uncomfortable truth (\"the real reason you're stuck\")\n"
+                "- before/after contrast (\"the invisible shift\")\n"
+                "- social comparison (\"why they succeeded and you didn't\")\n"
+                "- secret knowledge (\"the one thing nobody tells you\")"
+            )
+        else:
+            niche_desc = "psychology, human behavior, and emotional content"
+            niche_triggers = (
+                "High-CTR psychology thumbnails trigger:\n"
+                "- curiosity (\"what's happening here?\")\n"
+                "- emotional discomfort (\"I've felt this\")\n"
+                "- recognition (\"that's me!\")\n"
+                "- social judgment (\"why are they looking at them like that?\")\n"
+                "- hidden truth (\"there's something deeper here\")"
+            )
+
+        prompt_writer = f"""You are an elite YouTube thumbnail prompt writer for {niche_desc} faceless channels.
+Write 3 image-generation prompts. Your goal is STOPPING THE SCROLL, not beauty.
+
+{niche_triggers}
+
+VIDEO:
 - Title: {sheet_title or "(empty)"}
 - Thumbnail text: {sheet_text_thumb or "(empty)"}
+- Scene highlights: {scene_brief[:400]}
+- Character reference: {main_char.id}.png (attached as image — DO NOT describe character appearance)
+- Channel style: {thumbnail_style}
 {audience_contract}
 
-Extract the core psychological hook for a high-CTR thumbnail.
+HERE IS A PERFECT EXAMPLE of what your output should look like (study the FORMAT, LENGTH, and STYLE):
+
+---
+{example_prompt}
+---
+
+YOUR TASK: Write 3 prompts in EXACTLY this format. Each must be a DIFFERENT emotional concept.
+
+ABSOLUTE RULES:
+- CHARACTER DESCRIPTION IS FORBIDDEN. The reference image defines the character entirely. In the prompt, refer to the character ONLY as "character" — never add ANY physical descriptors like tiny, round-headed, faceless, small, cute, bean-shaped, white-headed, chubby, etc. The image AI will use the attached reference to know what the character looks like. If you describe the character even slightly, the image AI will create a WRONG character that doesn't match the reference.
+  WRONG: "one tiny round-headed character standing..."
+  WRONG: "a small faceless figure sitting..."
+  CORRECT: "character standing still in foreground..."
+  CORRECT: "character seated cross-legged..."
+- Only describe: POSE, EMOTION, BODY LANGUAGE (keywords like: guarded posture, slight discomfort, introspective mood)
+- Use NEWLINES between sections (not one giant paragraph)
+- Keep each section SHORT and PUNCHY (2-3 lines max per section)
+- Each prompt must have: social conflict OR visual surprise (shadow/reflection/split)
+- Text main word must be emotionally strongest (NEVER grammar words like no/se/the/de/un)
+- Formula: character + emotional state + social/internal conflict + visual symbolism
+
+TEXT STYLE IS LOCKED — copy this EXACT block into every prompt, only replace the text content and word names:
+
+TEXT STYLE (HIGH CTR YOUTUBE):
+text: "[thumb text here]"
+
+typography should feel emotionally charged, not flat
+"[secondary words]" smaller, placed above left like a trigger word
+"[main word]" huge dominant word, partially cropped for impact
+bold condensed font (Anton / Bebas Neue style)
+black text on vivid yellow blocks (#FFD400)
+imperfect alignment for energy, slightly layered composition
+subtle depth shadow on yellow blocks only
+slight tilt for dynamism (2-4 degrees max)
+text should integrate into composition, not float awkwardly
+
+DO NOT modify, rephrase, or add creative variations to the text style block above. Use it EXACTLY as written.
 
 Return ONLY valid JSON:
 {{
-  "emotion": "...",
-  "visual_contrast": "...",
-  "concrete_object": "...",
-  "curiosity_trigger": "..."
+  "main_word": "emotionally strongest word from thumb text",
+  "secondary_words": "remaining words",
+  "prompts": [
+    {{"version_desc": "portrait_main", "concept": "2-3 words", "img_prompt": "full prompt with newlines"}},
+    {{"version_desc": "dramatic_scene", "concept": "...", "img_prompt": "..."}},
+    {{"version_desc": "youtube_ctr", "concept": "...", "img_prompt": "..."}}
+  ]
 }}
 
-Rules:
-- emotion: main psychological feeling (anxiety, control, obsession, confusion, etc.)
-- visual_contrast: visual opposition that shows the conflict (clean vs messy, order vs chaos, etc.)
-- concrete_object: 1-2 simple everyday objects that symbolize the concept; choose culturally familiar objects from the AUDIENCE INSIGHT BIBLE whenever possible
-- curiosity_trigger: what makes viewer want to click
+IMPORTANT: Each img_prompt must use \\n for newlines inside the JSON string. Follow the example format EXACTLY."""
+        writer_resp = self._call_api(prompt_writer, temperature=0.75, max_tokens=4000)
+        writer_data = self._extract_json(writer_resp or "")
 
-Keep it simple and thumbnail-readable. No abstract concepts that can't be drawn.
-"""
-        concept_resp = self._call_api(concept_prompt, temperature=0.6, max_tokens=400)
-        concept_data = self._extract_json(concept_resp or "")
-        if not isinstance(concept_data, dict):
-            concept_data = {
-                "emotion": "psychological tension",
-                "visual_contrast": "control vs chaos",
-                "concrete_object": "simple everyday object",
-                "curiosity_trigger": sheet_title or "psychological concept"
-            }
+        if not isinstance(writer_data, dict) or not isinstance(writer_data.get("prompts"), list):
+            self._log("  [PSY-THUMB] Prompt generation failed, retrying...", "WARN")
+            writer_resp = self._call_api(prompt_writer, temperature=0.8, max_tokens=4000)
+            writer_data = self._extract_json(writer_resp or "")
 
-        emotion = str(concept_data.get("emotion", "psychological tension"))
-        visual_contrast = str(concept_data.get("visual_contrast", "control vs chaos"))
-        concrete_object = str(concept_data.get("concrete_object", "simple object"))
+        # Validate main_word is not a filler
+        filler_words = {
+            "THE", "A", "AN", "YOUR", "MY", "HIS", "HER", "ITS", "OUR", "THEIR",
+            "TON", "NON", "CON", "LE", "LA", "LES", "DE", "DU", "UN", "UNE",
+            "DAS", "DIE", "DER", "EIN", "EINE", "DEN", "DEM",
+            "EL", "LOS", "LAS", "TU", "SU", "SE", "QUE", "POR", "PARA", "EN",
+            "IL", "LO", "TI", "I", "GLI", "AL", "DEL",
+            "NO", "NOT", "AND", "OR", "BUT", "IS", "ARE", "WAS", "IT",
+        }
 
-        # STEP 2: Create visual scene
-        scene_prompt = f"""
-You are a visual director for psychology YouTube thumbnails in a fixed channel style.
+        if isinstance(writer_data, dict):
+            mw = str(writer_data.get("main_word", "")).strip().upper()
+            if mw in filler_words:
+                words = (sheet_text_thumb or "").strip().upper().split()
+                meaningful = [w for w in words if w not in filler_words and len(w) > 2]
+                if meaningful:
+                    writer_data["main_word"] = meaningful[0]
 
-Create a thumbnail scene description.
+        # Post-process each prompt to ensure quality
+        def _postprocess_thumb_prompt(raw: str) -> str:
+            import re as _re
+            p = raw.strip()
+            # Strip character appearance descriptors before "character"
+            p = _re.sub(
+                r"\b(?:one\s+)?(?:tiny|small|little|cute|round-headed|bean-shaped|"
+                r"white-headed|chubby|faceless|minimalist|simple|stick-figure|"
+                r"blob-like|oval-headed|round|large-headed)\s+(?=character\b)",
+                "", p, flags=_re.IGNORECASE,
+            )
+            # Also strip "a/the [adj] character" patterns
+            p = _re.sub(
+                r"\b(?:a|the|one)\s+(?:tiny|small|little|cute|round-headed|"
+                r"bean-shaped|white-headed|chubby|faceless)\s+(?=character\b)",
+                "", p, flags=_re.IGNORECASE,
+            )
+            # Clean up double spaces from removals
+            p = _re.sub(r"  +", " ", p)
+            # Ensure closing lines exist
+            if "aspect ratio 16:9" not in p:
+                p += "\n\nyoutube thumbnail designed to trigger curiosity, emotional recognition, and controversy\naspect ratio 16:9, ultra sharp"
+            if thumbnail_negative_prompt and thumbnail_negative_prompt not in p:
+                p += f"\n{thumbnail_negative_prompt}"
+            # Enforce yellow #FFD400 text blocks
+            p = _re.sub(
+                r"(?:navy|white|red|blue|green|orange|purple|pink)\s*(?:\(#[0-9A-Fa-f]{6}\))?\s*(?:text\s+(?:on|block)|block|pill)",
+                "vivid yellow blocks (#FFD400)",
+                p, flags=_re.IGNORECASE,
+            )
+            if "#FFD400" not in p:
+                p = _re.sub(
+                    r"#[0-9A-Fa-f]{6}",
+                    "#FFD400",
+                    p, count=1,
+                )
+            return p
 
-Input:
-- Title: {sheet_title}
-- Emotion: {emotion}
-- Visual contrast: {visual_contrast}
-- Concrete object: {concrete_object}
-- Channel thumbnail style: {thumbnail_style}
-- Channel image style: {image_style}
-- Negative rules: {thumbnail_negative_prompt}
-{audience_contract}
+        # Build thumbnails from AI response or fallback
+        thumbnails = []
+        if isinstance(writer_data, dict) and isinstance(writer_data.get("prompts"), list):
+            prompts_list = writer_data["prompts"][:3]
+            for idx, p in enumerate(prompts_list, 1):
+                img_prompt = str(p.get("img_prompt", "")).strip()
+                if not img_prompt or len(img_prompt) < 100:
+                    continue
+                img_prompt = _postprocess_thumb_prompt(img_prompt)
+                thumbnails.append({
+                    "thumb_id": idx,
+                    "version_desc": str(p.get("version_desc", f"variant_{idx}")),
+                    "img_prompt": img_prompt,
+                    "characters_used": main_char.id,
+                    "location_used": "",
+                    "reference_files": json.dumps([f"{main_char.id}.png"])
+                })
 
-Return ONLY valid JSON:
-{{
-  "scene_description": "...",
-  "character_placement": "...",
-  "character_emotion": "..."
-}}
-
-Rules:
-- scene_description: describe the environment showing the visual contrast. Keep it simple, thumbnail-readable, and faithful to the channel style.
-- scene_description may use an audience-specific setting, prop, ritual, or metaphor from the AUDIENCE INSIGHT BIBLE only when it strengthens the thumbnail idea; do not add one as a quota.
-- character_placement: where to place {main_char.id} (slightly left, center-left, etc.) to leave negative space for text
-- character_emotion: how {main_char.id} expresses the emotion through posture, tiny face, or surrounding props
-
-Style must be exactly the channel thumbnail/image style above. Do not drift to a shared default TL style.
-Audience fit must be obvious in one glance without adding extra readable text.
-"""
-        scene_resp = self._call_api(scene_prompt, temperature=0.65, max_tokens=500)
-        scene_data = self._extract_json(scene_resp or "")
-        if not isinstance(scene_data, dict):
-            scene_data = {
-                "scene_description": f"channel-style thumbnail environment showing {visual_contrast}",
-                "character_placement": "slightly left or center-left",
-                "character_emotion": f"posture showing {emotion}"
-            }
-
-        scene_desc = str(scene_data.get("scene_description", ""))
-        char_placement = str(scene_data.get("character_placement", "slightly left"))
-        char_emotion = str(scene_data.get("character_emotion", ""))
-
-        # STEP 3: Design text layout
-        text_design_prompt = f"""
-You are a typography designer for high-CTR YouTube thumbnails.
-
-Input text: "{sheet_text_thumb}"
-
-Create text design specification for this {channel_language} text.
-
-Return ONLY valid JSON:
-{{
-  "main_word": "...",
-  "secondary_words": "...",
-  "text_placement": "...",
-  "hierarchy_note": "..."
-}}
-
-Rules:
-- main_word: the most important word(s) that should be VERY LARGE
-- secondary_words: remaining words that should be smaller but still bold
-- text_placement: where to place text (right side, slightly above center, etc.)
-- hierarchy_note: brief note on size/emphasis relationship
-
-The main word will be placed on a yellow rectangle #FFD400, black bold condensed sans-serif.
-"""
-        text_resp = self._call_api(text_design_prompt, temperature=0.5, max_tokens=400)
-        text_data = self._extract_json(text_resp or "")
-        if not isinstance(text_data, dict) or not text_data.get("main_word"):
-            # Fallback: split text_thumb by spaces and take first part as main
+        # Fallback if AI failed
+        if len(thumbnails) < 3:
+            self._log("  [PSY-THUMB] Using fallback prompts", "WARN")
             words = (sheet_text_thumb or "").strip().upper().split()
-            if len(words) >= 2:
-                text_data = {
-                    "main_word": words[0],
-                    "secondary_words": " ".join(words[1:]),
-                    "text_placement": "right side, slightly above center",
-                    "hierarchy_note": "main word very large, secondary smaller"
-                }
-            else:
-                text_data = {
-                    "main_word": sheet_text_thumb.upper() if sheet_text_thumb else "TEXT",
-                    "secondary_words": "",
-                    "text_placement": "right side, center",
-                    "hierarchy_note": "single large word"
-                }
+            meaningful = [w for w in words if w not in filler_words and len(w) > 2]
+            main_word = meaningful[0] if meaningful else (words[0] if words else "?")
+            secondary_words = " ".join(w for w in words if w != main_word)
 
-        main_word = str(text_data.get("main_word", "")).strip()
-        secondary_words = str(text_data.get("secondary_words", "")).strip()
-        text_placement = str(text_data.get("text_placement", "right side, slightly above center"))
-
-        # STEP 4: Combine into final prompt
-        secondary_text_line = ""
-        if secondary_words:
-            secondary_text_line = f'Place "{secondary_words}" smaller but still bold, tightly underneath or slightly offset. It can be black text without a box or on a smaller yellow tag with a layered look.'
-
-        final_prompt_template = f"""
+            fallback_scenes = [
+                ("portrait_main", "emotional isolation",
+                 "character standing still in foreground, visibly different from everyone else\nsurrounding figures in background are silhouettes, slightly blurred, subtly judging, whispering, or staring\nemotional atmosphere: feeling of being different, misunderstood, emotionally strong but isolated\nexpression/body language matters: slight discomfort, guarded posture, introspective mood, subtle emotional tension"),
+                ("dramatic_scene", "inner contradiction",
+                 "character facing a mirror or reflective surface, reflection shows the opposite of who they are\nthe real version and the reflected version create instant visual contradiction\nemotional atmosphere: hidden desire vs presented identity, inner conflict made visible\nexpression/body language matters: curiosity, restraint, one hand reaching toward reflection"),
+                ("youtube_ctr", "hidden truth",
+                 "character sitting alone while their shadow on the wall tells a completely different story\nthe shadow is dramatically different from the character, revealing what they hide inside\nemotional atmosphere: calm exterior hiding intense interior, the gap between visible and hidden\nexpression/body language matters: quiet resignation, head slightly bowed, posture of someone carrying a secret"),
+            ]
+            thumbnails = []
+            for idx, (vd, concept, scene) in enumerate(fallback_scenes, 1):
+                thumbnails.append({
+                    "thumb_id": idx,
+                    "version_desc": vd,
+                    "img_prompt": f"""psychological youtube thumbnail designed for extremely high click-through-rate, emotional tension, visual curiosity, cinematic storytelling
 {thumbnail_style}
 
-Use attached {main_char.id}.png briefly as the character reference; do not re-describe the character. Spend visual detail on the title-specific setting, action, emotion, and metaphor; use audience-specific props only when they clarify the idea.
+use provided character reference, keep consistent branding style
 
-Scene: {scene_desc}. Place {main_char.id} {char_placement}, {char_emotion}, leaving intentional negative space for text on the right. Keep the environment minimal, readable, and specific to the title rather than generic.
+scene composition:
+{scene}
 
-TEXT DESIGN - HIGH CTR REFINED:
-Include the exact {channel_language} text: "{sheet_text_thumb}".
-Place the text on the {text_placement}, not touching the top edge.
-Make "{main_word}" the main focus: very large, bold condensed sans-serif (Anton / Bebas Neue style), black #000000, tight letter spacing.
-Put "{main_word}" on a strong yellow rectangle #FFD400.
-{secondary_text_line}
-Use a slight 2-5 degree rotation for dynamic energy.
-Add a very soft drop shadow only under the yellow rectangle, not heavy.
-No gradients, no glow, no outline on text.
-Text must feel like a bold graphic element, not a caption.
+visual psychology: create curiosity and emotional contradiction, viewer should instantly wonder "why? what is happening here?"
 
-Lighting and rendering must match the channel style. Clean composition, emotionally intriguing, ultra sharp, YouTube thumbnail, aspect ratio 16:9. {thumbnail_negative_prompt}. No camera lens terms, no watermark.
-"""
+composition: main character large (occupying 35-45% frame), asymmetrical framing, strong focus on face/body posture, background simplified
+negative space reserved for text
 
-        # STEP 5: Critic check
-        critic_prompt = f"""
-You are a strict psychology thumbnail QA critic.
+TEXT STYLE (HIGH CTR YOUTUBE):
+text: "{sheet_text_thumb}"
 
-Review this thumbnail prompt and check for violations:
+typography should feel emotionally charged, not flat
+"{secondary_words}" smaller, placed above left like a trigger word
+"{main_word}" huge dominant word, partially cropped for impact
+bold condensed font (Anton / Bebas Neue style)
+black text on vivid yellow blocks (#FFD400)
+imperfect alignment for energy, slightly layered composition
+subtle depth shadow on yellow blocks only
+slight tilt for dynamism (2-4 degrees max)
+text should integrate into composition, not float awkwardly
 
-{final_prompt_template}
+cinematic lighting, dramatic contrast, emotional storytelling, subtle vignette, eye-catching composition optimized for psychology niche thumbnails
+
+youtube thumbnail designed to trigger curiosity, emotional recognition, and controversy
+aspect ratio 16:9, ultra sharp
+{thumbnail_negative_prompt}. No camera lens terms, no watermark.""",
+                    "characters_used": main_char.id,
+                    "location_used": "",
+                    "reference_files": json.dumps([f"{main_char.id}.png"])
+                })
+
+        # --- STEP 2: Critic review — is each concept scroll-stopping? ---
+        all_prompts_text = "\n\n---\n\n".join(
+            f"VARIANT {t['thumb_id']} ({t['version_desc']}):\n{t['img_prompt']}"
+            for t in thumbnails
+        )
+        critic_prompt = f"""You are a ruthless YouTube thumbnail CTR critic. Your standard: 8-12% CTR.
+
+Review these 3 psychology thumbnail prompts. Your goal is NOT beauty — it's stopping the scroll.
+
+{all_prompts_text}
+
+For EACH variant, check:
+1. Does it create EMOTIONAL CONTRADICTION (not just a character standing)?
+2. Is there SOCIAL CONFLICT or VISUAL SURPRISE (other figures, shadow, reflection, split)?
+3. Is the body language described with SHORT KEYWORDS (not verbose essay)?
+4. Does it AVOID describing the character's physical appearance (hair, clothes, body)? It should only describe pose/emotion.
+5. Would someone scrolling at 2AM actually STOP on this?
+6. Does it include exact text "{sheet_text_thumb}"?
+7. Is the prompt CONCISE and PUNCHY (not verbose)?
+
+If a variant is emotionally weak, too verbose, describes character appearance, or is generic — REWRITE the full prompt. Keep the same structure template. Keep it concise.
 
 Return ONLY valid JSON:
 {{
-  "approved": true/false,
-  "issues": ["..."],
-  "fixed_prompt": "..." (only if not approved)
-}}
-
-Check for:
-- Does it violate the channel style or negative rules? (VIOLATION)
-- Does it reference {main_char.id}.png? (REQUIRED)
-- Does it include exact text "{sheet_text_thumb}"? (REQUIRED)
-- Does it specify yellow box #FFD400 for main word? (REQUIRED)
-- Does it specify text placement and typography hierarchy? (REQUIRED)
-- Is it too cluttered or complex for a thumbnail? (VIOLATION)
-- Does it preserve the channel thumbnail style? (REQUIRED)
-
-If violations found, rewrite the prompt to fix them.
-"""
-        critic_resp = self._call_api(critic_prompt, temperature=0.3, max_tokens=1200)
+  "all_different": true/false,
+  "all_scroll_stopping": true/false,
+  "issues": {{
+    "1": ["issues or empty list"],
+    "2": ["issues or empty list"],
+    "3": ["issues or empty list"]
+  }},
+  "fixes": {{
+    "1": "rewritten COMPLETE prompt if issues found, empty string if already strong",
+    "2": "...",
+    "3": "..."
+  }}
+}}"""
+        critic_resp = self._call_api(critic_prompt, temperature=0.3, max_tokens=5000)
         critic_data = self._extract_json(critic_resp or "")
 
-        final_img_prompt = final_prompt_template
-        issues = []
-
         if isinstance(critic_data, dict):
-            if not critic_data.get("approved", True):
-                issues = critic_data.get("issues", [])
-                fixed = str(critic_data.get("fixed_prompt", "")).strip()
-                if fixed and len(fixed) > 200:
-                    final_img_prompt = fixed
-                    self._log(f"  [PSY-THUMB] Critic fixed issues: {'; '.join(issues[:3])}")
-
-        # Create 3 variants with same base prompt but different version_desc
-        thumbnails = []
-        for idx, variant in enumerate([
-            ("portrait_main", "main portrait style"),
-            ("dramatic_scene", "dramatic scene emphasis"),
-            ("youtube_ctr", "maximum CTR optimization")
-        ], 1):
-            version_desc, note = variant
-
-            # Embed text overlay and highlight info into img_prompt since Thumbnail doesn't have those fields
-            variant_prompt = final_img_prompt
-            if idx == 1:
-                variant_prompt = f"[VARIANT: {note}] " + final_img_prompt
-
-            thumbnails.append({
-                "thumb_id": idx,
-                "version_desc": version_desc,
-                "img_prompt": variant_prompt,
-                "characters_used": main_char.id,
-                "location_used": "",
-                "reference_files": json.dumps([f"{main_char.id}.png"])
-            })
+            fixes = critic_data.get("fixes", {})
+            if isinstance(fixes, dict):
+                for i, t in enumerate(thumbnails):
+                    fix_key = str(i + 1)
+                    fixed_prompt = str(fixes.get(fix_key, "")).strip()
+                    if fixed_prompt and len(fixed_prompt) > 200:
+                        t["img_prompt"] = fixed_prompt
+                        self._log(f"  [PSY-THUMB] Critic upgraded variant {fix_key} for higher CTR")
 
         # Save to workbook
         workbook.clear_thumbnails()
@@ -8065,9 +8153,7 @@ If violations found, rewrite the prompt to fix them.
             saved += 1
 
         workbook.save()
-        self._log(f"  [PSY-THUMB] Generated {saved} {self.topic} thumbnails")
-        if issues:
-            self._log(f"  [PSY-THUMB] Issues fixed: {'; '.join(issues[:3])}")
+        self._log(f"  [PSY-THUMB] Generated {saved} distinct {self.topic} thumbnails")
 
         return StepResult("thumbnail_prompts", StepStatus.COMPLETED, f"{saved} psychology thumbnails generated")
 
@@ -8117,19 +8203,17 @@ If violations found, rewrite the prompt to fix them.
             scene_lines.append(f"- scene {sid}: {txt}")
         scene_brief = "\n".join(scene_lines) if scene_lines else "- (no scene summary)"
 
-        is_psychology = self._is_styled
+        # All topics use the scroll-stopping thumbnail pipeline
+        return self._generate_psychology_thumbnails(
+            code=code,
+            workbook=workbook,
+            main_char=main_char,
+            sheet_title=sheet_title,
+            sheet_text_thumb=sheet_text_thumb,
+            scene_brief=scene_brief,
+        )
 
-        if is_psychology:
-            return self._generate_psychology_thumbnails(
-                code=code,
-                workbook=workbook,
-                main_char=main_char,
-                sheet_title=sheet_title,
-                sheet_text_thumb=sheet_text_thumb,
-                scene_brief=scene_brief,
-            )
-
-        # Story thumbnail generation continues below with existing logic
+        # Legacy story thumbnail generation below (no longer used)
         def _truncate_words(text: str, limit: int = 90) -> str:
             s = re.sub(r"\s+", " ", str(text or "")).strip()
             if len(s) <= limit:
