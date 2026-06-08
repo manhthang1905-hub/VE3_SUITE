@@ -3503,6 +3503,18 @@ Scene {scene_id}:
         thumb_text = str(self.config.get("text_thumb", "") or "").strip()
         thumbnail_style = str(self.config.get("thumbnail_style", "") or self.config.get("image_style", "") or "").strip()
 
+        # Detect text style tier from channel palette for optimal CTR
+        _ts_lower = thumbnail_style.lower()
+        if "pencil" in _ts_lower and "white paper" in _ts_lower:
+            _text_color_desc = "white text on vivid red blocks (#FF3B30)"
+            _text_shadow_desc = "subtle depth shadow on red blocks only"
+            _enforce_hex = "#FF3B30"
+        else:
+            _text_color_desc = "black text on vivid yellow blocks (#FFD400)"
+            _text_shadow_desc = "subtle depth shadow on yellow blocks only"
+            _enforce_hex = "#FFD400"
+        self._log(f"  Text tier: {_text_color_desc}")
+
         example_prompt = (
             "psychological youtube thumbnail designed for extremely high click-through-rate, "
             "emotional tension, visual curiosity, cinematic storytelling\n"
@@ -3521,9 +3533,9 @@ Scene {scene_id}:
             '"NO SE" smaller, placed above left like a trigger word\n'
             '"TATUAN" huge dominant word, partially cropped for impact\n'
             "bold condensed font (Anton / Bebas Neue style)\n"
-            "black text on vivid yellow blocks (#FFD400)\n"
+            f"{_text_color_desc}\n"
             "imperfect alignment for energy, slightly layered composition\n"
-            "subtle depth shadow on yellow blocks only\n"
+            f"{_text_shadow_desc}\n"
             "slight tilt for dynamism (2-4 degrees max)\n"
             "text should integrate into composition, not float awkwardly\n\n"
             "cinematic lighting, dramatic contrast, emotional storytelling, subtle vignette, "
@@ -3572,9 +3584,9 @@ typography should feel emotionally charged, not flat
 "[secondary words]" smaller, placed above left like a trigger word
 "[main word]" huge dominant word, partially cropped for impact
 bold condensed font (Anton / Bebas Neue style)
-black text on vivid yellow blocks (#FFD400)
+{_text_color_desc}
 imperfect alignment for energy, slightly layered composition
-subtle depth shadow on yellow blocks only
+{_text_shadow_desc}
 slight tilt for dynamism (2-4 degrees max)
 text should integrate into composition, not float awkwardly
 
@@ -3624,8 +3636,15 @@ IMPORTANT: Each img_prompt must use \\n for newlines inside the JSON string."""
             p = re.sub(r"  +", " ", p)
             if "aspect ratio 16:9" not in p:
                 p += "\n\nyoutube thumbnail designed to trigger curiosity, emotional recognition, and controversy\naspect ratio 16:9, ultra sharp"
-            if "#FFD400" not in p:
-                p = re.sub(r"#[0-9A-Fa-f]{6}", "#FFD400", p, count=1)
+            if _enforce_hex == "#FFD400":
+                if "#FFD400" not in p:
+                    p = re.sub(r"#[0-9A-Fa-f]{6}", "#FFD400", p, count=1)
+            else:
+                p = p.replace("#FFD400", _enforce_hex)
+                p = re.sub(r"vivid yellow blocks", "vivid red blocks", p, flags=re.IGNORECASE)
+                p = re.sub(r"yellow blocks", "red blocks", p, flags=re.IGNORECASE)
+                if _enforce_hex not in p:
+                    p = re.sub(r"#[0-9A-Fa-f]{6}", _enforce_hex, p, count=1)
             return p
 
         workbook.clear_thumbnails()

@@ -154,6 +154,26 @@ CHANNEL_LANGUAGE_MAP = {
     "MT1-T8": "Korean",
     "MT1-T9": "Italian",
     "MT1-T10": "Turkish",
+    "TL2-T1": "Spanish",
+    "TL2-T2": "Vietnamese",
+    "TL2-T3": "English",
+    "TL2-T4": "French",
+    "TL2-T5": "German",
+    "TL2-T6": "Portuguese",
+    "TL2-T7": "Japanese",
+    "TL2-T8": "Korean",
+    "TL2-T9": "Italian",
+    "TL2-T10": "Turkish",
+    "TL3-T1": "Spanish",
+    "TL3-T2": "Vietnamese",
+    "TL3-T3": "English",
+    "TL3-T4": "French",
+    "TL3-T5": "German",
+    "TL3-T6": "Portuguese",
+    "TL3-T7": "Japanese",
+    "TL3-T8": "Korean",
+    "TL3-T9": "Italian",
+    "TL3-T10": "Turkish",
 }
 
 
@@ -7811,6 +7831,19 @@ OUTPUT RULES:
                 "no text",
                 "no extra text except the exact requested thumbnail text",
             )
+
+        # Detect text style tier from channel palette for optimal CTR
+        _ts_lower = thumbnail_style.lower()
+        if "pencil" in _ts_lower and "white paper" in _ts_lower:
+            _text_color_desc = "white text on vivid red blocks (#FF3B30)"
+            _text_shadow_desc = "subtle depth shadow on red blocks only"
+            _enforce_hex = "#FF3B30"
+        else:
+            _text_color_desc = "black text on vivid yellow blocks (#FFD400)"
+            _text_shadow_desc = "subtle depth shadow on yellow blocks only"
+            _enforce_hex = "#FFD400"
+        self._log(f"  [PSY-THUMB] Text tier: {_text_color_desc}")
+
         channel = resolve_psychology_reference_channel(
             self.config.get("reference_channel") or "", code,
         )
@@ -7837,9 +7870,9 @@ OUTPUT RULES:
             '"NO SE" smaller, placed above left like a trigger word\n'
             '"TATUAN" huge dominant word, partially cropped for impact\n'
             "bold condensed font (Anton / Bebas Neue style)\n"
-            "black text on vivid yellow blocks (#FFD400)\n"
+            f"{_text_color_desc}\n"
             "imperfect alignment for energy, slightly layered composition\n"
-            "subtle depth shadow on yellow blocks only\n"
+            f"{_text_shadow_desc}\n"
             "slight tilt for dynamism (2-4 degrees max)\n"
             "text should integrate into composition, not float awkwardly\n\n"
             "cinematic lighting, dramatic contrast, emotional storytelling, subtle vignette, "
@@ -7924,9 +7957,9 @@ typography should feel emotionally charged, not flat
 "[secondary words]" smaller, placed above left like a trigger word
 "[main word]" huge dominant word, partially cropped for impact
 bold condensed font (Anton / Bebas Neue style)
-black text on vivid yellow blocks (#FFD400)
+{_text_color_desc}
 imperfect alignment for energy, slightly layered composition
-subtle depth shadow on yellow blocks only
+{_text_shadow_desc}
 slight tilt for dynamism (2-4 degrees max)
 text should integrate into composition, not float awkwardly
 
@@ -7994,18 +8027,21 @@ IMPORTANT: Each img_prompt must use \\n for newlines inside the JSON string. Fol
                 p += "\n\nyoutube thumbnail designed to trigger curiosity, emotional recognition, and controversy\naspect ratio 16:9, ultra sharp"
             if thumbnail_negative_prompt and thumbnail_negative_prompt not in p:
                 p += f"\n{thumbnail_negative_prompt}"
-            # Enforce yellow #FFD400 text blocks
-            p = _re.sub(
-                r"(?:navy|white|red|blue|green|orange|purple|pink)\s*(?:\(#[0-9A-Fa-f]{6}\))?\s*(?:text\s+(?:on|block)|block|pill)",
-                "vivid yellow blocks (#FFD400)",
-                p, flags=_re.IGNORECASE,
-            )
-            if "#FFD400" not in p:
+            # Enforce correct text block color per channel tier
+            if _enforce_hex == "#FFD400":
                 p = _re.sub(
-                    r"#[0-9A-Fa-f]{6}",
-                    "#FFD400",
-                    p, count=1,
+                    r"(?:navy|white|red|blue|green|orange|purple|pink)\s*(?:\(#[0-9A-Fa-f]{6}\))?\s*(?:text\s+(?:on|block)|block|pill)",
+                    "vivid yellow blocks (#FFD400)",
+                    p, flags=_re.IGNORECASE,
                 )
+                if "#FFD400" not in p:
+                    p = _re.sub(r"#[0-9A-Fa-f]{6}", "#FFD400", p, count=1)
+            else:
+                p = p.replace("#FFD400", _enforce_hex)
+                p = _re.sub(r"vivid yellow blocks", "vivid red blocks", p, flags=_re.IGNORECASE)
+                p = _re.sub(r"yellow blocks", "red blocks", p, flags=_re.IGNORECASE)
+                if _enforce_hex not in p:
+                    p = _re.sub(r"#[0-9A-Fa-f]{6}", _enforce_hex, p, count=1)
             return p
 
         # Build thumbnails from AI response or fallback
@@ -8067,9 +8103,9 @@ typography should feel emotionally charged, not flat
 "{secondary_words}" smaller, placed above left like a trigger word
 "{main_word}" huge dominant word, partially cropped for impact
 bold condensed font (Anton / Bebas Neue style)
-black text on vivid yellow blocks (#FFD400)
+{_text_color_desc}
 imperfect alignment for energy, slightly layered composition
-subtle depth shadow on yellow blocks only
+{_text_shadow_desc}
 slight tilt for dynamism (2-4 degrees max)
 text should integrate into composition, not float awkwardly
 
