@@ -8052,8 +8052,11 @@ IMPORTANT: Each img_prompt must use \\n for newlines inside the JSON string. Fol
                 if "#FFD400" not in p:
                     p = _re.sub(r"#[0-9A-Fa-f]{6}", "#FFD400", p, count=1)
             else:
-                p = p.replace("#FFD400", _enforce_hex)
-                p = _re.sub(r"vivid yellow blocks", "vivid red blocks", p, flags=_re.IGNORECASE)
+                p = _re.sub(
+                    r"(?:navy|white|yellow|blue|green|orange|purple|pink)\s*(?:\(#[0-9A-Fa-f]{6}\))?\s*(?:text\s+(?:on|block)|block|pill)",
+                    "vivid red blocks (#FF3B30)",
+                    p, flags=_re.IGNORECASE,
+                )
                 p = _re.sub(r"yellow blocks", "red blocks", p, flags=_re.IGNORECASE)
                 if _enforce_hex not in p:
                     p = _re.sub(r"#[0-9A-Fa-f]{6}", _enforce_hex, p, count=1)
@@ -8181,7 +8184,7 @@ Return ONLY valid JSON:
                     fix_key = str(i + 1)
                     fixed_prompt = str(fixes.get(fix_key, "")).strip()
                     if fixed_prompt and len(fixed_prompt) > 200:
-                        t["img_prompt"] = fixed_prompt
+                        t["img_prompt"] = _postprocess_thumb_prompt(fixed_prompt)
                         self._log(f"  [PSY-THUMB] Critic upgraded variant {fix_key} for higher CTR")
 
         # Save to workbook

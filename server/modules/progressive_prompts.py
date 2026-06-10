@@ -3639,11 +3639,19 @@ IMPORTANT: Each img_prompt must use \\n for newlines inside the JSON string."""
             if "aspect ratio 16:9" not in p:
                 p += "\n\nyoutube thumbnail designed to trigger curiosity, emotional recognition, and controversy\naspect ratio 16:9, ultra sharp"
             if _enforce_hex == "#FFD400":
+                p = re.sub(
+                    r"(?:navy|white|red|blue|green|orange|purple|pink)\s*(?:\(#[0-9A-Fa-f]{6}\))?\s*(?:text\s+(?:on|block)|block|pill)",
+                    "vivid yellow blocks (#FFD400)",
+                    p, flags=re.IGNORECASE,
+                )
                 if "#FFD400" not in p:
                     p = re.sub(r"#[0-9A-Fa-f]{6}", "#FFD400", p, count=1)
             else:
-                p = p.replace("#FFD400", _enforce_hex)
-                p = re.sub(r"vivid yellow blocks", "vivid red blocks", p, flags=re.IGNORECASE)
+                p = re.sub(
+                    r"(?:navy|white|yellow|blue|green|orange|purple|pink)\s*(?:\(#[0-9A-Fa-f]{6}\))?\s*(?:text\s+(?:on|block)|block|pill)",
+                    "vivid red blocks (#FF3B30)",
+                    p, flags=re.IGNORECASE,
+                )
                 p = re.sub(r"yellow blocks", "red blocks", p, flags=re.IGNORECASE)
                 if _enforce_hex not in p:
                     p = re.sub(r"#[0-9A-Fa-f]{6}", _enforce_hex, p, count=1)
