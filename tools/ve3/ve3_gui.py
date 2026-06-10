@@ -689,9 +689,9 @@ class HomePage(ctk.CTkScrollableFrame):
 
     def remove_project_log(self, code):
         """Remove log tab for a project that finished"""
+        self.log_pending.pop(code, None)
         if code in self.log_project_boxes:
             try:
-                # Use shortened tab name to delete
                 tab_name = code.split('-')[-1] if '-' in code else code
                 self.log_tabs.delete(tab_name)
             except:
@@ -2141,7 +2141,10 @@ class VE3App(ctk.CTk):
     def _watchdog_tick(self):
         self._watchdog_last_tick = _time.time()
         if not getattr(self, "_closing", False):
-            self.after(2000, self._watchdog_tick)
+            old = getattr(self, "_watchdog_timer_id", None)
+            if old is not None:
+                self.after_cancel(old)
+            self._watchdog_timer_id = self.after(2000, self._watchdog_tick)
 
     def _clear_all_queue_markers(self):
         try:
@@ -3193,6 +3196,21 @@ Get-CimInstance Win32_Process |
                 stale = [k for k, v in ts_dict.items() if now - v > 300]
                 for k in stale:
                     ts_dict.pop(k, None)
+
+        # 5. Prune HomePage._ui_progress_cache (grows per unique project code)
+        try:
+            home = self.pages.get("home")
+            if home and hasattr(home, "_ui_progress_cache"):
+                upc = home._ui_progress_cache
+                if len(upc) > 300:
+                    for k in list(upc.keys())[:len(upc) - 200]:
+                        upc.pop(k, None)
+        except Exception:
+            pass
+
+        # 6. Prune _channel_cache (static, grows per unique code)
+        if len(self._channel_cache) > 500:
+            self._channel_cache.clear()
 
     def _count_archived_today(self):
         """Count projects in old/ modified today. Called from background thread."""
