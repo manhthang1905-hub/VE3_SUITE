@@ -3505,7 +3505,9 @@ Scene {scene_id}:
 
         # Detect text style tier from channel palette for optimal CTR
         _ts_lower = thumbnail_style.lower()
-        if "pencil" in _ts_lower and "white paper" in _ts_lower:
+        _is_monochrome_dark = "chalk" in _ts_lower and "blackboard" in _ts_lower
+        _is_monochrome_light = "pencil" in _ts_lower and "white paper" in _ts_lower
+        if _is_monochrome_light or _is_monochrome_dark:
             _text_color_desc = "white text on vivid red blocks (#FF3B30)"
             _text_shadow_desc = "subtle depth shadow on red blocks only"
             _enforce_hex = "#FF3B30"
