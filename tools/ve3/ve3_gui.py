@@ -3212,6 +3212,31 @@ Get-CimInstance Win32_Process |
         if len(self._channel_cache) > 500:
             self._channel_cache.clear()
 
+        # 7. Prune queue_pair_last_used (grows per pair usage, never cleared)
+        plu = getattr(self, "queue_pair_last_used", None)
+        if plu and len(plu) > 200:
+            sorted_keys = sorted(plu, key=plu.get)
+            for k in sorted_keys[:len(plu) - 100]:
+                plu.pop(k, None)
+
+        # 8. Prune _progress_slot_codes (HomePage, can grow with new projects)
+        try:
+            home = self.pages.get("home")
+            if home and hasattr(home, "_progress_slot_codes"):
+                psc = home._progress_slot_codes
+                if len(psc) > 200:
+                    home._progress_slot_codes = psc[-150:]
+        except Exception:
+            pass
+
+        # 9. Prune stale queue_ve3_workers (threads that died without cleanup)
+        workers = getattr(self, "queue_ve3_workers", None)
+        if workers:
+            stale_w = [k for k, t in workers.items()
+                       if not t or not t.is_alive()]
+            for k in stale_w:
+                workers.pop(k, None)
+
     def _count_archived_today(self):
         """Count projects in old/ modified today. Called from background thread."""
         count = 0
@@ -6878,6 +6903,9 @@ Get-CimInstance Win32_Process |
     def _tick(self):
         if self._t0 and self.btn_st.cget("state")!="disabled" and not getattr(self, "_closing", False):
             self.lbl_tm.configure(text=_ts(_time.time()-self._t0))
+            old = getattr(self, "_tick_timer_id", None)
+            if old is not None:
+                self.after_cancel(old)
             self._tick_timer_id = self.after(1000, self._tick)
 
     def _prog(self, ph, cur, tot, det=""):
