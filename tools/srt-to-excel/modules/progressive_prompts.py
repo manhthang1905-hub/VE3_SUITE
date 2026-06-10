@@ -886,12 +886,23 @@ PROP RULE: Let the SRT narration decide what objects appear. Do NOT use a fixed 
             Response text hoáº·c None náº¿u fail
         """
         if self.ai_provider == "vov_direct":
-            return self._call_vov_direct_api(
+            result = self._call_vov_direct_api(
                 prompt=prompt,
                 temperature=temperature,
                 max_tokens=max_tokens,
                 system_prompt=system_prompt,
             )
+            if result:
+                return result
+            if self.deepseek_keys:
+                self._log("  VOV Direct failed. Falling back to DeepSeek.", "WARN")
+                return self._call_deepseek_api(
+                    prompt=prompt,
+                    temperature=temperature,
+                    max_tokens=max_tokens,
+                    system_prompt=system_prompt,
+                )
+            return None
         if self.ai_provider == "claude_pool":
             return self._call_claude_pool_api(
                 prompt=prompt,

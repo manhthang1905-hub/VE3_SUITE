@@ -13,7 +13,7 @@ deepseek_api_keys:
 deepseek_model: deepseek-v4-pro
 deepseek_thinking_type: disabled
 excel_ai_attempts_per_key: 30
-excel_ai_provider: deepseek
+excel_ai_provider: vov_direct
 excel_ai_timeout_seconds: 180
 excel_mode: basic
 gemini_api_keys: []
