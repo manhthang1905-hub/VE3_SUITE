@@ -174,6 +174,26 @@ CHANNEL_LANGUAGE_MAP = {
     "TL3-T8": "Korean",
     "TL3-T9": "Italian",
     "TL3-T10": "Turkish",
+    "MT2-T1": "Spanish",
+    "MT2-T2": "Vietnamese",
+    "MT2-T3": "English",
+    "MT2-T4": "French",
+    "MT2-T5": "German",
+    "MT2-T6": "Portuguese",
+    "MT2-T7": "Japanese",
+    "MT2-T8": "Korean",
+    "MT2-T9": "Italian",
+    "MT2-T10": "Turkish",
+    "MT3-T1": "Spanish",
+    "MT3-T2": "Vietnamese",
+    "MT3-T3": "English",
+    "MT3-T4": "French",
+    "MT3-T5": "German",
+    "MT3-T6": "Portuguese",
+    "MT3-T7": "Japanese",
+    "MT3-T8": "Korean",
+    "MT3-T9": "Italian",
+    "MT3-T10": "Turkish",
 }
 
 
@@ -583,21 +603,13 @@ class ProgressivePromptsGenerator:
         language = str(profile.get("audience_language", "") or "").strip()
         if not language:
             return ""
-        strict_line = ""
-        if strict:
-            strict_line = (
-                "\nNON-NEGOTIABLE: The narration decides the visual. Use audience-specific settings, props, "
-                "rituals, or metaphors only when they make the current spoken idea clearer. Do not add a prop "
-                "just to satisfy audience fit."
-            )
         return f"""
 AUDIENCE INSIGHT BIBLE:
 - Audience language: {language}
 - Cultural context: {profile.get('audience_culture_note', '')}
-- Preferred props/settings/rituals: {profile.get('cultural_props', '')}
-- Preferred {self.topic} metaphors: {profile.get('cultural_metaphors', '')}
+- Visual metaphors (use sparingly, only when SRT content matches): {profile.get('cultural_metaphors', '')}
 - Emotional expression style: {profile.get('cultural_emotion_style', '')}
-Goal: viewers should understand the spoken {self.topic} idea within one second; cultural fit is optional support, not the subject.{strict_line}
+PROP RULE: Let the SRT narration decide what objects appear. Do NOT use a fixed set of cultural props. Each scene should have unique, story-driven props that serve the specific idea being discussed. Variety and surprise keep the viewer engaged.
 """
 
     def _normalize_cultural_text(self, text: str) -> str:
@@ -688,9 +700,6 @@ Goal: viewers should understand the spoken {self.topic} idea within one second; 
         for concept, aliases in concept_aliases.items():
             if concept in parsed and any(self._normalize_cultural_text(alias) in source for alias in aliases):
                 return parsed[concept]
-        props = [p.strip() for p in cultural_props.split(",") if p.strip()]
-        if props:
-            return props[0]
         if parsed:
             return next(iter(parsed.values()))
         return ""

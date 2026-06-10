@@ -74,9 +74,10 @@ def load_psychology_style_profile(workbook_path: Path) -> Dict[str, str]:
     profile["style_source"] = str(style_path) if style_path.exists() else ""
     is_styled = bool(
         style_path.exists()
-        or channel.upper().startswith("TL1-T") or channel.upper().startswith("TH1-T") or channel.upper().startswith("MT1-T")
+        or channel.upper().startswith(("TL", "TH", "MT"))
         or "psychology" in topic or "tâm lý" in topic or "tam ly" in topic
         or "finance" in topic or "tài chính" in topic or "tai chinh" in topic
+        or "success" in topic or "phat trien ban than" in topic
     )
     profile["is_psychology_project"] = is_styled
     return profile
