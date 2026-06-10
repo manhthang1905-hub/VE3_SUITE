@@ -8,9 +8,10 @@ chrome_path: C:\Program Files\Google\Chrome\Application\chrome.exe
 chrome_portable: ./GoogleChromePortable/GoogleChromePortable.exe
 chrome_portable_2: ./GoogleChromePortable - Copy/GoogleChromePortable.exe
 chrome_profile: ''
-deepseek_api_key: sk-8f878e41e2e4400a9cd98caa6245a958
+deepseek_api_key: sk-e3a4138d816a42778531c1e944ece336
 deepseek_api_keys:
-- sk-8f878e41e2e4400a9cd98caa6245a958
+- sk-e3a4138d816a42778531c1e944ece336
+deepseek_model: deepseek-v4-pro
 early_video_start: 10
 excel_mode: basic
 flow_aspect_ratio: landscape
@@ -60,6 +61,9 @@ video_generation_mode: t2v
 video_mode: basic
 video_model: fast
 video_paygate_tier: PAYGATE_TIER_TWO
+vov_direct_api_key: sk-6m5lfOmA6GdmbkZfWKXNYLtB6ouLfyfvf06obd7g3kZKdljB
+vov_direct_base_url: https://routerapi.vovantin.online/v1
+vov_direct_model: claude-sonnet-4-6
 wait_timeout: 30
 webshare_proxy:
   api_key: pfi2ljk73uysoze9ozg58nsp4af7au0vchs0b027

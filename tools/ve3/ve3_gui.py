@@ -1041,57 +1041,81 @@ class HomePage(ctk.CTkScrollableFrame):
         # Render projects list — reuse existing widgets, only update text/colors
         if not hasattr(self, "_project_row_widgets"):
             self._project_row_widgets = []
+        if not hasattr(self, "_project_widget_map"):
+            self._project_widget_map = {}
 
-        need_rebuild = len(ordered) != len(self._project_row_widgets)
-        if not need_rebuild:
-            old_codes = [w["code"] for w in self._project_row_widgets]
-            new_codes = [r["code"] for r in ordered]
-            if old_codes != new_codes:
-                need_rebuild = True
+        old_codes_set = set(w["code"] for w in self._project_row_widgets)
+        new_codes_set = set(r["code"] for r in ordered)
 
-        if need_rebuild:
-            for w in self.projects_list.winfo_children():
-                w.destroy()
-            self._project_row_widgets = []
-            if not ordered:
-                ctk.CTkLabel(self.projects_list, text="No project in PROJECTS.", font=("",10), text_color=T3).grid(row=0, column=0, padx=8, pady=8, sticky="w")
-                return
-            for i, r in enumerate(ordered):
+        if not ordered and not self._project_row_widgets:
+            ctk.CTkLabel(self.projects_list, text="No project in PROJECTS.", font=("",10), text_color=T3).grid(row=0, column=0, padx=8, pady=8, sticky="w")
+            return
+
+        removed = old_codes_set - new_codes_set
+        added = new_codes_set - old_codes_set
+
+        if removed:
+            for code in removed:
+                w = self._project_widget_map.pop(code, None)
+                if w:
+                    w["frame"].destroy()
+            self._project_row_widgets = [w for w in self._project_row_widgets if w["code"] not in removed]
+
+        def _make_row(code, grid_row):
+            bg = "#FFFFFF" if grid_row % 2 == 0 else "#FBFCFD"
+            row = ctk.CTkFrame(self.projects_list, fg_color=bg, corner_radius=6, border_width=1, border_color="#E6EAEE")
+            row.grid(row=grid_row, column=0, padx=6, pady=(0,4), sticky="ew")
+            row.grid_columnconfigure(0, weight=0, minsize=85)
+            row.grid_columnconfigure(1, weight=0, minsize=80)
+            row.grid_columnconfigure(2, weight=1, minsize=220)
+            row.grid_columnconfigure(3, weight=1, minsize=180)
+            for col in range(4, 8):
+                row.grid_columnconfigure(col, weight=0)
+            row.grid_propagate(False)
+            row.configure(height=40)
+            lbl_code = ctk.CTkLabel(row, text=code, font=("Consolas", 11, "bold"), text_color=T1)
+            lbl_code.grid(row=0, column=0, padx=(10,8), pady=6, sticky="w")
+            lbl_step = ctk.CTkLabel(row, text="", font=("", 10, "bold"), text_color=T1, anchor="w")
+            lbl_step.grid(row=0, column=1, padx=(0,10), pady=6, sticky="ew")
+            lbl_pair = ctk.CTkLabel(row, text="", font=("Consolas", 9), text_color=T3, anchor="w")
+            lbl_pair.grid(row=0, column=2, padx=(0,10), pady=6, sticky="ew")
+            lbl_prog = ctk.CTkLabel(row, text="", font=("Consolas", 10), text_color=T2, anchor="w")
+            lbl_prog.grid(row=0, column=3, padx=(0,10), pady=6, sticky="ew")
+            lbl_media = ctk.CTkLabel(row, text="", font=("Consolas", 10, "bold"), text_color=T2, anchor="w")
+            lbl_media.grid(row=0, column=4, padx=(0,10), pady=6, sticky="ew")
+            lbl_state = ctk.CTkLabel(row, text="", corner_radius=9, font=("Consolas", 10, "bold"), width=64, height=22)
+            lbl_state.grid(row=0, column=5, padx=(0,8), pady=6, sticky="w")
+            btn_done = ctk.CTkButton(row, text="Xong", width=64, height=22, corner_radius=4, font=("",10))
+            btn_done.grid(row=0, column=6, padx=(0,4), pady=6, sticky="e")
+            btn_reset = ctk.CTkButton(row, text="Reset", width=50, height=22, corner_radius=4,
+                                      fg_color="#EF5350", hover_color="#D32F2F", text_color="#FFFFFF", font=("",10))
+            btn_reset.grid(row=0, column=7, padx=(0,10), pady=6, sticky="e")
+            return {
+                "code": code, "frame": row,
+                "lbl_step": lbl_step, "lbl_pair": lbl_pair, "lbl_prog": lbl_prog,
+                "lbl_media": lbl_media, "lbl_state": lbl_state,
+                "btn_done": btn_done, "btn_reset": btn_reset,
+            }
+
+        if added:
+            for code in added:
+                we = _make_row(code, len(self._project_row_widgets))
+                self._project_row_widgets.append(we)
+                self._project_widget_map[code] = we
+
+        new_codes = [r["code"] for r in ordered]
+        old_codes = [w["code"] for w in self._project_row_widgets]
+        if old_codes != new_codes:
+            reordered = []
+            for i, code in enumerate(new_codes):
+                w = self._project_widget_map.get(code)
+                if not w:
+                    continue
+                w["frame"].grid(row=i, column=0, padx=6, pady=(0, 4), sticky="ew")
                 bg = "#FFFFFF" if i % 2 == 0 else "#FBFCFD"
-                border = "#D9E7FF" if r["state"] == "RUN" else "#E6EAEE"
-                row = ctk.CTkFrame(self.projects_list, fg_color=bg, corner_radius=6, border_width=1, border_color=border)
-                row.grid(row=i, column=0, padx=6, pady=(0,4), sticky="ew")
-                row.grid_columnconfigure(0, weight=0, minsize=85)
-                row.grid_columnconfigure(1, weight=0, minsize=80)
-                row.grid_columnconfigure(2, weight=1, minsize=220)
-                row.grid_columnconfigure(3, weight=1, minsize=180)
-                for col in range(4, 8):
-                    row.grid_columnconfigure(col, weight=0)
-                row.grid_propagate(False)
-                row.configure(height=40)
-                lbl_code = ctk.CTkLabel(row, text=r["code"], font=("Consolas", 11, "bold"), text_color=T1)
-                lbl_code.grid(row=0, column=0, padx=(10,8), pady=6, sticky="w")
-                lbl_step = ctk.CTkLabel(row, text="", font=("", 10, "bold"), text_color=T1, anchor="w")
-                lbl_step.grid(row=0, column=1, padx=(0,10), pady=6, sticky="ew")
-                lbl_pair = ctk.CTkLabel(row, text="", font=("Consolas", 9), text_color=T3, anchor="w")
-                lbl_pair.grid(row=0, column=2, padx=(0,10), pady=6, sticky="ew")
-                lbl_prog = ctk.CTkLabel(row, text="", font=("Consolas", 10), text_color=T2, anchor="w")
-                lbl_prog.grid(row=0, column=3, padx=(0,10), pady=6, sticky="ew")
-                lbl_media = ctk.CTkLabel(row, text="", font=("Consolas", 10, "bold"), text_color=T2, anchor="w")
-                lbl_media.grid(row=0, column=4, padx=(0,10), pady=6, sticky="ew")
-                lbl_state = ctk.CTkLabel(row, text="", corner_radius=9, font=("Consolas", 10, "bold"), width=64, height=22)
-                lbl_state.grid(row=0, column=5, padx=(0,8), pady=6, sticky="w")
-                btn_done = ctk.CTkButton(row, text="Xong", width=64, height=22, corner_radius=4, font=("",10))
-                btn_done.grid(row=0, column=6, padx=(0,4), pady=6, sticky="e")
-                btn_reset = ctk.CTkButton(row, text="Reset", width=50, height=22, corner_radius=4,
-                                          fg_color="#EF5350", hover_color="#D32F2F", text_color="#FFFFFF", font=("",10))
-                btn_reset.grid(row=0, column=7, padx=(0,10), pady=6, sticky="e")
-                self._project_row_widgets.append({
-                    "code": r["code"], "frame": row,
-                    "lbl_step": lbl_step, "lbl_pair": lbl_pair, "lbl_prog": lbl_prog,
-                    "lbl_media": lbl_media, "lbl_state": lbl_state,
-                    "btn_done": btn_done, "btn_reset": btn_reset,
-                })
+                w["frame"].configure(fg_color=bg)
+                reordered.append(w)
+            self._project_row_widgets = reordered
 
         state_colors = {
             "RUN": ("#E8F2FF", RN), "WAIT": ("#FFF4DD", "#C47F00"),
@@ -1101,30 +1125,54 @@ class HomePage(ctk.CTkScrollableFrame):
             if i >= len(self._project_row_widgets):
                 break
             w = self._project_row_widgets[i]
+            prev = w.get("_prev", {})
             st = state_label(r)
             badge_bg, badge_fg = state_colors.get(st, ("#F2F2F2", T2))
             border = "#D9E7FF" if r["state"] == "RUN" else "#E6EAEE"
-            w["frame"].configure(border_color=border)
-            w["lbl_step"].configure(text=step_label(r))
-            w["lbl_pair"].configure(text=pair_label(r))
-            w["lbl_prog"].configure(text=progress_short(r))
-            w["lbl_media"].configure(text=media_label(r),
-                                     text_color=RN if str(r.get("latest_media_kind", "")) == "VID" else T2)
-            w["lbl_state"].configure(text=st, fg_color=badge_bg, text_color=badge_fg)
+            step_t = step_label(r)
+            pair_t = pair_label(r)
+            prog_t = progress_short(r)
+            media_t = media_label(r)
+            media_c = RN if str(r.get("latest_media_kind", "")) == "VID" else T2
             manual_done = bool(r.get("manual_done"))
-            if manual_done:
-                w["btn_done"].configure(text="Da nhan", fg_color="#1F8E4D", hover_color="#1F8E4D",
-                                        text_color="#FFFFFF", state="disabled", command=None)
-            else:
-                cmd = lambda p=r["path"]: self.app.toggle_project_manual_done(Path(p), mark_done=True)
-                w["btn_done"].configure(text="Xong", fg_color="#F4C542", hover_color="#E5B52F",
-                                        text_color="#1F1F1F", state="normal", command=cmd)
             is_running = bool(r.get("excel_running") or r.get("ve3_running"))
-            w["btn_reset"].configure(
-                state="disabled" if is_running else "normal",
-                fg_color="#BDBDBD" if is_running else "#EF5350",
-                command=lambda p=r["path"], c=r["code"]: self.app.clean_project_excel(Path(p), c),
-            )
+            p_path = r.get("path", "")
+            cur = (border, step_t, pair_t, prog_t, media_t, media_c, st, badge_bg, badge_fg, manual_done, is_running, p_path)
+            if cur == prev.get("sig"):
+                continue
+            if border != prev.get("border"):
+                w["frame"].configure(border_color=border)
+            if step_t != prev.get("step"):
+                w["lbl_step"].configure(text=step_t)
+            if pair_t != prev.get("pair"):
+                w["lbl_pair"].configure(text=pair_t)
+            if prog_t != prev.get("prog"):
+                w["lbl_prog"].configure(text=prog_t)
+            if (media_t, media_c) != (prev.get("media"), prev.get("media_c")):
+                w["lbl_media"].configure(text=media_t, text_color=media_c)
+            if (st, badge_bg, badge_fg) != (prev.get("st"), prev.get("bg"), prev.get("fg")):
+                w["lbl_state"].configure(text=st, fg_color=badge_bg, text_color=badge_fg)
+            path_changed = p_path != prev.get("p_path")
+            if manual_done != prev.get("done") or path_changed:
+                if manual_done:
+                    w["btn_done"].configure(text="Da nhan", fg_color="#1F8E4D", hover_color="#1F8E4D",
+                                            text_color="#FFFFFF", state="disabled", command=None)
+                else:
+                    cmd = lambda p=r["path"]: self.app.toggle_project_manual_done(Path(p), mark_done=True)
+                    w["btn_done"].configure(text="Xong", fg_color="#F4C542", hover_color="#E5B52F",
+                                            text_color="#1F1F1F", state="normal", command=cmd)
+            if is_running != prev.get("running") or path_changed:
+                w["btn_reset"].configure(
+                    state="disabled" if is_running else "normal",
+                    fg_color="#BDBDBD" if is_running else "#EF5350",
+                    command=lambda p=r["path"], c=r["code"]: self.app.clean_project_excel(Path(p), c),
+                )
+            w["_prev"] = {
+                "sig": cur, "border": border, "step": step_t, "pair": pair_t,
+                "prog": prog_t, "media": media_t, "media_c": media_c,
+                "st": st, "bg": badge_bg, "fg": badge_fg,
+                "done": manual_done, "running": is_running, "p_path": p_path,
+            }
 
     def _sanitize_log_text(self, msg):
         """Fast log sanitization — remove control chars, keep printable."""
@@ -2026,7 +2074,7 @@ class VE3App(ctk.CTk):
         self._project_refresh_lock = threading.Lock()
         self._project_binding_cache = {}
         self._project_state_cache = {}
-        self._project_state_cache_ttl = 10.0
+        self._project_state_cache_ttl = 30.0
         self._ve3_priority_cache = {}
         self._ve3_priority_cache_ttl = 20.0
         self._process_monitor_thread = None
@@ -2039,9 +2087,61 @@ class VE3App(ctk.CTk):
         self._t0 = None
         self.protocol("WM_DELETE_WINDOW", self._on_close)
         self._load_config(); self._build()
+        # Main-thread watchdog: detect and log when event loop is blocked
+        self._watchdog_last_tick = _time.time()
+        self._watchdog_main_thread_id = threading.get_ident()
+        self._start_watchdog()
         # Cleanup phien truoc (Chrome/agent con sot lai)
         self._kill_extension_instances()
         self.after(400, self._boot)
+
+    def _start_watchdog(self):
+        def _watchdog_loop():
+            _wd_log_path = str(Path(os.environ.get("TEMP", ".")) / "ve3_watchdog.log")
+            _wd_last_report = 0.0
+            while not getattr(self, "_closing", False):
+                _time.sleep(5)
+                elapsed = _time.time() - self._watchdog_last_tick
+                if elapsed > 5.0:
+                    now = _time.time()
+                    if elapsed > 60 and now - _wd_last_report < 300:
+                        continue
+                    _wd_last_report = now
+                    import sys, traceback as _tb
+                    frames = sys._current_frames()
+                    main_frame = frames.get(self._watchdog_main_thread_id)
+                    if main_frame:
+                        stack = "".join(_tb.format_stack(main_frame))
+                    else:
+                        stack = "(no main thread frame)"
+                    try:
+                        log_size = Path(_wd_log_path).stat().st_size if Path(_wd_log_path).exists() else 0
+                        if log_size > 10 * 1024 * 1024:
+                            Path(_wd_log_path).write_text("", encoding="utf-8")
+                    except Exception:
+                        pass
+                    with open(_wd_log_path, "a", encoding="utf-8") as f:
+                        f.write(f"\n{'='*60}\n")
+                        f.write(f"[WATCHDOG] Main thread blocked {elapsed:.1f}s at {_time.strftime('%H:%M:%S')}\n")
+                        f.write(f"Threads: {threading.active_count()}\n")
+                        f.write(f"Main thread stack:\n{stack}\n")
+                        for tid, frame in frames.items():
+                            if tid == self._watchdog_main_thread_id:
+                                continue
+                            tname = "?"
+                            for t in threading.enumerate():
+                                if t.ident == tid:
+                                    tname = t.name
+                                    break
+                            f.write(f"\n--- Thread {tid} ({tname}) ---\n")
+                            f.write("".join(_tb.format_stack(frame)))
+        threading.Thread(target=_watchdog_loop, daemon=True, name="watchdog").start()
+        self._watchdog_tick()
+
+    def _watchdog_tick(self):
+        self._watchdog_last_tick = _time.time()
+        if not getattr(self, "_closing", False):
+            self.after(2000, self._watchdog_tick)
 
     def _clear_all_queue_markers(self):
         try:
@@ -2448,10 +2548,11 @@ foreach ($pid in $children) {{
             return executor.submit(_do).result(timeout=120)
         except concurrent.futures.TimeoutError:
             self._log(f"[TOPIC] Sheet NGUON timeout (120s) for {code}", "WARN")
-            executor.shutdown(wait=False)
             return ""
         except Exception:
             return ""
+        finally:
+            executor.shutdown(wait=False)
 
     def _lookup_reference_channel_from_nguon_sheet(self, code):
         """Lookup reference channel from NGUON (Col G=code, Col L=channel) with retries."""
@@ -2507,10 +2608,11 @@ foreach ($pid in $children) {{
             return executor.submit(_do).result(timeout=120)
         except concurrent.futures.TimeoutError:
             self._log(f"[TOPIC] Sheet NGUON timeout (120s) for reference_channel {code}", "WARN")
-            executor.shutdown(wait=False)
             return ""
         except Exception:
             return ""
+        finally:
+            executor.shutdown(wait=False)
 
     def _project_nguon_metadata_path(self, project_dir):
         return Path(project_dir) / ".nguon_runtime_metadata.yaml"
@@ -2916,7 +3018,11 @@ foreach ($pid in $children) {{
             return
         if getattr(self, "_process_monitor_auto", True):
             self._start_process_monitor_refresh(manual=False)
-            self.after(getattr(self, "_process_monitor_interval_ms", 60000), self._process_monitor_tick)
+            old_pm_timer = getattr(self, "_process_monitor_timer_id", None)
+            if old_pm_timer is not None:
+                self.after_cancel(old_pm_timer)
+            self._process_monitor_timer_id = self.after(
+                getattr(self, "_process_monitor_interval_ms", 60000), self._process_monitor_tick)
 
     def _start_process_monitor_refresh(self, manual=False):
         with self._process_monitor_lock:
@@ -3029,6 +3135,8 @@ Get-CimInstance Win32_Process |
         return rows
 
     def _refresh_project_views(self):
+        if getattr(self, "_closing", False):
+            return
         with self._project_refresh_lock:
             if self._project_refresh_thread and self._project_refresh_thread.is_alive():
                 self._project_refresh_pending = True
@@ -3036,9 +3144,12 @@ Get-CimInstance Win32_Process |
             self._project_refresh_pending = False
             self._project_refresh_thread = threading.Thread(target=self._refresh_project_views_worker, daemon=True)
             self._project_refresh_thread.start()
-        # Periodic cleanup (every 60s) — prevent memory/process leaks
         self._periodic_cleanup()
-        self.after(60000, self._refresh_project_views)
+        # Cancel previous timer to prevent accumulation over hours of operation
+        old_timer = getattr(self, "_project_refresh_timer_id", None)
+        if old_timer is not None:
+            self.after_cancel(old_timer)
+        self._project_refresh_timer_id = self.after(60000, self._refresh_project_views)
 
     def _periodic_cleanup(self):
         """Prune dead processes, stale caches, and leaked references. Runs every 60s."""
@@ -3067,7 +3178,7 @@ Get-CimInstance Win32_Process |
                 self.queue_active_ve3.discard(code)
 
         # 3. Prune caches (keep max 200 entries, remove oldest)
-        for cache_name in ('_project_state_cache', '_project_binding_cache', '_ve3_priority_cache'):
+        for cache_name in ('_project_state_cache', '_project_binding_cache', '_ve3_priority_cache', 'project_progress_cache'):
             cache = getattr(self, cache_name, None)
             if cache and len(cache) > 200:
                 keys = sorted(cache.keys(), key=lambda k: cache[k].get("ts", 0) if isinstance(cache[k], dict) else 0)
@@ -3241,6 +3352,11 @@ Get-CimInstance Win32_Process |
 
                 if changes > 0:
                     wb.save()
+                try:
+                    if hasattr(wb, 'workbook') and wb.workbook:
+                        wb.workbook.close()
+                except Exception:
+                    pass
 
                 for pattern in ["*.xlsx.lock", "*.xlsx.tmp", "*.xlsx.bak",
                                 ".pending_writes_*", ".flowkit_quota_wait",
@@ -3743,6 +3859,11 @@ Get-CimInstance Win32_Process |
                         1 for s in scenes_all
                         if str(getattr(s, "video_prompt", "") or "").strip()
                     )
+                    try:
+                        if hasattr(wb, 'workbook') and wb.workbook:
+                            wb.workbook.close()
+                    except Exception:
+                        pass
                     # Never shrink totals in UI; allow correction upward from stale lock.
                     locked_scene_total = max(locked_scene_total, scene_total_now)
                     locked_video_total = max(locked_video_total, video_total_now)
@@ -4118,6 +4239,11 @@ Get-CimInstance Win32_Process |
                 "bound_server_name": (wb.get_config_value("ve3_bound_server_name") or "").strip(),
                 "bound_server_url": (wb.get_config_value("ve3_bound_server_url") or "").strip(),
             }
+            try:
+                if hasattr(wb, 'workbook') and wb.workbook:
+                    wb.workbook.close()
+            except Exception:
+                pass
             if cache_sig is not None:
                 self._project_binding_cache[cache_key] = {"sig": cache_sig, "data": dict(data)}
             if data.get("bound_server_name"):
@@ -4157,6 +4283,11 @@ Get-CimInstance Win32_Process |
                 wb.set_config_value("flow_account_name", pair["flow_account_name"]); changed = True
             if changed:
                 wb.safe_save()
+            try:
+                if hasattr(wb, 'workbook') and wb.workbook:
+                    wb.workbook.close()
+            except Exception:
+                pass
         except Exception as exc:
             self._log(f"[QUEUE] {project_dir.name}: khong ghi duoc binding vao Excel ({exc}), YAML da luu", "WARN", "ve3")
 
@@ -4567,6 +4698,13 @@ Get-CimInstance Win32_Process |
             pd = PROJECTS_DIR/code; pd.mkdir(parents=True,exist_ok=True)
             dest = pd/path.name
             if str(path.resolve())!=str(dest.resolve()): shutil.copy2(str(path),str(dest))
+            old_wb = getattr(self, "wb", None)
+            if old_wb:
+                try:
+                    if hasattr(old_wb, 'workbook') and old_wb.workbook:
+                        old_wb.workbook.close()
+                except Exception:
+                    pass
             wb = PromptWorkbook(str(dest)); wb.load_or_create()
             self.wb = wb; self.excel_path = dest; self.project_dir = pd
             nv = pd/"nv"; img = pd/"img"; nv.mkdir(exist_ok=True); img.mkdir(exist_ok=True)
@@ -4714,6 +4852,13 @@ Get-CimInstance Win32_Process |
         """Reload workbook t file  ly data mi nht (media_id, status...)."""
         if self.excel_path and self.excel_path.exists():
             from modules.excel_manager import PromptWorkbook
+            old_wb = getattr(self, "wb", None)
+            if old_wb:
+                try:
+                    if hasattr(old_wb, 'workbook') and old_wb.workbook:
+                        old_wb.workbook.close()
+                except Exception:
+                    pass
             self.wb = PromptWorkbook(str(self.excel_path))
             self.wb.load_or_create()
 
@@ -4883,6 +5028,9 @@ Get-CimInstance Win32_Process |
 
         self.btn_go.configure(state="disabled", fg_color="#555", text_color="#999")
         self.btn_st.configure(state="normal", fg_color="#D32F2F", text_color="#FFFFFF")
+        old_tick = getattr(self, "_tick_timer_id", None)
+        if old_tick is not None:
+            self.after_cancel(old_tick)
         self._t0 = _time.time(); self._tick()
 
         pd = self.project_dir
@@ -5175,6 +5323,11 @@ Get-CimInstance Win32_Process |
             from modules.excel_manager import PromptWorkbook
             wb = PromptWorkbook(str(excel_path)); wb.load_or_create()
             tracks = self._get_music_tracks_compat(wb)
+            try:
+                if hasattr(wb, 'workbook') and wb.workbook:
+                    wb.workbook.close()
+            except Exception:
+                pass
             if not tracks:
                 return False
             for track in tracks:
@@ -5347,6 +5500,11 @@ Get-CimInstance Win32_Process |
             self._log(traceback.format_exc(), "ERROR", "ve3")
             return False
         finally:
+            try:
+                if hasattr(wb, 'workbook') and wb.workbook:
+                    wb.workbook.close()
+            except Exception:
+                pass
             if chrome_proc and chrome_proc.poll() is None:
                 self._kill_pid_tree(chrome_proc.pid)
             if lock_owner_pid is not None:
@@ -5392,8 +5550,6 @@ Get-CimInstance Win32_Process |
         online_count = sum(1 for s in self.server_status_cache if s.get("available"))
         if self.server_status_cache and online_count == 0:
             threading.Thread(target=self._refresh_server_status_sync, daemon=True).start()
-            _time.sleep(0.5)
-            online_count = sum(1 for s in self.server_status_cache if s.get("available"))
         if self.server_status_cache and online_count == 0:
             self._log("[QUEUE] Chua co server nao online — se tu dong chay khi server san sang.", "WARN", "ve3")
         configured_pairs = self._get_server_pairs(only_available=False)
@@ -5558,8 +5714,9 @@ Get-CimInstance Win32_Process |
         return result
 
     def _interleave_by_channel(self, projects, priority_key_func):
-        """Ưu tiên mã đang làm dở trước, sau đó round-robin theo kênh cho mã mới."""
+        """Ưu tiên mã đang làm dở trước, sau đó round-robin theo series (TL1/TL2/TL3) cho mã mới."""
         from collections import OrderedDict
+        import re as _re
         in_progress = []
         new_projects = []
         for pd in projects:
@@ -5568,19 +5725,22 @@ Get-CimInstance Win32_Process |
             else:
                 new_projects.append(pd)
         in_progress.sort(key=priority_key_func)
-        channel_groups = OrderedDict()
+        # Group by series prefix (TL1, TL2, TL3, TH1, ...) for even spread across series
+        series_groups = OrderedDict()
         for pd in new_projects:
-            ch = self._get_project_channel(pd)
-            channel_groups.setdefault(ch, []).append(pd)
-        for ch in channel_groups:
-            channel_groups[ch] = sorted(channel_groups[ch], key=priority_key_func)
+            code = Path(pd).name
+            m = _re.match(r"^([A-Za-z]+\d+)-", code, flags=_re.IGNORECASE)
+            series = m.group(1).upper() if m else "unknown"
+            series_groups.setdefault(series, []).append(pd)
+        for series in series_groups:
+            series_groups[series] = sorted(series_groups[series], key=priority_key_func)
         round_robin = []
-        while any(channel_groups.values()):
-            for ch in list(channel_groups.keys()):
-                if channel_groups[ch]:
-                    round_robin.append(channel_groups[ch].pop(0))
+        while any(series_groups.values()):
+            for series in list(series_groups.keys()):
+                if series_groups[series]:
+                    round_robin.append(series_groups[series].pop(0))
                 else:
-                    del channel_groups[ch]
+                    del series_groups[series]
         return in_progress + round_robin
 
     def _queue_projects_excel(self):
@@ -5632,7 +5792,16 @@ Get-CimInstance Win32_Process |
                     summary = wb.get_processing_summary()
                 except Exception:
                     summary = None
-                data = {"wb": wb, "scenes": scenes_all, "stats": stats, "summary": summary}
+                try:
+                    thumbnails = wb.get_thumbnails() if hasattr(wb, 'get_thumbnails') else []
+                except Exception:
+                    thumbnails = []
+                try:
+                    if hasattr(wb, 'workbook') and wb.workbook:
+                        wb.workbook.close()
+                except Exception:
+                    pass
+                data = {"scenes": scenes_all, "stats": stats, "summary": summary, "thumbnails": thumbnails}
                 if cache_sig is not None:
                     self._project_state_cache[cache_key] = {"sig": cache_sig, "ts": now, "data": data}
 
@@ -5946,14 +6115,6 @@ Get-CimInstance Win32_Process |
             # Check thumbnail — excel chua xong neu thumbnail chua co
             thumbnails = state.get("thumbnails") or []
             if not thumbnails:
-                try:
-                    from modules.excel_manager import PromptWorkbook
-                    wb = PromptWorkbook(str(ep))
-                    wb.load_or_create()
-                    thumbnails = wb.get_thumbnails() if hasattr(wb, 'get_thumbnails') else []
-                except Exception:
-                    pass
-            if not thumbnails:
                 return False
             return True
         except Exception as exc:
@@ -5967,6 +6128,11 @@ Get-CimInstance Win32_Process |
             from modules.excel_manager import PromptWorkbook
             wb = PromptWorkbook(str(ep)); wb.load_or_create()
             stats = wb.get_stats()
+            try:
+                if hasattr(wb, 'workbook') and wb.workbook:
+                    wb.workbook.close()
+            except Exception:
+                pass
             scenes = int(stats.get("scenes_with_prompts", 0) or stats.get("total_scenes", 0) or 0)
             if scenes <= 0:
                 return False
@@ -6660,6 +6826,8 @@ Get-CimInstance Win32_Process |
             self._queue_thread_finished()
 
     def _queue_thread_finished(self):
+        if getattr(self, "_closing", False):
+            return
         if threading.current_thread() is not threading.main_thread():
             self.after(1000, self._queue_thread_finished)
             return
@@ -6690,8 +6858,9 @@ Get-CimInstance Win32_Process |
             self._log("[QUEUE] Da dung.", "WARN")
 
     def _tick(self):
-        if self._t0 and self.btn_st.cget("state")!="disabled":
-            self.lbl_tm.configure(text=_ts(_time.time()-self._t0)); self.after(1000, self._tick)
+        if self._t0 and self.btn_st.cget("state")!="disabled" and not getattr(self, "_closing", False):
+            self.lbl_tm.configure(text=_ts(_time.time()-self._t0))
+            self._tick_timer_id = self.after(1000, self._tick)
 
     def _prog(self, ph, cur, tot, det=""):
         self.pages["home"].update_progress(ph, cur, tot)

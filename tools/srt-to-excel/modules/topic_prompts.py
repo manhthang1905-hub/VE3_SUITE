@@ -170,24 +170,15 @@ class _StyledTopicPrompts(TopicPrompts):
         if not audience_language:
             return ""
         audience_culture_note = self._style("audience_culture_note", "")
-        cultural_props = self._style("cultural_props", "")
         cultural_metaphors = self._style("cultural_metaphors", "")
         cultural_emotion_style = self._style("cultural_emotion_style", "")
-        strict_line = ""
-        if strict:
-            strict_line = (
-                "\nSRT-FIRST RULE: The narration decides the visual. Use audience-familiar settings, props, "
-                "rituals, or metaphors only when they directly clarify the current SRT idea. "
-                "Do not force cultural objects into every segment."
-            )
         return f"""
 AUDIENCE INSIGHT BIBLE:
 - Audience language: {audience_language}
 - Cultural context: {audience_culture_note or 'Universal daily life for this language audience'}
-- Preferred props/settings/rituals: {cultural_props or 'Use concrete daily-life objects familiar to this audience'}
-- Preferred {self.TOPIC_METAPHOR_LABEL}: {cultural_metaphors or 'Use audience-familiar metaphors, not generic symbols'}
+- Visual metaphors (use sparingly, only when SRT content matches): {cultural_metaphors or 'Use audience-familiar metaphors, not generic symbols'}
 - Emotional expression style: {cultural_emotion_style or 'Match how this audience usually reads vulnerability, restraint, warmth, and healing'}
-Goal: the viewer should feel "this was made for people like me" within one second.{strict_line}
+PROP RULE: Let the SRT narration decide what objects appear. Do NOT use a fixed set of cultural props. Each scene should have unique, story-driven props that serve the specific idea being discussed. Variety and surprise keep the viewer engaged.
 """
 
     def normalize_scene_characters(self, value: str) -> str:

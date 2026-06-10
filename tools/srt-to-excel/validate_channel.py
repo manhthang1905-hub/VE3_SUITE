@@ -7,6 +7,7 @@ Usage:
     python validate_channel.py TH1-T1
     python validate_channel.py --all
 """
+import re
 import sys
 import yaml
 from pathlib import Path
@@ -108,11 +109,16 @@ def validate_channel(channel_id: str) -> list:
                 except Exception:
                     pass
 
-    # 7. Check audience_language is unique
+    # 7. Check audience_language is unique within the same series prefix
+    #    (TL1, TL2, TL3, TH1, MT1 etc. are separate series sharing languages)
     lang = data.get("audience_language", "")
-    if lang:
+    series_prefix = re.match(r"^([A-Z]+\d+)-", channel_id)
+    series_prefix = series_prefix.group(1) if series_prefix else ""
+    if lang and series_prefix:
         for other_dir in REF_ROOT.iterdir():
             if other_dir.name == channel_id or other_dir.name.startswith("_"):
+                continue
+            if not other_dir.name.startswith(series_prefix + "-"):
                 continue
             other_yaml = other_dir / "style.yaml"
             if other_yaml.exists():
@@ -189,7 +195,7 @@ def validate_channel(channel_id: str) -> list:
 
 
 def discover_all_channels() -> list:
-    """Find all TL1-T* and TH1-T* channel directories."""
+    """Find all channel directories (TL1-T*, TL2-T*, TL3-T*, TH1-T*, MT1-T*, etc.)."""
     channels = []
     for ref_root in REF_ROOTS:
         if ref_root.exists():

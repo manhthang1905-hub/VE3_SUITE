@@ -3503,18 +3503,23 @@ Scene {scene_id}:
         thumb_text = str(self.config.get("text_thumb", "") or "").strip()
         thumbnail_style = str(self.config.get("thumbnail_style", "") or self.config.get("image_style", "") or "").strip()
 
-        # Detect text style tier from channel palette for optimal CTR
-        _ts_lower = thumbnail_style.lower()
-        _is_monochrome_dark = "chalk" in _ts_lower and "blackboard" in _ts_lower
-        _is_monochrome_light = "pencil" in _ts_lower and "white paper" in _ts_lower
-        if _is_monochrome_light or _is_monochrome_dark:
-            _text_color_desc = "white text on vivid red blocks (#FF3B30)"
-            _text_shadow_desc = "subtle depth shadow on red blocks only"
-            _enforce_hex = "#FF3B30"
-        else:
-            _text_color_desc = "black text on vivid yellow blocks (#FFD400)"
-            _text_shadow_desc = "subtle depth shadow on yellow blocks only"
-            _enforce_hex = "#FFD400"
+        # Per-channel text style from config/style.yaml (overrides auto-detect)
+        _text_color_desc = str(self.config.get("thumb_text_style", "")).strip()
+        _text_shadow_desc = str(self.config.get("thumb_text_shadow", "")).strip()
+        _enforce_hex = str(self.config.get("thumb_text_hex", "")).strip()
+        _text_font_desc = str(self.config.get("thumb_text_font", "")).strip() or "bold condensed font (Anton / Bebas Neue style)"
+        if not _text_color_desc:
+            _ts_lower = thumbnail_style.lower()
+            _is_monochrome_dark = "chalk" in _ts_lower and "blackboard" in _ts_lower
+            _is_monochrome_light = "pencil" in _ts_lower and "white paper" in _ts_lower
+            if _is_monochrome_light or _is_monochrome_dark:
+                _text_color_desc = "white text on vivid red blocks (#FF3B30)"
+                _text_shadow_desc = "subtle depth shadow on red blocks only"
+                _enforce_hex = "#FF3B30"
+            else:
+                _text_color_desc = "black text on vivid yellow blocks (#FFD400)"
+                _text_shadow_desc = "subtle depth shadow on yellow blocks only"
+                _enforce_hex = "#FFD400"
         self._log(f"  Text tier: {_text_color_desc}")
 
         example_prompt = (
@@ -3534,7 +3539,7 @@ Scene {scene_id}:
             "typography should feel emotionally charged, not flat\n"
             '"NO SE" smaller, placed above left like a trigger word\n'
             '"TATUAN" huge dominant word, partially cropped for impact\n'
-            "bold condensed font (Anton / Bebas Neue style)\n"
+            f"{_text_font_desc}\n"
             f"{_text_color_desc}\n"
             "imperfect alignment for energy, slightly layered composition\n"
             f"{_text_shadow_desc}\n"
@@ -3585,7 +3590,7 @@ text: "[thumb text here]"
 typography should feel emotionally charged, not flat
 "[secondary words]" smaller, placed above left like a trigger word
 "[main word]" huge dominant word, partially cropped for impact
-bold condensed font (Anton / Bebas Neue style)
+{_text_font_desc}
 {_text_color_desc}
 imperfect alignment for energy, slightly layered composition
 {_text_shadow_desc}

@@ -1,18 +1,5 @@
-project_root: ../../PROJECTS
-excel_ai_provider: deepseek
-deepseek_api_key: sk-9a0f488007e04fa5a7f5a6896a4872c8
-deepseek_api_keys:
-  - sk-9a0f488007e04fa5a7f5a6896a4872c8
-deepseek_model: deepseek-v4-pro
-deepseek_thinking_type: disabled
-vov_direct_base_url: https://routerapi.vovantin.online/v1
-vov_direct_api_key: sk-6m5lfOmA6GdmbkZfWKXNYLtB6ouLfyfvf06obd7g3kZKdljB
-vov_direct_model: claude-sonnet-4-6
-vov_direct_model_chain:
-- claude-sonnet-4-6
-- claude-opus-4-6
-claude_pool_base_url: http://127.0.0.1:8318
 claude_pool_api_key: sk_cliproxy_local
+claude_pool_base_url: http://127.0.0.1:8318
 claude_pool_model: gpt-5.4
 claude_pool_model_chain:
 - gpt-5.4
@@ -20,17 +7,30 @@ claude_pool_model_chain:
 - gpt-5.3-codex
 - gemini-3-flash-agent
 - gemini-3.1-pro-high
+deepseek_api_key: sk-e3a4138d816a42778531c1e944ece336
+deepseek_api_keys:
+- sk-e3a4138d816a42778531c1e944ece336
+deepseek_model: deepseek-v4-pro
+deepseek_thinking_type: disabled
+excel_ai_attempts_per_key: 30
+excel_ai_provider: deepseek
 excel_ai_timeout_seconds: 180
-excel_ai_attempts_per_key: 3
+excel_mode: basic
 gemini_api_keys: []
 gemini_models:
 - gemini-2.0-flash
 - gemini-2.5-flash
 groq_api_keys: []
-min_scene_duration: 5
-max_scene_duration: 8
-max_parallel_api: 8
-excel_mode: basic
-whisper_model: large-v3
-whisper_language: auto
 log_level: INFO
+max_parallel_api: 8
+max_scene_duration: 8
+min_scene_duration: 5
+project_root: ../../PROJECTS
+vov_direct_api_key: sk-6m5lfOmA6GdmbkZfWKXNYLtB6ouLfyfvf06obd7g3kZKdljB
+vov_direct_base_url: https://routerapi.vovantin.online/v1
+vov_direct_model: claude-sonnet-4-6
+vov_direct_model_chain:
+- claude-sonnet-4-6
+- claude-opus-4-6
+whisper_language: auto
+whisper_model: large-v3

@@ -1930,8 +1930,6 @@ def get_scene_system_prompt(topic: str = "story", style_profile: Optional[Dict[s
     runtime_video_style = _runtime_video_style(profile)
     audience_language = str(profile.get('audience_language', '') or '').strip()
     audience_culture_note = str(profile.get('audience_culture_note', '') or '').strip()
-    cultural_props = str(profile.get('cultural_props', '') or '').strip()
-    cultural_metaphors = str(profile.get('cultural_metaphors', '') or '').strip()
     cultural_emotion_style = str(profile.get('cultural_emotion_style', '') or '').strip()
     audience_block = ""
     if audience_language:
@@ -1940,7 +1938,7 @@ def get_scene_system_prompt(topic: str = "story", style_profile: Optional[Dict[s
 
 TARGET AUDIENCE: {audience_language}-speaking viewers.
 {('CULTURAL CONTEXT: ' + audience_culture_note) if audience_culture_note else ''}{emotion_block}
-AUDIENCE FIT GUIDANCE: The narration decides the image. If the narration naturally involves a setting, object, or ritual, prefer one that feels familiar to {audience_language} audiences. Do NOT force cultural props into every scene."""
+PROP RULE: Let the SRT narration decide what objects appear. Do NOT use a fixed set of cultural props. Each scene should have unique, story-driven props. Variety keeps the viewer engaged."""
     tc = _get_topic_config(topic)
     topic_label = tc["topic_label"]
     topic_desc = tc["topic_desc"]
@@ -2599,17 +2597,15 @@ def build_scene_prompt_request(
     if _is_psychology_topic(topic):
         audience_language = str(profile.get('audience_language', '') or '').strip()
         audience_culture_note = str(profile.get('audience_culture_note', '') or '').strip()
-        cultural_props = str(profile.get('cultural_props', '') or '').strip()
         cultural_metaphors = str(profile.get('cultural_metaphors', '') or '').strip()
         cultural_emotion_style = str(profile.get('cultural_emotion_style', '') or '').strip()
         audience_block = ""
         if audience_language:
-            props_line = f"\nOPTIONAL PROP EXAMPLES (use only when the narration calls for this kind of object): {cultural_props}" if cultural_props else ""
-            metaphors_line = f"\nCULTURAL METAPHOR BANK (optional examples, use only when the current narration matches the concept):\n{cultural_metaphors}" if cultural_metaphors else ""
+            metaphors_line = f"\nVISUAL METAPHORS (use sparingly, only when SRT content matches):\n{cultural_metaphors}" if cultural_metaphors else ""
             emotion_line = f"\nEMOTION STYLE: {cultural_emotion_style}" if cultural_emotion_style else ""
             audience_block = f"""AUDIENCE LANGUAGE: {audience_language}
-CULTURAL CONTEXT: {audience_culture_note or 'Universal'}{props_line}{metaphors_line}{emotion_line}
-AUDIENCE FIT GUIDANCE: The narration decides the image. If the narration naturally involves a setting, object, or ritual, prefer one that feels familiar to {audience_language} audiences. Do NOT force cultural props into every scene.
+CULTURAL CONTEXT: {audience_culture_note or 'Universal'}{metaphors_line}{emotion_line}
+PROP RULE: Let the SRT narration decide what objects appear. Do NOT use a fixed set of cultural props. Each scene should have unique, story-driven props. Variety keeps the viewer engaged.
 """
         tc = _get_topic_config(topic)
         _topic_label_user = tc.get("prompt_label", "psychology illustration").split(" ")[0]
