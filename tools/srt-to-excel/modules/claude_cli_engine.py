@@ -729,9 +729,11 @@ Reply with ONLY the corrected JSON object (start with {{ end with }}), no prose.
                 continue
             img = str(raw.get("img_prompt", "") or "").strip()
             vid = str(raw.get("video_prompt", "") or "").strip()
-            if img and "photoreal" not in img.lower():
+            # This engine is ALWAYS flat 2D illustration, so always append the full
+            # negative (incl. "no text") unless it is already present verbatim.
+            if img and tail not in img:
                 img = img.rstrip(" .,") + ", " + tail
-            if vid and "photoreal" not in vid.lower():
+            if vid and tail not in vid:
                 vid = vid.rstrip(" .,") + ", " + tail
             # SAFETY NET: a clip can't exceed max_dur (Veo3 ~8s). If Claude grouped
             # entries whose combined SRT length is too long, split it on entry edges
