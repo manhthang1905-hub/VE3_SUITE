@@ -2765,14 +2765,7 @@ Generator/context error:
                 self.on_item_status("thumb", thumb_id, "error", None,
                                     {"elapsed": elapsed, **sinfo})
 
-        # Backward-compatible alias file: thumb/<project_code>.jpg -> thumb_001.jpg neu co
-        primary = next((self.thumb_dir / f"thumb_001{suffix}" for suffix in (".png", ".jpg", ".jpeg", ".webp") if (self.thumb_dir / f"thumb_001{suffix}").exists()), None)
-        if primary and primary.exists():
-            alias = self.thumb_dir / f"{self.project_dir.name}.jpg"
-            try:
-                shutil.copy2(str(primary), str(alias))
-            except Exception:
-                pass
+        # (Removed: backward-compatible alias thumb/<project_code>.jpg — not needed.)
 
     # =========================================================================
     # PHASE 4: Video Generation (Image-to-Video)

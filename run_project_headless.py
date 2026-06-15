@@ -473,16 +473,30 @@ def run_excel(project_dir, code, config_override: Path | None = None):
         log(f"Excel co san nhung chua usable: {excel_path.name} -- se tao tiep")
 
     sys.path.insert(0, str(SRT_TOOL_DIR))
-    from modules.progressive_prompts import ProgressivePromptsGenerator
 
     cfg = apply_project_runtime_metadata(load_excel_runtime_config(config_override), project_dir, code)
-    log(f"SRT -> Excel: bat dau ProgressivePromptsGenerator topic={cfg.get('topic', 'story')}")
-    generator = ProgressivePromptsGenerator(config=cfg)
-    ok = generator.run_all_steps(
-        project_dir=project_dir,
-        code=code,
-        log_callback=lambda msg, level="INFO": log(f"  {msg}", level),
-    )
+    engine = str(cfg.get("excel_engine", "api") or "api").strip().lower()
+
+    if engine in ("claude_cli", "claude", "cli"):
+        # Option 2: build the Excel with the local Claude Code CLI engine.
+        from modules.claude_cli_engine import ClaudeCliEngine
+        log(f"SRT -> Excel: ClaudeCliEngine (Claude Code CLI) topic={cfg.get('topic', 'story')}")
+        ok = ClaudeCliEngine(cfg).run(
+            project_dir=project_dir,
+            code=code,
+            log_callback=lambda msg, level="INFO": log(f"  {msg}", level),
+        )
+    else:
+        # Option 1 (default): multi-step DeepSeek/VOV API pipeline.
+        from modules.progressive_prompts import ProgressivePromptsGenerator
+        log(f"SRT -> Excel: bat dau ProgressivePromptsGenerator topic={cfg.get('topic', 'story')}")
+        generator = ProgressivePromptsGenerator(config=cfg)
+        ok = generator.run_all_steps(
+            project_dir=project_dir,
+            code=code,
+            log_callback=lambda msg, level="INFO": log(f"  {msg}", level),
+        )
+
     if not ok or not excel_path.exists() or not excel_is_usable(project_dir, code):
         raise RuntimeError("Tao Excel that bai")
     log(f"Excel tao xong: {excel_path.name}", "SUCCESS")

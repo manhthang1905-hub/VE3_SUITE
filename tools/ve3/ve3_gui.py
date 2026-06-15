@@ -1453,6 +1453,11 @@ class SettingsPage(ctk.CTkScrollableFrame):
             "Pool Creative Fallback": "claude_pool",
         }
         self.excel_ai_provider_labels = {v: k for k, v in self.excel_ai_provider_options.items()}
+        self.excel_engine_options = {
+            "API (DeepSeek/VOV) - nhieu buoc": "api",
+            "Claude Code CLI (Claude Max)": "claude_cli",
+        }
+        self.excel_engine_labels = {v: k for k, v in self.excel_engine_options.items()}
         self.generation_backend_options = {"Server": "server", "NanoPic": "nanopic", "FlowKit": "flowkit", "Combined": "combined"}
         self.generation_backend_labels = {v: k for k, v in self.generation_backend_options.items()}
         self.grid_columnconfigure(0, weight=1)
@@ -1521,7 +1526,15 @@ class SettingsPage(ctk.CTkScrollableFrame):
         ai = ctk.CTkFrame(self, fg_color=CD, corner_radius=8, border_width=1, border_color=BD)
         ai.grid(row=2, column=0, sticky="ew", padx=10, pady=4)
         ai.grid_columnconfigure(1, weight=1)
-        ctk.CTkLabel(ai, text="Excel AI", font=("",13,"bold"), text_color=T1).grid(row=0, column=0, padx=10, pady=(8,6), sticky="w", columnspan=3)
+        ctk.CTkLabel(ai, text="Excel AI", font=("",13,"bold"), text_color=T1).grid(row=0, column=0, padx=10, pady=(8,6), sticky="w")
+        eng_box = ctk.CTkFrame(ai, fg_color="transparent")
+        eng_box.grid(row=0, column=1, padx=(0,10), pady=(8,6), sticky="e")
+        ctk.CTkLabel(eng_box, text="Engine:", font=("",11,"bold"), text_color=T1).pack(side="left", padx=(0,6))
+        self.opt_excel_engine = ctk.CTkOptionMenu(eng_box, values=list(self.excel_engine_options.keys()), width=220, height=28, corner_radius=4, fg_color=EN, button_color=BD, text_color=T1, font=("",11))
+        self.opt_excel_engine.pack(side="left")
+        # Claude CLI review pass toggle (tat = nhanh gap doi, bat = ra soat ky hon)
+        self.sw_claude_review = ctk.CTkSwitch(eng_box, text="Review", progress_color=OK, button_color="#FFF", button_hover_color="#EEE", font=("",10))
+        self.sw_claude_review.pack(side="left", padx=(10,0))
 
         ctk.CTkLabel(ai, text="Provider:", font=("",11), text_color=T2).grid(row=1, column=0, padx=(10,6), sticky="e")
         self.opt_excel_ai_provider = ctk.CTkOptionMenu(ai, values=list(self.excel_ai_provider_options.keys()), width=180, height=28, corner_radius=4, fg_color=EN, button_color=BD, text_color=T1, font=("",11), command=self._on_excel_ai_provider_change)
@@ -1868,6 +1881,12 @@ class SettingsPage(ctk.CTkScrollableFrame):
         self.opt_generation_backend.set(self.generation_backend_labels.get(backend_value, "Server"))
         provider_value = (cfg.get("excel_ai_provider", "") or "deepseek").strip() or "deepseek"
         self.opt_excel_ai_provider.set(self.excel_ai_provider_labels.get(provider_value, "DeepSeek"))
+        engine_value = (cfg.get("excel_engine", "") or "api").strip().lower() or "api"
+        self.opt_excel_engine.set(self.excel_engine_labels.get(engine_value, self.excel_engine_labels["api"]))
+        if bool(cfg.get("claude_cli_review", True)):
+            self.sw_claude_review.select()
+        else:
+            self.sw_claude_review.deselect()
         self.ent_deepseek_slots.delete(0, "end")
         self.ent_deepseek_slots.insert(0, str(cfg.get("deepseek_parallel_slots", cfg.get("excel_workers", 4)) or 4))
         self.ent_vov_slots.delete(0, "end")
@@ -1982,6 +2001,9 @@ class SettingsPage(ctk.CTkScrollableFrame):
         cfg["music_workspace_mode_enabled"] = bool(self.sw_music_workspace.get())
         selected_provider_label = self.opt_excel_ai_provider.get().strip() or "DeepSeek"
         cfg["excel_ai_provider"] = self.excel_ai_provider_options.get(selected_provider_label, "deepseek")
+        selected_engine_label = self.opt_excel_engine.get().strip()
+        cfg["excel_engine"] = self.excel_engine_options.get(selected_engine_label, "api")
+        cfg["claude_cli_review"] = bool(self.sw_claude_review.get())
         try:
             deepseek_slots = max(1, int(self.ent_deepseek_slots.get().strip() or "4"))
         except:
@@ -2771,6 +2793,17 @@ foreach ($pid in $children) {{
         cfg.setdefault("deepseek_parallel_slots", 4)
         cfg.setdefault("vov_direct_parallel_slots", 2)
         cfg.setdefault("project_root", "../../PROJECTS")
+        # Option 2 (Claude Code CLI) engine — only used when excel_engine == "claude_cli".
+        cfg.setdefault("excel_engine", "api")
+        cfg.setdefault("claude_cli_model", "claude-sonnet-4-6")
+        cfg.setdefault("claude_cli_min_scene", 3)
+        cfg.setdefault("claude_cli_max_scene", 8)
+        cfg.setdefault("claude_cli_review", True)
+        cfg.setdefault("claude_cli_timeout_seconds", 1800)
+        # Chunks of one long video run in parallel (each its own claude.exe) with
+        # per-chunk retry, so a long video finishes ~3x faster without orphaning.
+        cfg.setdefault("claude_cli_chunk_parallel", 3)
+        cfg.setdefault("claude_cli_chunk_retries", 2)
         return cfg
 
     def _build(self):
@@ -4581,7 +4614,9 @@ Get-CimInstance Win32_Process |
         try:
             for line in proc.stdout:
                 if self.queue_stop_requested:
-                    proc.terminate()
+                    # Kill the WHOLE tree (python headless + its claude.exe child)
+                    # so the Claude CLI process never orphans on stop.
+                    self._kill_pid_tree(proc.pid)
                     break
                 if log_cb:
                     log_cb(line.rstrip(), "INFO")
@@ -4589,6 +4624,12 @@ Get-CimInstance Win32_Process |
             if code != 0 and not self.queue_stop_requested:
                 raise RuntimeError(f"Excel engine failed with exit code {code}")
         finally:
+            # Defensive: if the process is still alive (timeout/crash), kill its tree.
+            try:
+                if proc.poll() is None:
+                    self._kill_pid_tree(proc.pid)
+            except Exception:
+                pass
             self._untrack_process(proc)
 
     def upload_excel(self):
@@ -6239,7 +6280,13 @@ Get-CimInstance Win32_Process |
         # Gioi han so ma Excel chay dong thoi — doc lai moi vong de cap nhat khi user thay doi setting
         try:
             while not self.queue_stop_requested:
-                max_excel_concurrent = self.config_data.get("excel_workers", 2)
+                _engine = str(self.config_data.get("excel_engine", "api") or "api").strip().lower()
+                if _engine in ("claude_cli", "claude", "cli"):
+                    # Claude Code CLI uses ONE Claude Max account — keep concurrency
+                    # low (default 2) so many parallel claude.exe don't hit rate limits.
+                    max_excel_concurrent = self.config_data.get("claude_cli_max_parallel", 2)
+                else:
+                    max_excel_concurrent = self.config_data.get("excel_workers", 2)
                 try:
                     max_excel_concurrent = int(max_excel_concurrent)
                 except Exception:
