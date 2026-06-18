@@ -1448,6 +1448,7 @@ class SettingsPage(ctk.CTkScrollableFrame):
         self.app = app
         self.excel_ai_provider_options = {
             "DeepSeek": "deepseek",
+            "DeepSeek Pool (self-host)": "deepseek_pool",
             "DeepSeek + VOV": "deepseek_vov",
             "VOV Direct + GPT Fallback": "vov_direct",
             "Pool Creative Fallback": "claude_pool",
@@ -2788,6 +2789,11 @@ foreach ($pid in $children) {{
         cfg.setdefault("claude_pool_api_key", "sk_cliproxy_local")
         cfg.setdefault("claude_pool_model", "gpt-5.4")
         cfg.setdefault("claude_pool_model_chain", ["gpt-5.4", "gpt-5.2", "gpt-5.3-codex", "gemini-3-flash-agent", "gemini-3.1-pro-high"])
+        # DeepSeek Pool (self-hosted, OpenAI-compatible) — replaces the paid DeepSeek key.
+        cfg.setdefault("deepseek_pool_base_url", "http://192.168.88.254:5001/v1")
+        cfg.setdefault("deepseek_pool_api_key", "sk-ds2api-local")
+        cfg.setdefault("deepseek_pool_model", "deepseek-v4-flash")
+        cfg.setdefault("deepseek_pool_model_chain", ["deepseek-v4-flash", "deepseek-v4-pro"])
         cfg.setdefault("excel_workers", 6)
         cfg.setdefault("max_parallel_api", 6)
         cfg.setdefault("deepseek_parallel_slots", 4)
