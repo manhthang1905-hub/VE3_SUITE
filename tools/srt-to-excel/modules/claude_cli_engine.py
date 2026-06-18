@@ -99,6 +99,30 @@ class ClaudeCliEngine:
         except Exception:
             self.timeout_seconds = 1800
 
+        # Transport backend: "cli" spawns the local claude.exe (Claude Max);
+        # "api" sends the SAME prompt to an OpenAI-compatible endpoint (e.g. the
+        # VOV router serving claude-sonnet-4-6) — no claude.exe, no Max login,
+        # everything else (chunking, auto-split, thumbnails, builder) identical.
+        self.backend = str(self.config.get("claude_cli_backend", "cli") or "cli").strip().lower()
+        if self.backend not in ("cli", "api"):
+            self.backend = "cli"
+        self.api_base_url = str(
+            self.config.get("claude_cli_api_base_url")
+            or self.config.get("vov_direct_base_url") or ""
+        ).strip().rstrip("/")
+        self.api_key = str(
+            self.config.get("claude_cli_api_key")
+            or self.config.get("vov_direct_api_key") or ""
+        ).strip()
+        self.api_model = str(
+            self.config.get("claude_cli_api_model")
+            or self.model or "claude-sonnet-4-6"
+        ).strip()
+        try:
+            self.api_max_tokens = int(self.config.get("claude_cli_api_max_tokens", 16000) or 16000)
+        except Exception:
+            self.api_max_tokens = 16000
+
         try:
             # Claude engine targets 3-8s scenes (content-first), decoupled from the
             # API pipeline's min_scene_duration. Override with claude_cli_min/max_scene.
@@ -490,6 +514,58 @@ JSON RULES:
 
     # ------------------------------------------------------------- claude call
     def _run_claude(self, prompt: str, cwd: Path) -> str:
+        """Send a prompt and return the model's raw text reply. Dispatches to the
+        configured transport: local claude.exe (cli) or an OpenAI-compatible
+        HTTP endpoint (api). Both return the JSON string the callers then parse."""
+        if self.backend == "api":
+            return self._run_via_api(prompt)
+        return self._run_via_cli(prompt, cwd)
+
+    def _run_via_api(self, prompt: str) -> str:
+        """API transport: POST the same prompt to an OpenAI-compatible endpoint
+        (VOV router serving claude-sonnet-4-6). No claude.exe / no Max login."""
+        import random
+        import requests
+
+        if not (self.api_base_url and self.api_key):
+            raise RuntimeError("API backend chua cau hinh (claude_cli_api_base_url/key hoac vov_direct_*)")
+        url = f"{self.api_base_url}/chat/completions"
+        headers = {"Authorization": f"Bearer {self.api_key}", "Content-Type": "application/json"}
+        data = {
+            "model": self.api_model,
+            "messages": [{"role": "user", "content": prompt}],
+            "max_tokens": self.api_max_tokens,
+            "temperature": 0.6,
+            "stream": False,
+        }
+        self._log(f"  -> Calling API ({self.api_model} @ {self.api_base_url}) ...")
+        attempts = 3
+        last_error = ""
+        for attempt in range(attempts):
+            try:
+                resp = requests.post(url, headers=headers, json=data, timeout=self.timeout_seconds)
+                if resp.status_code == 200:
+                    j = resp.json()
+                    choices = j.get("choices") or []
+                    content = (((choices[0] if choices else {}) or {}).get("message") or {}).get("content") or ""
+                    content = content.strip()
+                    if content:
+                        u = j.get("usage") or {}
+                        self._log(f"  -> API done (in={u.get('prompt_tokens','?')} "
+                                  f"out={u.get('completion_tokens','?')} tok)")
+                        return content
+                    last_error = "empty content"
+                else:
+                    last_error = f"HTTP {resp.status_code} {resp.text[:160]}"
+            except Exception as e:
+                last_error = str(e)
+            if attempt < attempts - 1:
+                wait = min(20, 2 ** attempt) + random.uniform(0.2, 1.0)
+                self._log(f"  [WARN] API fail ({last_error}); retry {attempt + 1}/{attempts} sau {wait:.1f}s", "WARN")
+                time.sleep(wait)
+        raise RuntimeError(f"API backend that bai: {last_error}")
+
+    def _run_via_cli(self, prompt: str, cwd: Path) -> str:
         # Claude only writes a JSON data file (no code execution). acceptEdits
         # auto-approves the Write tool in headless mode, so we do NOT need the
         # dangerous skip — safer (Claude never runs anything).

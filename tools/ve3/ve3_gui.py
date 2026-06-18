@@ -1458,6 +1458,12 @@ class SettingsPage(ctk.CTkScrollableFrame):
             "Claude Code CLI (Claude Max)": "claude_cli",
         }
         self.excel_engine_labels = {v: k for k, v in self.excel_engine_options.items()}
+        # Transport for the Claude CLI engine: local claude.exe vs OpenAI-compatible API (VOV).
+        self.claude_backend_options = {
+            "CLI (claude.exe)": "cli",
+            "API (VOV)": "api",
+        }
+        self.claude_backend_labels = {v: k for k, v in self.claude_backend_options.items()}
         self.generation_backend_options = {"Server": "server", "NanoPic": "nanopic", "FlowKit": "flowkit", "Combined": "combined"}
         self.generation_backend_labels = {v: k for k, v in self.generation_backend_options.items()}
         self.grid_columnconfigure(0, weight=1)
@@ -1532,6 +1538,10 @@ class SettingsPage(ctk.CTkScrollableFrame):
         ctk.CTkLabel(eng_box, text="Engine:", font=("",11,"bold"), text_color=T1).pack(side="left", padx=(0,6))
         self.opt_excel_engine = ctk.CTkOptionMenu(eng_box, values=list(self.excel_engine_options.keys()), width=220, height=28, corner_radius=4, fg_color=EN, button_color=BD, text_color=T1, font=("",11))
         self.opt_excel_engine.pack(side="left")
+        # Claude CLI transport: CLI (claude.exe, Claude Max) or API (VOV, no CLI needed)
+        ctk.CTkLabel(eng_box, text="Backend:", font=("",10), text_color=T2).pack(side="left", padx=(10,4))
+        self.opt_claude_backend = ctk.CTkOptionMenu(eng_box, values=list(self.claude_backend_options.keys()), width=130, height=28, corner_radius=4, fg_color=EN, button_color=BD, text_color=T1, font=("",11))
+        self.opt_claude_backend.pack(side="left")
         # Claude CLI review pass toggle (tat = nhanh gap doi, bat = ra soat ky hon)
         self.sw_claude_review = ctk.CTkSwitch(eng_box, text="Review", progress_color=OK, button_color="#FFF", button_hover_color="#EEE", font=("",10))
         self.sw_claude_review.pack(side="left", padx=(10,0))
@@ -1883,6 +1893,8 @@ class SettingsPage(ctk.CTkScrollableFrame):
         self.opt_excel_ai_provider.set(self.excel_ai_provider_labels.get(provider_value, "DeepSeek"))
         engine_value = (cfg.get("excel_engine", "") or "api").strip().lower() or "api"
         self.opt_excel_engine.set(self.excel_engine_labels.get(engine_value, self.excel_engine_labels["api"]))
+        backend_v = (cfg.get("claude_cli_backend", "") or "cli").strip().lower() or "cli"
+        self.opt_claude_backend.set(self.claude_backend_labels.get(backend_v, self.claude_backend_labels["cli"]))
         if bool(cfg.get("claude_cli_review", True)):
             self.sw_claude_review.select()
         else:
@@ -2003,6 +2015,7 @@ class SettingsPage(ctk.CTkScrollableFrame):
         cfg["excel_ai_provider"] = self.excel_ai_provider_options.get(selected_provider_label, "deepseek")
         selected_engine_label = self.opt_excel_engine.get().strip()
         cfg["excel_engine"] = self.excel_engine_options.get(selected_engine_label, "api")
+        cfg["claude_cli_backend"] = self.claude_backend_options.get(self.opt_claude_backend.get().strip(), "cli")
         cfg["claude_cli_review"] = bool(self.sw_claude_review.get())
         try:
             deepseek_slots = max(1, int(self.ent_deepseek_slots.get().strip() or "4"))
@@ -2804,6 +2817,10 @@ foreach ($pid in $children) {{
         # per-chunk retry, so a long video finishes ~3x faster without orphaning.
         cfg.setdefault("claude_cli_chunk_parallel", 3)
         cfg.setdefault("claude_cli_chunk_retries", 2)
+        # Claude CLI transport: "cli" (claude.exe) or "api" (VOV, no CLI). The api
+        # backend reuses vov_direct_base_url/api_key already set above.
+        cfg.setdefault("claude_cli_backend", "cli")
+        cfg.setdefault("claude_cli_api_model", "claude-sonnet-4-6")
         return cfg
 
     def _build(self):
