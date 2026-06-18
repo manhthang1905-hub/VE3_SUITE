@@ -2792,8 +2792,8 @@ foreach ($pid in $children) {{
         # DeepSeek Pool (self-hosted, OpenAI-compatible) — replaces the paid DeepSeek key.
         cfg.setdefault("deepseek_pool_base_url", "http://192.168.88.254:5001/v1")
         cfg.setdefault("deepseek_pool_api_key", "sk-ds2api-local")
-        cfg.setdefault("deepseek_pool_model", "deepseek-v4-flash")
-        cfg.setdefault("deepseek_pool_model_chain", ["deepseek-v4-flash", "deepseek-v4-pro"])
+        cfg.setdefault("deepseek_pool_model", "deepseek-v4-flash-nothinking")
+        cfg.setdefault("deepseek_pool_model_chain", ["deepseek-v4-flash-nothinking", "deepseek-v4-pro-nothinking"])
         cfg.setdefault("excel_workers", 6)
         cfg.setdefault("max_parallel_api", 6)
         cfg.setdefault("deepseek_parallel_slots", 4)

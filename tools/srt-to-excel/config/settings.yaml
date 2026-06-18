@@ -23,10 +23,10 @@ deepseek_api_keys:
 deepseek_model: deepseek-v4-pro
 deepseek_pool_api_key: sk-ds2api-local
 deepseek_pool_base_url: http://192.168.88.254:5001/v1
-deepseek_pool_model: deepseek-v4-flash
+deepseek_pool_model: deepseek-v4-flash-nothinking
 deepseek_pool_model_chain:
-- deepseek-v4-flash
-- deepseek-v4-pro
+- deepseek-v4-flash-nothinking
+- deepseek-v4-pro-nothinking
 deepseek_thinking_type: disabled
 excel_ai_attempts_per_key: 30
 excel_ai_provider: vov_direct

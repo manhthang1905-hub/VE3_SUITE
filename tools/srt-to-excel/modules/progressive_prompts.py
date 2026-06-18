@@ -372,13 +372,16 @@ class ProgressivePromptsGenerator:
         # the paid DeepSeek key. base_url already includes /v1.
         self.deepseek_pool_base_url = (config.get("deepseek_pool_base_url", "") or "").strip().rstrip("/")
         self.deepseek_pool_api_key = (config.get("deepseek_pool_api_key", "") or "").strip()
-        self.deepseek_pool_model = (config.get("deepseek_pool_model", "") or "deepseek-v4-flash").strip()
+        # Excel generation needs CLEAN JSON, not chain-of-thought, so default to the
+        # "-nothinking" variants (the thinking models leak reasoning into content and
+        # break JSON parsing — and are slower).
+        self.deepseek_pool_model = (config.get("deepseek_pool_model", "") or "deepseek-v4-flash-nothinking").strip()
         ds_chain_cfg = config.get("deepseek_pool_model_chain", []) or []
         if isinstance(ds_chain_cfg, str):
             ds_chain_cfg = [x.strip() for x in ds_chain_cfg.split(",") if x.strip()]
         self.deepseek_pool_model_chain = [str(x).strip() for x in ds_chain_cfg if str(x).strip()]
         if not self.deepseek_pool_model_chain:
-            self.deepseek_pool_model_chain = [self.deepseek_pool_model, "deepseek-v4-pro"]
+            self.deepseek_pool_model_chain = [self.deepseek_pool_model, "deepseek-v4-pro-nothinking"]
         # de-dup while keeping order
         seen_ds = set()
         self.deepseek_pool_model_chain = [
@@ -1061,11 +1064,12 @@ PROP RULE: Let the SRT narration decide what objects appear. Do NOT use a fixed 
                                 return content
                             last_error = f"{model_name}: empty content"
                     elif resp.status_code in (408, 409, 429, 500, 502, 503, 504):
-                        # transient / upstream unavailable -> retry, then next model
+                        # Transient / upstream_unavailable. This pool throws frequent
+                        # 503s that clear on retry, and they hit ALL models equally
+                        # (it's the shared upstream), so keep retrying the SAME model
+                        # instead of burning the fallback — only move on after we run
+                        # out of attempts.
                         last_error = f"{model_name}: HTTP {resp.status_code} {resp.text[:140]}"
-                        if resp.status_code in (502, 503, 504) and attempt >= 1:
-                            self._log(f"  DeepSeek Pool upstream loi ({resp.status_code}) tren {model_name} -> chuyen model", "WARN")
-                            break
                     else:
                         last_error = f"{model_name}: HTTP {resp.status_code} {resp.text[:140]}"
                         break  # non-retryable (auth/format) -> next model
