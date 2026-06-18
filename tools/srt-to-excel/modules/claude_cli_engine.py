@@ -916,6 +916,16 @@ Reply with ONLY the corrected JSON object (start with {{ end with }}), no prose.
                 result = self._run_claude(prompt, project_dir)
                 cdata = self._read_data_file(project_dir / cfile, result) or {}
                 if cdata.get("scenes"):
+                    # Per-chunk QA review (runs inside this chunk's thread, so all
+                    # chunks still review in parallel). Mirrors the manual 2nd prompt.
+                    if self.review_enabled:
+                        self._log(f"  -> khuc {i + 1}: QA review...")
+                        reviewed = self._run_review_pass(project_dir, code, cdata)
+                        if reviewed and reviewed.get("scenes"):
+                            # keep this chunk's thumbnails if the review dropped them
+                            if cdata.get("thumbnails") and not reviewed.get("thumbnails"):
+                                reviewed["thumbnails"] = cdata["thumbnails"]
+                            cdata = reviewed
                     return cdata
                 last_err = "khong co scene"
             except Exception as e:
