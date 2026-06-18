@@ -1,12 +1,3 @@
-claude_cli_chunk_parallel: 3
-claude_cli_chunk_retries: 2
-claude_cli_max_scene: 8
-claude_cli_min_scene: 3
-claude_cli_model: claude-sonnet-4-6
-claude_cli_path: ''
-claude_cli_permission_mode: acceptEdits
-claude_cli_review: true
-claude_cli_timeout_seconds: 1800
 claude_pool_api_key: sk_cliproxy_local
 claude_pool_base_url: http://127.0.0.1:8318
 claude_pool_model: gpt-5.4
@@ -19,19 +10,11 @@ claude_pool_model_chain:
 deepseek_api_key: sk-e3a4138d816a42778531c1e944ece336
 deepseek_api_keys:
 - sk-e3a4138d816a42778531c1e944ece336
-- sk-a138987932af4ac6a28ac0c99b49fd77
 deepseek_model: deepseek-v4-pro
-deepseek_pool_api_key: sk-ds2api-local
-deepseek_pool_base_url: http://192.168.88.254:5001/v1
-deepseek_pool_model: deepseek-v4-flash-nothinking
-deepseek_pool_model_chain:
-- deepseek-v4-flash-nothinking
-- deepseek-v4-pro-nothinking
 deepseek_thinking_type: disabled
 excel_ai_attempts_per_key: 30
 excel_ai_provider: vov_direct
 excel_ai_timeout_seconds: 180
-excel_engine: api
 excel_mode: basic
 gemini_api_keys: []
 gemini_models:

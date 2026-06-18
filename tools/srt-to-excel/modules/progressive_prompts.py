@@ -368,26 +368,6 @@ class ProgressivePromptsGenerator:
             int(config.get("claude_pool_demote_threshold", 2) or 2),
         )
 
-        # DeepSeek Pool (OpenAI-compatible, self-hosted) — drop-in replacement for
-        # the paid DeepSeek key. base_url already includes /v1.
-        self.deepseek_pool_base_url = (config.get("deepseek_pool_base_url", "") or "").strip().rstrip("/")
-        self.deepseek_pool_api_key = (config.get("deepseek_pool_api_key", "") or "").strip()
-        # Excel generation needs CLEAN JSON, not chain-of-thought, so default to the
-        # "-nothinking" variants (the thinking models leak reasoning into content and
-        # break JSON parsing — and are slower).
-        self.deepseek_pool_model = (config.get("deepseek_pool_model", "") or "deepseek-v4-flash-nothinking").strip()
-        ds_chain_cfg = config.get("deepseek_pool_model_chain", []) or []
-        if isinstance(ds_chain_cfg, str):
-            ds_chain_cfg = [x.strip() for x in ds_chain_cfg.split(",") if x.strip()]
-        self.deepseek_pool_model_chain = [str(x).strip() for x in ds_chain_cfg if str(x).strip()]
-        if not self.deepseek_pool_model_chain:
-            self.deepseek_pool_model_chain = [self.deepseek_pool_model, "deepseek-v4-pro-nothinking"]
-        # de-dup while keeping order
-        seen_ds = set()
-        self.deepseek_pool_model_chain = [
-            m for m in self.deepseek_pool_model_chain if not (m in seen_ds or seen_ds.add(m))
-        ]
-
         # Callback for logging
         self.log_callback: Optional[Callable] = None
         self._mixed_provider_lock = threading.Lock()
@@ -471,10 +451,8 @@ class ProgressivePromptsGenerator:
 
     def _resolve_ai_provider(self) -> str:
         provider = (self.config.get("excel_ai_provider", "") or "").strip().lower()
-        if provider in ("deepseek", "deepseek_vov", "claude_pool", "vov_direct", "deepseek_pool"):
+        if provider in ("deepseek", "deepseek_vov", "claude_pool", "vov_direct"):
             return provider
-        if (self.config.get("deepseek_pool_base_url") or "").strip() and (self.config.get("deepseek_pool_api_key") or "").strip():
-            return "deepseek_pool"
         if (self.config.get("vov_direct_base_url") or "").strip() or (self.config.get("vov_direct_api_key") or "").strip():
             return "vov_direct"
         if (self.config.get("claude_pool_base_url") or "").strip() or (self.config.get("claude_pool_api_key") or "").strip():
@@ -482,8 +460,6 @@ class ProgressivePromptsGenerator:
         return "deepseek"
 
     def _provider_display_name(self) -> str:
-        if self.ai_provider == "deepseek_pool":
-            return "DeepSeek Pool"
         if self.ai_provider == "claude_pool":
             return "Claude Pool"
         if self.ai_provider == "vov_direct":
@@ -738,8 +714,6 @@ PROP RULE: Let the SRT narration decide what objects appear. Do NOT use a fixed 
             return bool(self.vov_direct_base_url and self.vov_direct_api_key and self.vov_direct_model)
         if self.ai_provider == "claude_pool":
             return bool(self.claude_pool_base_url and self.claude_pool_api_key and self.claude_pool_model)
-        if self.ai_provider == "deepseek_pool":
-            return bool(self.deepseek_pool_base_url and self.deepseek_pool_api_key)
         return bool(self.deepseek_keys)
 
     def _test_provider(self):
@@ -768,15 +742,6 @@ PROP RULE: Let the SRT narration decide what objects appear. Do NOT use a fixed 
             return
         if self.ai_provider == "claude_pool":
             self._test_claude_pool()
-            return
-        if self.ai_provider == "deepseek_pool":
-            # No hard probe: upstream may be briefly down, and call-time has its own
-            # retry + fallback to a paid DeepSeek key. Just report config.
-            self._log(
-                f"  DeepSeek Pool configured: {self.deepseek_pool_base_url} "
-                f"(models: {', '.join(self.deepseek_pool_model_chain)})",
-                "INFO",
-            )
             return
         self._test_api_keys()
         if not self.deepseek_keys:
@@ -945,25 +910,6 @@ PROP RULE: Let the SRT narration decide what objects appear. Do NOT use a fixed 
                 max_tokens=max_tokens,
                 system_prompt=system_prompt,
             )
-        if self.ai_provider == "deepseek_pool":
-            result = self._call_deepseek_pool_api(
-                prompt=prompt,
-                temperature=temperature,
-                max_tokens=max_tokens,
-                system_prompt=system_prompt,
-            )
-            if result:
-                return result
-            # Pool down -> fall back to a paid DeepSeek key if one is configured.
-            if self.deepseek_keys:
-                self._log("  DeepSeek Pool failed. Falling back to DeepSeek key.", "WARN")
-                return self._call_deepseek_api(
-                    prompt=prompt,
-                    temperature=temperature,
-                    max_tokens=max_tokens,
-                    system_prompt=system_prompt,
-                )
-            return None
 
         provider = self._select_mixed_provider() if self.ai_provider == "deepseek_vov" else "deepseek"
         if provider == "vov_direct" and self.vov_direct_base_url and self.vov_direct_api_key:
@@ -1004,86 +950,6 @@ PROP RULE: Let the SRT narration decide what objects appear. Do NOT use a fixed 
                 max_tokens=max_tokens,
                 system_prompt=system_prompt,
             )
-        return None
-
-    def _call_deepseek_pool_api(
-        self,
-        prompt: str,
-        temperature: float = 0.7,
-        max_tokens: int = 8192,
-        system_prompt: Optional[str] = None,
-    ) -> Optional[str]:
-        """Self-hosted OpenAI-compatible DeepSeek pool. Tries each model in the
-        chain (flash -> pro), retrying transient errors; returns None if all fail
-        (the dispatcher then falls back to a paid DeepSeek key, if any)."""
-        import random
-        import requests
-
-        if not (self.deepseek_pool_base_url and self.deepseek_pool_api_key):
-            self._log("  ERROR: DeepSeek Pool chua cau hinh (base_url/api_key)!", "ERROR")
-            return None
-
-        messages = []
-        if system_prompt:
-            messages.append({"role": "system", "content": system_prompt})
-        messages.append({"role": "user", "content": prompt})
-
-        headers = {
-            "Authorization": f"Bearer {self.deepseek_pool_api_key}",
-            "Content-Type": "application/json",
-        }
-        # base_url already ends with /v1 -> just append /chat/completions
-        url = f"{self.deepseek_pool_base_url}/chat/completions"
-        timeout_seconds = int(self.config.get("excel_ai_timeout_seconds", self.config.get("api_timeout_seconds", 180)) or 180)
-        max_attempts = max(3, int(self.config.get("excel_ai_attempts_per_key", self.config.get("api_attempts_per_key", 3)) or 3))
-        last_error = None
-
-        for model_name in self.deepseek_pool_model_chain:
-            self._log(f"  DeepSeek Pool trying model: {model_name}", "INFO")
-            for attempt in range(max_attempts):
-                try:
-                    data = {
-                        "model": model_name,
-                        "messages": messages,
-                        "temperature": temperature,
-                        "max_tokens": max_tokens,
-                        "stream": False,
-                    }
-                    resp = requests.post(url, headers=headers, json=data, timeout=timeout_seconds)
-                    if resp.status_code == 200:
-                        try:
-                            payload = resp.json()
-                        except ValueError as e:
-                            last_error = f"{model_name}: invalid JSON ({e})"
-                        else:
-                            choices = payload.get("choices") or []
-                            content = (((choices[0] if choices else {}) or {}).get("message") or {}).get("content") or ""
-                            content = content.strip()
-                            if content:
-                                self._log(f"  DeepSeek Pool OK ({model_name})", "INFO")
-                                return content
-                            last_error = f"{model_name}: empty content"
-                    elif resp.status_code in (408, 409, 429, 500, 502, 503, 504):
-                        # Transient / upstream_unavailable. This pool throws frequent
-                        # 503s that clear on retry, and they hit ALL models equally
-                        # (it's the shared upstream), so keep retrying the SAME model
-                        # instead of burning the fallback — only move on after we run
-                        # out of attempts.
-                        last_error = f"{model_name}: HTTP {resp.status_code} {resp.text[:140]}"
-                    else:
-                        last_error = f"{model_name}: HTTP {resp.status_code} {resp.text[:140]}"
-                        break  # non-retryable (auth/format) -> next model
-                except Exception as e:
-                    last_error = f"{model_name}: {e}"
-
-                wait_seconds = min(20, 2 ** attempt) + random.uniform(0.2, 1.0)
-                self._log(
-                    f"  DeepSeek Pool fail ({last_error}); retry {attempt + 1}/{max_attempts} sau {wait_seconds:.1f}s",
-                    "WARN",
-                )
-                time.sleep(wait_seconds)
-
-        self._log(f"  ERROR: DeepSeek Pool that bai het model: {last_error}", "ERROR")
         return None
 
     def _call_deepseek_api(
