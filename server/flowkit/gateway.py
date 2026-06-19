@@ -1541,6 +1541,27 @@ async def cleanup_loop():
             for inst in instances:
                 if inst.processing_count < 0:
                     inst.processing_count = 0
+            # Delete old I2V video files — VE3 downloads them within minutes, but they
+            # were never removed -> _workflow_videos grew unbounded (heavy disk).
+            try:
+                vdir = os.path.join(os.path.dirname(__file__), "_workflow_videos")
+                if os.path.isdir(vdir):
+                    vcut = time.time() - 3600  # keep 1h, then delete
+                    nvid = 0
+                    for fn in os.listdir(vdir):
+                        if not fn.endswith(".mp4"):
+                            continue
+                        fp = os.path.join(vdir, fn)
+                        try:
+                            if os.path.getmtime(fp) < vcut:
+                                os.remove(fp)
+                                nvid += 1
+                        except Exception:
+                            pass
+                    if nvid:
+                        logger.info("Cleanup: %d old video files removed", nvid)
+            except Exception:
+                pass
         except Exception as e:
             logger.exception("[Cleanup] error: %s", e)
 
