@@ -463,22 +463,30 @@ Chay `SETUP_NEW_MACHINE.bat` (Run as Admin) de:
   allowed in Google Chrome, ignoring"). Extension phai nam san trong profile
   (Default/Secure Preferences, location:4) — Chrome tu load tu path
   `flowkit_extensions/ext_810x` moi lan khoi dong, KHONG can --load-extension.
-- "Mat extension" = entry trong Secure Preferences bi vo hieu (MAC mismatch sau
-  Chrome update / dev-mode auto-disable) -> extension khong connect.
-- **Giai phap: Golden Master.** Moi instance giu 1 ban goc da cai san extension:
-  `GoogleChromePortable - Copy (1) - Copy` la golden cua `Copy (1)` (override bang
-  `instance.golden_dir`). Khi mat extension -> khoi phuc thu muc `Data` (~17-25MB)
-  tu golden (giu nguyen binary Chrome 800MB de van auto-update).
-- **Tu dong:** gateway health loop phat hien `extension_connected=false` ->
-  `_self_heal_check` -> neu co golden -> `trigger_golden_restore` (kill -> restore
-  Data tu golden -> start -> cho extension reconnect). Khong co golden -> self-heal cu.
-- **Phong ngua:** `launcher.py` khi start moi instance goi
-  `start_chrome(restore_extension_if_missing=True)`: neu extension chua dang ky
-  trong profile -> tu restore tu golden TRUOC khi chay.
-- **Thu cong:** `python launcher.py --restore-golden flowkit-1` (hoac `all`).
-- Tao/cap nhat golden: cai extension thu cong 1 lan vao 1 ban chay OK (Load
-  unpacked tro toi `flowkit_extensions/ext_810x`), tat Chrome, roi copy ca folder
-  `GoogleChromePortable - Copy (N)` thanh `... - Copy`.
+- **Nguyen nhan that su (QUAN TRONG):** Chrome 148 chi CHAY extension unpacked khi
+  **`developer_mode` BAT**. `developer_mode` la pref **co MAC bao ve**, MAC gan voi
+  `Local State` (`user_experience_metrics.machine_id`). "Mat extension" = Chrome tat
+  `developer_mode` -> extension Off ("Chrome can't verify where this extension comes
+  from"). Vi MAC gan Local State nen `Secure Preferences` + `Local State` PHAI di
+  chung — copy thieu / giu Local State cu se lam Chrome reset `developer_mode`.
+
+- **Giai phap: golden `Data - Copy` (full Data, mỗi Chrome tu giu).**
+  - **Tao golden:** cai extension + BAT developer_mode + (nen) dang nhap, roi copy CA
+    thu muc `<chrome_root>/Data` -> `<chrome_root>/Data - Copy`. Hoac:
+    `python launcher.py --make-data-copy all` (chi copy khi extension dang OK).
+  - **Restore:** truoc khi mo Chrome, neu extension mat -> copy TOAN BO `Data - Copy`
+    -> `Data` (gom Local State => `developer_mode` MAC hop le => Chrome 148 chay lai
+    extension; da test: `extension_connected=True`).
+  - **Login:** tai khoan = tai khoan trong `Data - Copy`. Nen tao `Data - Copy` luc DA
+    dang nhap de khoi login lai. Neu het han/chua login, pipeline FA tu login lai.
+    KHONG the vua giu login cu vua co dev-mode vi ca hai deu buoc vao Local State.
+  - Hook trong `chrome_setup.setup_chrome` (duong khoi dong THAT — GUI pipeline +
+    recovery FA). Tu dong. Thu cong: `python launcher.py --restore-ext flowkit-1`.
+
+- **Giai phap phu: Golden Master (ca thu muc Chrome).** Neu co 1 ban Chrome rieng
+  `GoogleChromePortable - Copy (1) - Copy` la golden cua `Copy (1)` (override
+  `instance.golden_dir`): `python launcher.py --restore-golden flowkit-1`. *Tu choi
+  neu "golden" that ra la instance dang chay khac (an toan tren VM dung chung).*
 
 ### I2V timeout
 - I2V mat 60-450 giay tuy server
@@ -542,6 +550,17 @@ git checkout 640e838 -- server/flowkit/launcher.py
 ```
 
 ## Changelog
+
+### Extension recovery: full 'Data - Copy' restore (fix Chrome 148 developer_mode)
+- Nguyen nhan: Chrome 148 chi chay extension unpacked khi `developer_mode` bat; do la
+  pref co MAC gan `Local State` (machine_id) -> phai restore CA Data, khong the chi
+  Secure Preferences (da test: chi SP -> dev mode tat -> ext Off).
+- `launcher.py`: `_ext_in_secure_prefs` / `_ext_registered_in`, `golden_data_dir`,
+  `restore_from_data_copy` (full Data tu `<chrome_root>/Data - Copy`), `make_data_copy`;
+  CLI `--make-data-copy`, `--restore-ext`. `golden_root_for` tu choi thu muc trung
+  instance dang chay khac.
+- `chrome_setup.py`: `setup_chrome` restore tu `Data - Copy` truoc khi mo Chrome ->
+  chay tren CA duong khoi dong GUI pipeline lan FA recovery.
 
 ### Golden Master extension recovery (Chrome 148 --load-extension block)
 - `launcher.py`: them `golden_root_for`, `extension_registered` (tinh ext_id =

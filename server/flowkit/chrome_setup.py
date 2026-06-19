@@ -561,6 +561,21 @@ def setup_chrome(
         except Exception as e:
             log("Fingerprint generation error: %s" % e)
 
+    # ── 0. Extension self-heal: Chrome 148+ ignores --load-extension AND only runs
+    #       unpacked extensions when developer_mode is ON (a MAC-protected pref tied
+    #       to Local State). If the extension is missing, restore the WHOLE Data
+    #       folder from 'Data - Copy' (user-managed golden made with the ext + dev
+    #       mode on). Login comes from 'Data - Copy'; if stale, login step below re-logs.
+    try:
+        from launcher import _ext_registered_in, restore_from_data_copy
+        if not _ext_registered_in(chrome_dir, ext_dir):
+            if restore_from_data_copy(chrome_dir, ext_dir):
+                log("Extension missing -> restored full Data from 'Data - Copy'")
+            else:
+                log("Extension missing and no valid 'Data - Copy' to restore from")
+    except Exception as e:
+        log("ext-restore error: %s" % e)
+
     _write_chrome_prefs(chrome_dir)
     _worker_id = port - 19200 if port >= 19200 else 0
 

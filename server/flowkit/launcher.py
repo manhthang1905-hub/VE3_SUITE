@@ -558,24 +558,35 @@ def _expected_ext_id(ext_dir: Path) -> str:
 
 
 def golden_root_for(instance: dict) -> Optional[Path]:
-    """Return the golden-master root for an instance, or None if it doesn't exist."""
+    """Return the golden-master Chrome folder for an instance, or None.
+
+    SAFETY: never return a folder that is itself another configured instance's
+    live Chrome root (e.g. on VMs where 'Copy (1) - Copy' is a running instance,
+    not a golden) — copying a live instance's Data would corrupt accounts.
+    """
     chrome_dir = resolve_path(instance["chrome_path"]).parent.parent.parent
     gd = instance.get("golden_dir")
     golden = resolve_path(gd) if gd else (chrome_dir.parent / (chrome_dir.name + " - Copy"))
-    return golden if golden.exists() else None
+    if not golden.exists():
+        return None
+    for other in CONFIG.get("instances", []):
+        try:
+            other_root = resolve_path(other["chrome_path"]).parent.parent.parent
+        except Exception:
+            continue
+        if other_root == golden:
+            return None  # this "golden" is actually a live instance — refuse
+    return golden
 
 
-def extension_registered(instance: dict) -> bool:
-    """True if this instance's FlowKit extension is registered AND enabled in the
-    working profile's Secure Preferences (i.e. Chrome will load it on launch)."""
+def _ext_in_secure_prefs(sp_path: Path, ext_id: str) -> bool:
+    """True if a Secure Preferences file registers ext_id as an ENABLED extension."""
     import json as _json
-    chrome_dir = resolve_path(instance["chrome_path"]).parent.parent.parent
-    ext_id = _expected_ext_id(resolve_path(instance["extension_dir"]))
-    sp = chrome_dir / "Data" / "profile" / "Default" / "Secure Preferences"
-    if not sp.exists():
+    sp_path = Path(sp_path)
+    if not sp_path.exists():
         return False
     try:
-        data = _json.loads(sp.read_text(encoding="utf-8"))
+        data = _json.loads(sp_path.read_text(encoding="utf-8"))
     except Exception:
         return False
     entry = data.get("extensions", {}).get("settings", {}).get(ext_id)
@@ -585,6 +596,131 @@ def extension_registered(instance: dict) -> bool:
     if entry.get("state") == 0 or entry.get("disable_reasons"):
         return False
     return True
+
+
+def _ext_registered_in(chrome_dir: Path, ext_dir: Path) -> bool:
+    """True if the unpacked extension at ext_dir is registered AND enabled in the
+    working profile's Secure Preferences (i.e. Chrome will load it on launch)."""
+    ext_id = _expected_ext_id(Path(ext_dir))
+    sp = Path(chrome_dir) / "Data" / "profile" / "Default" / "Secure Preferences"
+    return _ext_in_secure_prefs(sp, ext_id)
+
+
+def extension_registered(instance: dict) -> bool:
+    """Instance wrapper for _ext_registered_in (reads chrome_path/extension_dir from config)."""
+    return _ext_registered_in(
+        resolve_path(instance["chrome_path"]).parent.parent.parent,
+        resolve_path(instance["extension_dir"]),
+    )
+
+
+# ─── Data - Copy golden (user-managed, primary) ──────────────
+# User installs the extension once (with developer_mode ON), then copies
+# "<chrome_root>/Data" to "<chrome_root>/Data - Copy". When Chrome loses the
+# extension, restore the WHOLE Data folder from "Data - Copy".
+#
+# Why the whole Data (not just Secure Preferences): Chrome 148 only RUNS an
+# unpacked extension when developer_mode is ON, and that flag is MAC-protected
+# with a key tied to Local State (machine_id). Secure Preferences + Local State
+# must stay paired, so only a full-Data restore keeps developer_mode valid.
+
+def golden_data_dir(chrome_dir: Path) -> Optional[Path]:
+    """Return '<chrome_root>/Data - Copy' if it exists, else None."""
+    p = Path(chrome_dir) / "Data - Copy"
+
+def golden_data_dir(chrome_dir: Path) -> Optional[Path]:
+    """Return '<chrome_root>/Data - Copy' if it exists, else None."""
+    p = Path(chrome_dir) / "Data - Copy"
+    return p if p.is_dir() else None
+
+
+def restore_from_data_copy(chrome_dir: Path, ext_dir: Path) -> bool:
+    """If the extension is missing, restore the WHOLE Data folder from
+    '<chrome_root>/Data - Copy'.
+
+    Must copy the FULL Data (not just Secure Preferences): Chrome 148 only RUNS an
+    unpacked extension when `developer_mode` is on, and that flag is a MAC-protected
+    pref whose MAC is tied to Local State (user_experience_metrics.machine_id). The
+    Secure Preferences + Local State pair must stay together, so a partial copy or
+    keeping the old Local State makes Chrome reset developer_mode -> extension OFF.
+
+    Login note: the account in the restored profile is whatever 'Data - Copy' has.
+    Create 'Data - Copy' WHILE logged in to keep the session; otherwise the FA
+    pipeline (chrome_setup) re-logs in automatically. Returns True if the extension
+    ends up registered.
+    """
+    import shutil as _shutil
+    chrome_dir = Path(chrome_dir)
+    ext_id = _expected_ext_id(Path(ext_dir))
+    work_data = chrome_dir / "Data"
+    work_sp = work_data / "profile" / "Default" / "Secure Preferences"
+    if _ext_in_secure_prefs(work_sp, ext_id):
+        return False  # already healthy
+    golden = golden_data_dir(chrome_dir)
+    if not golden:
+        return False  # no 'Data - Copy'
+    golden_sp = golden / "profile" / "Default" / "Secure Preferences"
+    if not _ext_in_secure_prefs(golden_sp, ext_id):
+        print(f"[{chrome_dir.name}] 'Data - Copy' has no registered extension — cannot restore")
+        return False
+
+    # release file locks
+    try:
+        from chrome_setup import _kill_chrome_for_dir
+        _kill_chrome_for_dir(chrome_dir)
+        time.sleep(2)
+    except Exception:
+        pass
+
+    if work_data.exists():
+        for attempt in range(6):
+            try:
+                _shutil.rmtree(work_data)
+                break
+            except FileNotFoundError:
+                break
+            except Exception as e:
+                if attempt == 5:
+                    print(f"[{chrome_dir.name}] Cannot delete Data (Chrome locking it?): {e}")
+                    return False
+                time.sleep(1)
+    try:
+        _shutil.copytree(golden, work_data)
+    except Exception as e:
+        print(f"[{chrome_dir.name}] Copy 'Data - Copy' -> Data failed: {e}")
+        return False
+    print(f"[{chrome_dir.name}] Restored full Data from 'Data - Copy'")
+    return _ext_in_secure_prefs(work_sp, ext_id)
+
+
+def make_data_copy(chrome_dir: Path, ext_dir: Path) -> bool:
+    """Create/refresh '<chrome_root>/Data - Copy' from the current Data.
+
+    Only snapshots when the extension is currently registered (so the golden is
+    known-good). Returns True on success.
+    """
+    import shutil as _shutil
+    chrome_dir = Path(chrome_dir)
+    if not _ext_registered_in(chrome_dir, ext_dir):
+        return False
+    src = chrome_dir / "Data"
+    if not src.is_dir():
+        return False
+    dst = chrome_dir / "Data - Copy"
+    try:
+        from chrome_setup import _kill_chrome_for_dir
+        _kill_chrome_for_dir(chrome_dir)
+        time.sleep(2)
+    except Exception:
+        pass
+    if dst.exists():
+        _shutil.rmtree(dst, ignore_errors=True)
+    try:
+        _shutil.copytree(src, dst)
+        return True
+    except Exception as e:
+        print(f"[{chrome_dir.name}] make 'Data - Copy' failed: {e}")
+        return False
 
 
 def restore_data_from_golden(instance: dict) -> bool:
@@ -710,10 +846,47 @@ def main():
     parser.add_argument("--no-gateway", action="store_true", help="Don't start gateway")
     parser.add_argument("--restore-golden", metavar="NAME",
                         help="Restore extension from golden master for instance NAME (or 'all') then exit")
+    parser.add_argument("--make-data-copy", metavar="NAME",
+                        help="Create/refresh '<chrome_root>/Data - Copy' golden from the current Data for NAME (or 'all'), then exit")
+    parser.add_argument("--restore-ext", metavar="NAME",
+                        help="Restore a lost extension for NAME (or 'all') from 'Data - Copy' / golden cache, then exit")
     args = parser.parse_args()
 
     processes = []
     instances_cfg = [i for i in CONFIG.get("instances", []) if i.get("enabled", True)]
+
+    def _resolve_targets(val):
+        return instances_cfg if val == "all" else [i for i in instances_cfg if i["name"] == val]
+
+    if args.make_data_copy:
+        targets = _resolve_targets(args.make_data_copy)
+        if not targets:
+            print(f"[ERROR] Instance not found: {args.make_data_copy}")
+            print("Available: " + ", ".join(i["name"] for i in instances_cfg))
+            sys.exit(1)
+        for inst in targets:
+            cd = resolve_path(inst["chrome_path"]).parent.parent.parent
+            ed = resolve_path(inst["extension_dir"])
+            ok = make_data_copy(cd, ed)
+            print(f"[{inst['name']}] make 'Data - Copy': {'OK -> ' + str(cd / 'Data - Copy') if ok else 'SKIP (extension not registered/enabled right now)'}")
+        return
+
+    if args.restore_ext:
+        targets = _resolve_targets(args.restore_ext)
+        if not targets:
+            print(f"[ERROR] Instance not found: {args.restore_ext}")
+            print("Available: " + ", ".join(i["name"] for i in instances_cfg))
+            sys.exit(1)
+        for inst in targets:
+            cd = resolve_path(inst["chrome_path"]).parent.parent.parent
+            ed = resolve_path(inst["extension_dir"])
+            if _ext_registered_in(cd, ed):
+                print(f"[{inst['name']}] extension OK (already registered)")
+            elif restore_from_data_copy(cd, ed):
+                print(f"[{inst['name']}] restored full Data from 'Data - Copy'")
+            else:
+                print(f"[{inst['name']}] FAILED — no valid 'Data - Copy' to restore from")
+        return
 
     if args.restore_golden:
         if args.restore_golden == "all":
