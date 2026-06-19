@@ -1905,7 +1905,9 @@ class FlowKitGUI(tk.Tk):
 
             git_root = SUITE_ROOT if not _IS_STANDALONE else BASE_DIR
             git_ok = False
-            if git_available:
+            # Standalone (VM): git checkout would populate <root>/server/flowkit/* and
+            # leave the running FLAT files untouched -> use the ZIP flat-copy path instead.
+            if git_available and not _IS_STANDALONE:
                 git_dir = Path(git_root) / ".git"
                 if not git_dir.exists():
                     self._log("Git init (lan dau)...", "INFO")
@@ -1994,10 +1996,14 @@ class FlowKitGUI(tk.Tk):
                                 shutil.copytree(str(ext_dir), str(dst_sub))
 
                 src_server_root = extract_dir / "VE3_SUITE-main" / "server"
-                for shared_file in ("google_login.py", "requirements.txt"):
-                    src = src_server_root / shared_file
-                    if src.exists():
-                        shutil.copy2(str(src), str(BASE_DIR / shared_file))
+                # NOTE: google_login.py is already copied flat from server/flowkit by the
+                # glob above. Do NOT overwrite it from server/ root — that's the LEGACY
+                # copy and is stale. Only pull requirements.txt as a shared fallback.
+                for shared_file in ("requirements.txt",):
+                    for src in (src_flowkit / shared_file, src_server_root / shared_file):
+                        if src.exists():
+                            shutil.copy2(str(src), str(BASE_DIR / shared_file))
+                            break
                 for ipv6_path in [src_flowkit / "ipv6_proxy.py",
                                   src_server_root / "modules" / "ipv6_proxy.py"]:
                     if ipv6_path.exists():
