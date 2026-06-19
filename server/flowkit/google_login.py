@@ -1112,11 +1112,13 @@ def login_google_chrome(account_info: dict, chrome_portable: str = None, profile
                 pass
         else:
             # v1.0.619: Direct mode - block IPv4 TRUOC khi mo Chrome
+            # (firewall IPv4-block la tinh nang cua tool VE3; flowkit dinh tuyen qua
+            #  SOCKS proxy nen khong can — bo qua im lang neu module khong co)
             try:
                 from modules.drission_flow_api import DrissionFlowAPI
                 DrissionFlowAPI._block_ipv4_for_chrome_static(lambda msg: log(msg))
-            except Exception as fw_err:
-                log(f"[FW] Firewall error: {fw_err}")
+            except Exception:
+                pass
 
         # Má»Ÿ Chrome má»›i
         driver = ChromiumPage(options)
@@ -1125,7 +1127,10 @@ def login_google_chrome(account_info: dict, chrome_portable: str = None, profile
         # v1.0.650: Inject fingerprint NGAY SAU khi mo Chrome, TRUOC khi navigate
         # Dam bao login va tao anh dung CUNG fingerprint â†’ Google khong detect thay doi
         try:
-            from modules.fingerprint_data import get_unique_seed, build_fingerprint_js
+            try:
+                from fingerprint_data import get_unique_seed, build_fingerprint_js  # flowkit (local)
+            except ImportError:
+                from modules.fingerprint_data import get_unique_seed, build_fingerprint_js  # VE3 tool
             _fp_seed_file = Path(TOOL_DIR) / "config" / f".fingerprint_seed_{worker_id}"
             _fp_seed = get_unique_seed()
             _fp_js = build_fingerprint_js(_fp_seed)
