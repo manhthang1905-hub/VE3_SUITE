@@ -600,12 +600,42 @@ class FlowKitGUI(tk.Tk):
 
         threading.Thread(target=self._start_all, args=(accounts,), daemon=True).start()
 
+    @staticmethod
+    def _default_config() -> dict:
+        """Baseline config used when config.yaml is missing/corrupt (self-heal)."""
+        return {
+            'gateway_host': '0.0.0.0',
+            'gateway_port': 5100,
+            'chrome_layout': {'cols': 2, 'gui_width': 700, 'rows': 0, 'zoom': 50},
+            'ipv6': {'enabled': False, 'pool_url': '', 'prefix_length': 56, 'socks_port': 1080},
+            'quota': {'cooldown_seconds': 120, 'retry_count': 3, 'retry_delay': 15},
+            'rate_limit': {'cooldown_per_instance': 5, 'max_concurrent_per_instance': 1},
+            'recovery': {'chrome_restart_delay': 5, 'extension_reconnect_timeout': 30,
+                         'level1_max_attempts': 2, 'level2_max_attempts': 2,
+                         'level3_max_attempts': 3, 'min_recovery_interval': 30},
+            'rotation': {'cooldown_seconds': 300, 'max_consecutive_403': 3,
+                         'max_retries_per_request': 3},
+            'timeouts': {'health_check': 5, 'image_generation': 120, 'video_poll': 420,
+                         'video_poll_interval': 10, 'video_submit': 60},
+            'instances': [],
+        }
+
     def _update_config(self):
-        """Update config.yaml with current GUI settings."""
+        """Update config.yaml with current GUI settings (UTF-8, self-heals if corrupt)."""
         import yaml
         config_path = BASE_DIR / "config.yaml"
-        with open(config_path) as f:
-            config = yaml.safe_load(f)
+        config = None
+        try:
+            with open(config_path, encoding="utf-8-sig") as f:
+                config = yaml.safe_load(f)
+        except Exception as e:
+            self._log(f"config.yaml unreadable ({e}) -> regenerating from defaults", "WARN")
+        if not isinstance(config, dict):
+            config = self._default_config()
+        # Ensure required sections exist (in case of partial/old config)
+        for k, v in self._default_config().items():
+            if k != 'instances':
+                config.setdefault(k, v)
 
         config['gateway_port'] = int(self._gateway_port.get() or 5100)
         config['rotation']['max_consecutive_403'] = int(self._max_403.get() or 3)
@@ -652,8 +682,11 @@ class FlowKitGUI(tk.Tk):
             })
         config['instances'] = instances
 
-        with open(config_path, 'w') as f:
+        # Atomic write in UTF-8 (avoid cp1252 + half-written/corrupt files)
+        tmp_path = config_path.with_suffix(".yaml.tmp")
+        with open(tmp_path, 'w', encoding="utf-8") as f:
             yaml.dump(config, f, default_flow_style=False, allow_unicode=True)
+        os.replace(str(tmp_path), str(config_path))
 
     def _parse_accounts(self) -> list:
         """Parse accounts from text field. Format: email|password|2fa_secret"""
