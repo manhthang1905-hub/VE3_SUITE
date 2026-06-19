@@ -378,6 +378,82 @@ class RecoveryManager:
         finally:
             state.recovering = False
 
+    def has_golden(self, instance_name: str) -> bool:
+        """True if a golden master exists for this instance (extension recovery available)."""
+        cfg = self.instances_config.get(instance_name)
+        if not cfg:
+            return False
+        try:
+            from launcher import golden_root_for
+            return golden_root_for(cfg) is not None
+        except Exception:
+            return False
+
+    def trigger_golden_restore(self, instance_name: str):
+        """Recover a lost extension by restoring the profile from the golden master.
+
+        Preferred over trigger_self_heal when a golden exists: it definitively
+        restores the extension registration (and the golden's login) instead of
+        relying on a plain restart that cannot re-add the extension on Chrome 148.
+        """
+        if instance_name not in self.states:
+            return
+        if self._fa_enabled:
+            fa_state = self._fa_states.get(instance_name, "")
+            if fa_state in ("cooling", "standby", "starting", "setting_up"):
+                logger.info("[Golden] %s: skip — FA mode, state=%s", instance_name, fa_state)
+                return
+        state = self.states[instance_name]
+        if state.recovering:
+            return
+        now = time.time()
+        if now - state.last_recovery_time < self.min_interval:
+            return
+
+        task = asyncio.create_task(self._run_golden_restore(instance_name))
+        def _on_done(t, n=instance_name):
+            self._recovery_tasks.pop(n, None)
+            st = self.states.get(n)
+            if st:
+                st.recovering = False
+        task.add_done_callback(_on_done)
+        self._recovery_tasks[instance_name] = task
+
+    async def _run_golden_restore(self, instance_name: str):
+        """Kill Chrome -> restore profile Data from golden -> start Chrome -> wait for extension."""
+        state = self.states[instance_name]
+        state.recovering = True
+        state.last_recovery_time = time.time()
+        state.recovery_count += 1
+        cfg = self.instances_config.get(instance_name)
+        if not cfg:
+            state.recovering = False
+            return
+        api_port = cfg["api_port"]
+        logger.info("[Golden] %s: restoring extension from golden master (attempt #%d)",
+                    instance_name, state.recovery_count)
+        try:
+            from launcher import restore_from_golden
+            loop = asyncio.get_event_loop()
+            proc = await loop.run_in_executor(None, lambda: restore_from_golden(cfg))
+            if not proc:
+                logger.warning("[Golden] %s: restore_from_golden returned no process", instance_name)
+                return
+            await asyncio.sleep(self.restart_delay)
+            connected = await self._wait_extension_connect(api_port, timeout=self.reconnect_timeout)
+            if connected:
+                logger.info("[Golden] %s: extension reconnected after golden restore", instance_name)
+                state.reset()
+                if self.on_cooldown_clear:
+                    self.on_cooldown_clear(instance_name)
+            else:
+                logger.warning("[Golden] %s: extension still not connected after golden restore (%ds)",
+                               instance_name, self.reconnect_timeout)
+        except Exception as e:
+            logger.exception("[Golden] %s error: %s", instance_name, e)
+        finally:
+            state.recovering = False
+
     async def _run_recovery(self, instance_name: str):
         """Execute recovery escalation for an instance."""
         state = self.states[instance_name]

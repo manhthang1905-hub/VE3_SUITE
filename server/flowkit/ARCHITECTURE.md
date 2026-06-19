@@ -458,6 +458,28 @@ Chay `SETUP_NEW_MACHINE.bat` (Run as Admin) de:
 - URL phai la IP server thuc, khong phai 127.0.0.1
 - Check: `local_server_url` trong settings.yaml co dung IP khong
 
+### Chrome mat extension (Chrome 148+ chan --load-extension)
+- Tu Chrome ~137, Google **chan co `--load-extension`** ("--load-extension is not
+  allowed in Google Chrome, ignoring"). Extension phai nam san trong profile
+  (Default/Secure Preferences, location:4) — Chrome tu load tu path
+  `flowkit_extensions/ext_810x` moi lan khoi dong, KHONG can --load-extension.
+- "Mat extension" = entry trong Secure Preferences bi vo hieu (MAC mismatch sau
+  Chrome update / dev-mode auto-disable) -> extension khong connect.
+- **Giai phap: Golden Master.** Moi instance giu 1 ban goc da cai san extension:
+  `GoogleChromePortable - Copy (1) - Copy` la golden cua `Copy (1)` (override bang
+  `instance.golden_dir`). Khi mat extension -> khoi phuc thu muc `Data` (~17-25MB)
+  tu golden (giu nguyen binary Chrome 800MB de van auto-update).
+- **Tu dong:** gateway health loop phat hien `extension_connected=false` ->
+  `_self_heal_check` -> neu co golden -> `trigger_golden_restore` (kill -> restore
+  Data tu golden -> start -> cho extension reconnect). Khong co golden -> self-heal cu.
+- **Phong ngua:** `launcher.py` khi start moi instance goi
+  `start_chrome(restore_extension_if_missing=True)`: neu extension chua dang ky
+  trong profile -> tu restore tu golden TRUOC khi chay.
+- **Thu cong:** `python launcher.py --restore-golden flowkit-1` (hoac `all`).
+- Tao/cap nhat golden: cai extension thu cong 1 lan vao 1 ban chay OK (Load
+  unpacked tro toi `flowkit_extensions/ext_810x`), tat Chrome, roi copy ca folder
+  `GoogleChromePortable - Copy (N)` thanh `... - Copy`.
+
 ### I2V timeout
 - I2V mat 60-450 giay tuy server
 - Gateway dung dual polling (direct + extension)
@@ -520,6 +542,16 @@ git checkout 640e838 -- server/flowkit/launcher.py
 ```
 
 ## Changelog
+
+### Golden Master extension recovery (Chrome 148 --load-extension block)
+- `launcher.py`: them `golden_root_for`, `extension_registered` (tinh ext_id =
+  sha256(path UTF-16-LE) -> a-p), `restore_data_from_golden`, `restore_from_golden`;
+  `start_chrome(restore_extension_if_missing=...)` tu restore khi extension missing;
+  CLI `--restore-golden NAME|all`. Startup tu bat phong ngua.
+- `recovery_manager.py`: them `has_golden`, `trigger_golden_restore`,
+  `_run_golden_restore` (kill -> restore Data tu golden -> start -> wait reconnect).
+- `gateway.py`: `_self_heal_check` uu tien golden restore khi instance co golden.
+- Config (tuy chon): `instance.golden_dir` (mac dinh `<chrome_root> - Copy`).
 
 ### 0c37a8d — 403 Recovery System + Fingerprint + Retry-on-404
 - Them `recovery_manager.py`: 3 cap recovery tu dong (reset captcha → rotate IPv6 → restart Chrome)

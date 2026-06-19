@@ -362,15 +362,22 @@ def _self_heal_check():
                 inst.self_heal_failures = 0
             continue
         rotate_ipv6 = inst.self_heal_failures >= 2
+        # Prefer golden-master restore when available: it definitively re-adds the
+        # extension (Chrome 148+ ignores --load-extension) instead of a plain restart.
+        use_golden = _recovery_manager.has_golden(inst.name)
         logger.warning(
             "[SelfHeal] %s down for %d checks (healthy=%s, ext=%s, flowKey=%s), "
-            "attempt #%d%s",
+            "attempt #%d%s%s",
             inst.name, inst.consecutive_unhealthy,
             inst.healthy, inst.extension_connected,
             inst.flow_key_present, inst.self_heal_failures,
-            " + IPv6/account rotate" if rotate_ipv6 else "",
+            " -> GOLDEN RESTORE" if use_golden else "",
+            " + IPv6/account rotate" if (rotate_ipv6 and not use_golden) else "",
         )
-        _recovery_manager.trigger_self_heal(inst.name, rotate_ipv6=rotate_ipv6)
+        if use_golden:
+            _recovery_manager.trigger_golden_restore(inst.name)
+        else:
+            _recovery_manager.trigger_self_heal(inst.name, rotate_ipv6=rotate_ipv6)
         delay = min(60 * inst.self_heal_failures, 300)
         inst.next_self_heal_at = now + delay
 

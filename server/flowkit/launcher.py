@@ -226,7 +226,8 @@ def _write_chrome_prefs(chrome_dir: Path):
     prefs_file.write_text(_json.dumps(prefs, ensure_ascii=False), encoding="utf-8")
 
 
-def start_chrome(instance: dict, new_fingerprint: bool = True, clean: bool = False) -> Optional[subprocess.Popen]:
+def start_chrome(instance: dict, new_fingerprint: bool = True, clean: bool = False,
+                 restore_extension_if_missing: bool = False) -> Optional[subprocess.Popen]:
     """Start Chrome Portable with extension loaded.
 
     Uses GoogleChromePortable.exe wrapper (not chrome.exe directly)
@@ -234,6 +235,11 @@ def start_chrome(instance: dict, new_fingerprint: bool = True, clean: bool = Fal
     service worker activation.
 
     clean=True: deep clean profile (delete all except Secure Preferences)
+    restore_extension_if_missing=True: if the FlowKit extension is not registered
+        in the profile, restore the profile from the golden master before launch
+        (Chrome 148+ ignores --load-extension, so the extension must already be
+        in the profile). Disabled by default so account-login restart paths are
+        unaffected.
     """
     chrome_dir = resolve_path(instance["chrome_path"]).parent.parent.parent
     portable_exe = chrome_dir / "GoogleChromePortable.exe"
@@ -244,6 +250,16 @@ def start_chrome(instance: dict, new_fingerprint: bool = True, clean: bool = Fal
     if not portable_exe.exists():
         print(f"[ERROR] ChromePortable not found: {portable_exe}")
         return None
+
+    # Prevention: ensure the extension is present in the profile. If it's missing
+    # or disabled and a golden master exists, restore the profile from it.
+    if restore_extension_if_missing and not extension_registered(instance):
+        if golden_root_for(instance):
+            print(f"[{name}] Extension not registered in profile — restoring from golden master")
+            if restore_data_from_golden(instance):
+                clean = False  # freshly restored a known-good profile; don't wipe it
+        else:
+            print(f"[{name}] Extension not registered and no golden master — extension may be missing")
 
     if clean:
         clean_chrome_profile(chrome_dir)
@@ -512,6 +528,113 @@ def restart_chrome(instance: dict, new_ipv6: str = "", clean: bool = True) -> Op
     return start_chrome(instance, new_fingerprint=True, clean=clean)
 
 
+# ─── Golden Master (extension recovery) ──────────────────────
+#
+# Chrome 148+ ignores the --load-extension flag ("--load-extension is not
+# allowed in Google Chrome"). The FlowKit extension therefore lives INSIDE the
+# profile: registered in Default/Secure Preferences (location:4, unpacked) and
+# loaded from its shared path flowkit_extensions/ext_810x on every launch.
+#
+# When Chrome "loses" the extension (Secure Preferences MAC invalidated by a
+# Chrome update, or dev-mode auto-disable), the registration disappears/disables
+# and the extension stops connecting. The fix: keep a known-good "golden master"
+# copy of each Chrome (with the extension already registered) and restore the
+# profile Data folder from it.
+#
+# Convention: golden of "GoogleChromePortable - Copy (1)" is
+#             "GoogleChromePortable - Copy (1) - Copy" (override via
+#             instance["golden_dir"]). Only the ~17-25MB Data folder is copied;
+#             the 800MB Chrome binary is left untouched (keeps auto-update).
+
+def _expected_ext_id(ext_dir: Path) -> str:
+    """Chrome's unpacked-extension ID: sha256(abs_path UTF-16-LE)[:16] mapped 0-f to a-p.
+
+    Windows Chrome hashes the absolute path encoded as UTF-16-LE (verified
+    against the real IDs stored in the golden Secure Preferences).
+    """
+    import hashlib
+    digest = hashlib.sha256(str(ext_dir).encode("utf-16-le")).hexdigest()[:32]
+    return "".join(chr(ord("a") + int(c, 16)) for c in digest)
+
+
+def golden_root_for(instance: dict) -> Optional[Path]:
+    """Return the golden-master root for an instance, or None if it doesn't exist."""
+    chrome_dir = resolve_path(instance["chrome_path"]).parent.parent.parent
+    gd = instance.get("golden_dir")
+    golden = resolve_path(gd) if gd else (chrome_dir.parent / (chrome_dir.name + " - Copy"))
+    return golden if golden.exists() else None
+
+
+def extension_registered(instance: dict) -> bool:
+    """True if this instance's FlowKit extension is registered AND enabled in the
+    working profile's Secure Preferences (i.e. Chrome will load it on launch)."""
+    import json as _json
+    chrome_dir = resolve_path(instance["chrome_path"]).parent.parent.parent
+    ext_id = _expected_ext_id(resolve_path(instance["extension_dir"]))
+    sp = chrome_dir / "Data" / "profile" / "Default" / "Secure Preferences"
+    if not sp.exists():
+        return False
+    try:
+        data = _json.loads(sp.read_text(encoding="utf-8"))
+    except Exception:
+        return False
+    entry = data.get("extensions", {}).get("settings", {}).get(ext_id)
+    if not entry:
+        return False
+    # state 0 = disabled; disable_reasons present = disabled (e.g. dev-mode / corruption)
+    if entry.get("state") == 0 or entry.get("disable_reasons"):
+        return False
+    return True
+
+
+def restore_data_from_golden(instance: dict) -> bool:
+    """Restore the profile Data folder from the golden master (Chrome must be killed first)."""
+    import shutil as _shutil
+    name = instance["name"]
+    chrome_dir = resolve_path(instance["chrome_path"]).parent.parent.parent
+    golden = golden_root_for(instance)
+    if not golden:
+        print(f"[{name}] No golden master found (expected '{chrome_dir.name} - Copy') — cannot restore")
+        return False
+    src = golden / "Data"
+    dst = chrome_dir / "Data"
+    if not src.exists():
+        print(f"[{name}] Golden has no Data folder: {src}")
+        return False
+
+    print(f"[{name}] Restoring profile from golden: {golden.name}")
+    if dst.exists():
+        for attempt in range(6):
+            try:
+                _shutil.rmtree(dst)
+                break
+            except FileNotFoundError:
+                break
+            except Exception as e:
+                if attempt == 5:
+                    print(f"[{name}] Cannot delete working Data (Chrome still locking it?): {e}")
+                    return False
+                time.sleep(1)
+    try:
+        _shutil.copytree(src, dst)
+    except Exception as e:
+        print(f"[{name}] Copy from golden failed: {e}")
+        return False
+    print(f"[{name}] Profile restored from golden OK ({golden.name}/Data -> {chrome_dir.name}/Data)")
+    return True
+
+
+def restore_from_golden(instance: dict) -> Optional[subprocess.Popen]:
+    """Full extension recovery: kill Chrome -> restore Data from golden -> start Chrome."""
+    name = instance["name"]
+    print(f"[{name}] === RESTORE FROM GOLDEN (extension recovery) ===")
+    kill_chrome(name)
+    time.sleep(3)
+    if not restore_data_from_golden(instance):
+        print(f"[{name}] golden restore failed — starting normally (extension may still be missing)")
+    return start_chrome(instance, new_fingerprint=False, clean=False)
+
+
 def get_chrome_pid(instance_name: str) -> Optional[int]:
     """Get Chrome PID for an instance (None if not running)."""
     proc = _chrome_processes.get(instance_name)
@@ -585,10 +708,25 @@ def main():
     parser.add_argument("--agent", type=int, help="Start only agent N (1-based)")
     parser.add_argument("--no-chrome", action="store_true", help="Don't start Chrome (already running)")
     parser.add_argument("--no-gateway", action="store_true", help="Don't start gateway")
+    parser.add_argument("--restore-golden", metavar="NAME",
+                        help="Restore extension from golden master for instance NAME (or 'all') then exit")
     args = parser.parse_args()
 
     processes = []
     instances_cfg = [i for i in CONFIG.get("instances", []) if i.get("enabled", True)]
+
+    if args.restore_golden:
+        if args.restore_golden == "all":
+            targets = instances_cfg
+        else:
+            targets = [i for i in instances_cfg if i["name"] == args.restore_golden]
+        if not targets:
+            print(f"[ERROR] Instance not found: {args.restore_golden}")
+            print("Available: " + ", ".join(i["name"] for i in instances_cfg))
+            sys.exit(1)
+        for inst in targets:
+            restore_from_golden(inst)
+        return
 
     if args.gateway:
         proc = start_gateway()
@@ -599,7 +737,7 @@ def main():
         if 0 <= idx < len(instances_cfg):
             inst = instances_cfg[idx]
             if not args.no_chrome:
-                chrome_proc = start_chrome(inst)
+                chrome_proc = start_chrome(inst, restore_extension_if_missing=True)
                 if chrome_proc:
                     processes.append(chrome_proc)
                 time.sleep(3)
@@ -622,7 +760,7 @@ def main():
         if not args.no_chrome:
             print("\n[Phase 1] Starting Chrome instances...")
             for inst in instances_cfg:
-                chrome_proc = start_chrome(inst)
+                chrome_proc = start_chrome(inst, restore_extension_if_missing=True)
                 if chrome_proc:
                     processes.append(chrome_proc)
                 time.sleep(2)
