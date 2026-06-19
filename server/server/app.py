@@ -1231,6 +1231,14 @@ def _do_start_workers():
         chrome_pool.workers = chrome_pool.workers[:chrome_count]
         server_log(f"Gioi han: chi dung {chrome_count} Chrome (bo {removed})")
 
+    # Window layout: size windows by the REAL worker count (not the default 10
+    # slots -> 5 rows -> tiny windows). With 2 Chromes -> 1 row -> full height.
+    # Read by _calc_window_layout in google_login.py + chrome_session.py.
+    try:
+        os.environ["CHROME_LAYOUT_SLOTS"] = str(max(1, len(chrome_pool.workers)))
+    except Exception:
+        pass
+
     # TACH mode: Flask only, no Chrome threads - workers run as separate processes
     if mode == 'tach':
         server_log("=" * 50)
