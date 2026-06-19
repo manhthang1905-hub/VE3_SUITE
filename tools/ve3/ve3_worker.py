@@ -1275,6 +1275,25 @@ Generator/context error:
         self.log("=" * 50)
         self.log("PHASE 5: Finalize â€” backup anh + merge video vao img/")
         self.log("=" * 50)
+
+        # === THUMBNAIL DU PHONG: lam them 1 luot cuoi truoc khi hoan thanh ===
+        # Anh thumb rat quan trong. Neu luot dau (PHASE 2) server loi thi thumb/ se
+        # trong (status_img=error). Thu lai 1 luot cuoi o day — luc nay server thuong
+        # da on dinh (vua xong scenes + video). get_pending_thumbnails() chi tra ve
+        # thumb chua "done" nen cac thumb da co anh se tu skip.
+        try:
+            if not self._stop_flag:
+                pending_thumbs = wb.get_pending_thumbnails()
+                if pending_thumbs:
+                    self.log("")
+                    self.log("=" * 50)
+                    self.log(f"THUMBNAIL DU PHONG: con {len(pending_thumbs)} thumb chua co anh "
+                             f"-> lam them 1 luot cuoi truoc khi hoan thanh")
+                    self.log("=" * 50)
+                    self._generate_thumbnail(wb)
+        except Exception as e:
+            self.log(f"  Thumbnail du phong loi (bo qua): {e}", "WARN")
+
         try:
             self._finalize_img()
         except Exception as e:
