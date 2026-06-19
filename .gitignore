@@ -18,7 +18,7 @@ GoogleChromePortable*/
 chrome_profiles/
 
 # === REFERENCE IMAGES (mỗi máy copy riêng, quá nặng cho git) ===
-tools/srt-to-excel/reference_characters/**/*.png
+tools/srt-to-excel/reference_characters/
 
 # === INSTALLER EXE (không cần track) ===
 *.paf.exe
