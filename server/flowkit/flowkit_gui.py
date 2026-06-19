@@ -771,9 +771,17 @@ class FlowKitGUI(tk.Tk):
         # Build account map — account 1 = Chrome 1, account 2 = Chrome 2, fixed
         enabled = [(i, inst) for i, inst in enumerate(instances)
                    if inst.get('enabled', True) and i < len(self._chrome_dirs)]
-        # Tell the login window-layout how many Chromes actually run, so it doesn't
-        # assume 10 slots (5 rows -> tiny 216px windows). With 2 Chromes -> 1 row -> full height.
-        os.environ["CHROME_LAYOUT_SLOTS"] = str(max(1, len(enabled)))
+        # Sync the LOGIN window layout to the running-Chrome (Flow) layout so both have
+        # the same position + full height. Same slot count (real # of Chromes, not the
+        # 6 enabled in config), same columns, same left reserve as launcher chrome_layout.
+        try:
+            from launcher import CONFIG as _lcfg
+            _cl = _lcfg.get("chrome_layout", {})
+            os.environ["CHROME_LAYOUT_SLOTS"] = str(max(1, len(enabled)))
+            os.environ["CHROME_LAYOUT_COLS"] = str(_cl.get("cols", 2))
+            os.environ["CHROME_LAYOUT_LEFT_RESERVED"] = str(_cl.get("gui_width", 700))
+        except Exception:
+            os.environ["CHROME_LAYOUT_SLOTS"] = str(max(1, len(enabled)))
         account_map = {}
         if accounts:
             for i, inst in enumerate(instances):
@@ -823,7 +831,7 @@ class FlowKitGUI(tk.Tk):
                 from launcher import _calc_chrome_layout, _resolve_chrome_slot, CONFIG as _lcfg
                 instances_cfg = [ii for ii in _lcfg.get("instances", []) if ii.get("enabled", True)]
                 slot = _resolve_chrome_slot(name)
-                x, y, w, h = _calc_chrome_layout(slot, len(instances_cfg))
+                x, y, w, h = _calc_chrome_layout(slot, max(1, len(enabled)))
                 win_args = [f"--window-position={x},{y}", f"--window-size={w},{h}"]
             except Exception:
                 pass
@@ -1084,7 +1092,7 @@ class FlowKitGUI(tk.Tk):
             from launcher import _calc_chrome_layout, _resolve_chrome_slot, CONFIG as _lcfg
             instances_cfg = [i for i in _lcfg.get("instances", []) if i.get("enabled", True)]
             slot = _resolve_chrome_slot(inst["name"])
-            x, y, w, h = _calc_chrome_layout(slot, len(instances_cfg))
+            x, y, w, h = _calc_chrome_layout(slot, max(1, len(self._chrome_dirs)))
             args.append(f"--window-position={x},{y}")
             args.append(f"--window-size={w},{h}")
         except Exception:
