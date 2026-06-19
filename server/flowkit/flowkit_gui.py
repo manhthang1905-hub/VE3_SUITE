@@ -771,6 +771,9 @@ class FlowKitGUI(tk.Tk):
         # Build account map — account 1 = Chrome 1, account 2 = Chrome 2, fixed
         enabled = [(i, inst) for i, inst in enumerate(instances)
                    if inst.get('enabled', True) and i < len(self._chrome_dirs)]
+        # Tell the login window-layout how many Chromes actually run, so it doesn't
+        # assume 10 slots (5 rows -> tiny 216px windows). With 2 Chromes -> 1 row -> full height.
+        os.environ["CHROME_LAYOUT_SLOTS"] = str(max(1, len(enabled)))
         account_map = {}
         if accounts:
             for i, inst in enumerate(instances):
