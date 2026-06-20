@@ -1462,6 +1462,7 @@ class SettingsPage(ctk.CTkScrollableFrame):
         self.claude_backend_options = {
             "CLI (claude.exe)": "cli",
             "API (VOV)": "api",
+            "API -> CLI (fallback)": "api_cli",
         }
         self.claude_backend_labels = {v: k for k, v in self.claude_backend_options.items()}
         self.generation_backend_options = {"Server": "server", "NanoPic": "nanopic", "FlowKit": "flowkit", "Combined": "combined"}

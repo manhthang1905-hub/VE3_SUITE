@@ -99,13 +99,19 @@ class ClaudeCliEngine:
         except Exception:
             self.timeout_seconds = 1800
 
-        # Transport backend: "cli" spawns the local claude.exe (Claude Max);
-        # "api" sends the SAME prompt to an OpenAI-compatible endpoint (e.g. the
-        # VOV router serving claude-sonnet-4-6) — no claude.exe, no Max login,
-        # everything else (chunking, auto-split, thumbnails, builder) identical.
+        # Transport backend:
+        #   "cli"     — spawn the local claude.exe (Claude Max)
+        #   "api"     — POST the SAME prompt to an OpenAI-compatible endpoint (VOV
+        #               router serving claude-sonnet-4-6), no claude.exe / no login
+        #   "api_cli" — API first; if it fails (e.g. quota/rate-limit/down), fall
+        #               back to the local claude.exe for the rest of this run
+        # Everything else (chunking, auto-split, thumbnails, builder) is identical.
         self.backend = str(self.config.get("claude_cli_backend", "cli") or "cli").strip().lower()
-        if self.backend not in ("cli", "api"):
+        if self.backend not in ("cli", "api", "api_cli"):
             self.backend = "cli"
+        # Once the API fails in api_cli mode, disable it for the remaining chunks of
+        # THIS run so we don't waste retries per chunk (re-checked on the next code).
+        self._api_disabled = False
         self.api_base_url = str(
             self.config.get("claude_cli_api_base_url")
             or self.config.get("vov_direct_base_url") or ""
@@ -515,10 +521,22 @@ JSON RULES:
     # ------------------------------------------------------------- claude call
     def _run_claude(self, prompt: str, cwd: Path) -> str:
         """Send a prompt and return the model's raw text reply. Dispatches to the
-        configured transport: local claude.exe (cli) or an OpenAI-compatible
-        HTTP endpoint (api). Both return the JSON string the callers then parse."""
+        configured transport: local claude.exe (cli), an OpenAI-compatible HTTP
+        endpoint (api), or API-with-CLI-fallback (api_cli). All return the JSON
+        string the callers then parse."""
         if self.backend == "api":
             return self._run_via_api(prompt)
+        if self.backend == "api_cli":
+            # API primary, claude.exe fallback. Once API has failed in this run,
+            # go straight to CLI for the rest (avoids retrying a dead/quota'd API).
+            if not self._api_disabled:
+                try:
+                    return self._run_via_api(prompt)
+                except Exception as e:
+                    self._api_disabled = True
+                    self._log(f"  [WARN] API loi/het quota ({e}) -> chuyen sang CLI "
+                              f"(claude.exe) cho phan con lai cua ma", "WARN")
+            return self._run_via_cli(prompt, cwd)
         return self._run_via_cli(prompt, cwd)
 
     def _run_via_api(self, prompt: str) -> str:
