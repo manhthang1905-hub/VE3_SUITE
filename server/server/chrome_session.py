@@ -440,8 +440,8 @@ return (function() {
                                 console.log('[VIDEO-PROXY] 2b. Injected mediaId: ' + window._clientMediaId.substring(0, 50) + '...');
                             }
                             // Force lite_low_priority model (free tier)
-                            req.videoModelKey = ‘veo_3_1_r2v_lite_low_priority’;
-                            console.log(‘[VIDEO-PROXY] 2c-model. Forced: veo_3_1_r2v_lite_low_priority’);
+                            req.videoModelKey = 'veo_3_1_r2v_lite_low_priority';
+                            console.log('[VIDEO-PROXY] 2c-model. Forced: veo_3_1_r2v_lite_low_priority');
                             // Override neu VM chi dinh model cu the
                             if (window._clientVideoModel) {
                                 req.videoModelKey = window._clientVideoModel;
