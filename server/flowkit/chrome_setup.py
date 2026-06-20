@@ -54,7 +54,7 @@ def _enforce_window_layout(page, window_args, log):
 
 def _apply_zoom(page, log):
     """Apply zoom — y nguyen apply_page_zoom server cu."""
-    zoom_val = int(os.getenv("CHROME_PAGE_ZOOM", "50"))
+    zoom_val = int(os.getenv("CHROME_PAGE_ZOOM", "100"))
     zoom_val = max(25, min(200, zoom_val))
     target = f"{zoom_val}%"
     scale = max(0.25, min(2.0, zoom_val / 100.0))
