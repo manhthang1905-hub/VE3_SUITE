@@ -933,10 +933,10 @@ class ChromeSession:
         if not self.page:
             return False
         try:
-            zoom_val = int(os.getenv("CHROME_PAGE_ZOOM", "50"))
+            zoom_val = int(os.getenv("CHROME_PAGE_ZOOM", "100"))
             zoom_val = max(25, min(200, zoom_val))
         except Exception:
-            zoom_val = 50
+            zoom_val = 100
 
         target = f"{zoom_val}%"
         scale = max(0.25, min(2.0, zoom_val / 100.0))
