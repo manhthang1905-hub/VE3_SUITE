@@ -2881,22 +2881,28 @@ foreach ($pid in $children) {{
                       font=("",10), corner_radius=6,
                       command=self.open_folder).grid(row=7, column=0, padx=8, pady=(2,4))
 
+        # Tai Excel co san vao PROJECTS -> queue tu tao anh + video
+        ctk.CTkButton(sb, text="Tải Excel", width=SW-16, height=28,
+                      fg_color=RN, hover_color="#1565C0", text_color="#FFF",
+                      font=("",10,"bold"), corner_radius=6,
+                      command=self._import_excel).grid(row=8, column=0, padx=8, pady=(0,4))
+
         # Version + Update button
         self._version_label = ctk.CTkLabel(sb, text=f"v{self._get_local_version()}", font=("",9), text_color="#555")
-        self._version_label.grid(row=8, column=0, padx=8, pady=(4,0))
+        self._version_label.grid(row=9, column=0, padx=8, pady=(4,0))
 
         self._update_btn = ctk.CTkButton(sb, text="Update", width=SW-16, height=26,
                                          fg_color=SB2, hover_color="#2E7D32", text_color="#888",
                                          font=("",10), corner_radius=6,
                                          command=self._on_check_update)
-        self._update_btn.grid(row=9, column=0, padx=8, pady=(2,4))
+        self._update_btn.grid(row=10, column=0, padx=8, pady=(2,4))
 
         # Settings button at bottom
         cfg_btn = ctk.CTkButton(sb, text="Settings", width=SW-16, height=28,
                                 fg_color="transparent", hover_color=SB3, text_color="#777",
                                 font=("",11), corner_radius=6, anchor="w",
                                 command=lambda: self.show("cfg"))
-        cfg_btn.grid(row=10, column=0, padx=8, pady=(0,14))
+        cfg_btn.grid(row=11, column=0, padx=8, pady=(0,14))
         self.nav["cfg"] = cfg_btn
 
         # main
@@ -7024,6 +7030,56 @@ Get-CimInstance Win32_Process |
     def open_folder(self):
         t = self.project_dir if self.project_dir and self.project_dir.exists() else PROJECTS_DIR
         t.mkdir(parents=True,exist_ok=True); os.startfile(str(t))
+
+    def _import_excel(self):
+        """Tai 1 Excel co san (<code>_prompts.xlsx) vao PROJECTS de tao anh + video.
+        Copy ca thu muc nv/ (anh nv1) di kem; queue se tu nhan dien va chay."""
+        import shutil
+        path = filedialog.askopenfilename(
+            title="Chon Excel co san (*_prompts.xlsx)",
+            filetypes=[("Excel prompts", "*_prompts.xlsx"), ("Excel", "*.xlsx"), ("All", "*.*")],
+        )
+        if not path:
+            return
+        try:
+            src_xlsx = Path(path)
+            code = src_xlsx.stem
+            if code.endswith("_prompts"):
+                code = code[:-len("_prompts")]
+            code = code.strip()
+            if not code:
+                messagebox.showerror("Tải Excel", "Không lấy được mã từ tên file.")
+                return
+            src_dir = src_xlsx.parent
+            dst_dir = PROJECTS_DIR / code
+            # Neu chon dung file da nam trong PROJECTS/<code> thi khong can copy
+            if src_dir.resolve() == dst_dir.resolve():
+                self._log(f"[IMPORT] {code} da o trong PROJECTS — san sang chay.", "SUCCESS", "ve3")
+            else:
+                dst_dir.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(src_xlsx, dst_dir / f"{code}_prompts.xlsx")
+                copied = ["Excel"]
+                # nv/ (anh tham chieu) — bat buoc de tao anh
+                if (src_dir / "nv").exists():
+                    shutil.copytree(src_dir / "nv", dst_dir / "nv", dirs_exist_ok=True)
+                    copied.append("nv/")
+                # cac file phu (khong bat buoc cho generation)
+                for extra in (f"{code}.srt", ".nguon_runtime_metadata.yaml"):
+                    if (src_dir / extra).exists():
+                        shutil.copy2(src_dir / extra, dst_dir / extra)
+                self._log(f"[IMPORT] Đã nạp {code} vào PROJECTS/{code} ({', '.join(copied)})", "SUCCESS", "ve3")
+            has_nv = (dst_dir / "nv" / "nv1.png").exists()
+            msg = (f"Đã nạp mã {code} vào PROJECTS.\n"
+                   f"{'✓' if has_nv else '⚠ THIẾU'} ảnh nv/nv1.png\n\n"
+                   f"Bấm RUN để tạo ảnh + video.")
+            if has_nv:
+                messagebox.showinfo("Tải Excel", msg)
+            else:
+                messagebox.showwarning("Tải Excel",
+                                       msg + "\n\n(Nếu image_file trong Excel là đường dẫn đầy đủ tới ảnh thì vẫn chạy được.)")
+        except Exception as e:
+            messagebox.showerror("Tải Excel", f"Lỗi nạp Excel: {e}")
+            self._log(f"[IMPORT] Loi nap Excel: {e}", "ERROR", "ve3")
 
     def _log(self, m, l="INFO", channel=None):
         with self._log_queue_lock:
