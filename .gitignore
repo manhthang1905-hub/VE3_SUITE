@@ -17,8 +17,14 @@ tools/ve3/config/flow_accounts.yaml
 GoogleChromePortable*/
 chrome_profiles/
 
-# === REFERENCE IMAGES (mỗi máy copy riêng, quá nặng cho git) ===
-tools/srt-to-excel/reference_characters/
+# === REFERENCE IMAGES (anh nv1.png nang -> moi may copy rieng; nhung GIU style.yaml
+#     tren git de cac may dong bo style/audience theo kenh) ===
+tools/srt-to-excel/reference_characters/*
+!tools/srt-to-excel/reference_characters/*/
+tools/srt-to-excel/reference_characters/*/*
+!tools/srt-to-excel/reference_characters/*/*/
+tools/srt-to-excel/reference_characters/*/*/*
+!tools/srt-to-excel/reference_characters/*/*/style.yaml
 
 # === INSTALLER EXE (không cần track) ===
 *.paf.exe
