@@ -100,30 +100,47 @@ class ClaudeCliEngine:
             self.timeout_seconds = 1800
 
         # Transport backend:
-        #   "cli"     — spawn the local claude.exe (Claude Max)
-        #   "api"     — POST the SAME prompt to an OpenAI-compatible endpoint (VOV
-        #               router serving claude-sonnet-4-6), no claude.exe / no login
-        #   "api_cli" — API first; if it fails (e.g. quota/rate-limit/down), fall
-        #               back to the local claude.exe for the rest of this run
+        #   "cli"        — spawn the local claude.exe (Claude Max)
+        #   "api"        — POST the prompt to the VOV router (claude-sonnet-4-6)
+        #   "api_cli"    — VOV API first; on failure fall back to claude.exe (this run)
+        #   "api_ds"     — POST the prompt to DeepSeek API (deepseek-v4-pro)
+        #   "api_ds_cli" — DeepSeek API first; on failure fall back to claude.exe
         # Everything else (chunking, auto-split, thumbnails, builder) is identical.
         self.backend = str(self.config.get("claude_cli_backend", "cli") or "cli").strip().lower()
-        if self.backend not in ("cli", "api", "api_cli"):
+        if self.backend not in ("cli", "api", "api_cli", "api_ds", "api_ds_cli"):
             self.backend = "cli"
-        # Once the API fails in api_cli mode, disable it for the remaining chunks of
+        # Which transports use the HTTP API, and which fall back to CLI on failure.
+        self._uses_api = self.backend in ("api", "api_cli", "api_ds", "api_ds_cli")
+        self._api_fallback_cli = self.backend in ("api_cli", "api_ds_cli")
+        # Once the API fails in a *_cli mode, disable it for the remaining chunks of
         # THIS run so we don't waste retries per chunk (re-checked on the next code).
         self._api_disabled = False
-        self.api_base_url = str(
-            self.config.get("claude_cli_api_base_url")
-            or self.config.get("vov_direct_base_url") or ""
-        ).strip().rstrip("/")
-        self.api_key = str(
-            self.config.get("claude_cli_api_key")
-            or self.config.get("vov_direct_api_key") or ""
-        ).strip()
-        self.api_model = str(
-            self.config.get("claude_cli_api_model")
-            or self.model or "claude-sonnet-4-6"
-        ).strip()
+        # Resolve the API endpoint by provider: DeepSeek for api_ds*, else VOV.
+        if self.backend in ("api_ds", "api_ds_cli"):
+            self.api_base_url = str(
+                self.config.get("claude_cli_ds_base_url")
+                or "https://api.deepseek.com/v1"
+            ).strip().rstrip("/")
+            self.api_key = str(
+                self.config.get("claude_cli_ds_api_key")
+                or self.config.get("deepseek_api_key") or ""
+            ).strip()
+            self.api_model = str(
+                self.config.get("claude_cli_ds_model") or "deepseek-v4-pro"
+            ).strip()
+        else:
+            self.api_base_url = str(
+                self.config.get("claude_cli_api_base_url")
+                or self.config.get("vov_direct_base_url") or ""
+            ).strip().rstrip("/")
+            self.api_key = str(
+                self.config.get("claude_cli_api_key")
+                or self.config.get("vov_direct_api_key") or ""
+            ).strip()
+            self.api_model = str(
+                self.config.get("claude_cli_api_model")
+                or self.model or "claude-sonnet-4-6"
+            ).strip()
         try:
             self.api_max_tokens = int(self.config.get("claude_cli_api_max_tokens", 16000) or 16000)
         except Exception:
@@ -524,9 +541,9 @@ JSON RULES:
         configured transport: local claude.exe (cli), an OpenAI-compatible HTTP
         endpoint (api), or API-with-CLI-fallback (api_cli). All return the JSON
         string the callers then parse."""
-        if self.backend == "api":
+        if self._uses_api and not self._api_fallback_cli:
             return self._run_via_api(prompt)
-        if self.backend == "api_cli":
+        if self._uses_api and self._api_fallback_cli:
             # API primary, claude.exe fallback. Once API has failed in this run,
             # go straight to CLI for the rest (avoids retrying a dead/quota'd API).
             if not self._api_disabled:

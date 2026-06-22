@@ -10,6 +10,7 @@ claude_pool_model_chain:
 deepseek_api_key: sk-e3a4138d816a42778531c1e944ece336
 deepseek_api_keys:
 - sk-e3a4138d816a42778531c1e944ece336
+- sk-a138987932af4ac6a28ac0c99b49fd77
 deepseek_model: deepseek-v4-pro
 deepseek_thinking_type: disabled
 excel_ai_attempts_per_key: 30

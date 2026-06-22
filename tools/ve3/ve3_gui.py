@@ -1463,6 +1463,8 @@ class SettingsPage(ctk.CTkScrollableFrame):
             "CLI (claude.exe)": "cli",
             "API (VOV)": "api",
             "API -> CLI (fallback)": "api_cli",
+            "API DeepSeek (v4 pro)": "api_ds",
+            "API DeepSeek -> CLI": "api_ds_cli",
         }
         self.claude_backend_labels = {v: k for k, v in self.claude_backend_options.items()}
         self.generation_backend_options = {"Server": "server", "NanoPic": "nanopic", "FlowKit": "flowkit", "Combined": "combined"}
@@ -1543,6 +1545,10 @@ class SettingsPage(ctk.CTkScrollableFrame):
         ctk.CTkLabel(eng_box, text="Backend:", font=("",10), text_color=T2).pack(side="left", padx=(10,4))
         self.opt_claude_backend = ctk.CTkOptionMenu(eng_box, values=list(self.claude_backend_options.keys()), width=130, height=28, corner_radius=4, fg_color=EN, button_color=BD, text_color=T1, font=("",11))
         self.opt_claude_backend.pack(side="left")
+        # So luong code chay song song trong queue Excel (claude_cli_max_parallel)
+        ctk.CTkLabel(eng_box, text="Luồng:", font=("",10), text_color=T2).pack(side="left", padx=(10,4))
+        self.ent_claude_parallel = ctk.CTkEntry(eng_box, width=46, height=28, corner_radius=4, font=("",11), fg_color=EN, border_color=BD, justify="center")
+        self.ent_claude_parallel.pack(side="left")
         # Claude CLI review pass toggle (tat = nhanh gap doi, bat = ra soat ky hon)
         self.sw_claude_review = ctk.CTkSwitch(eng_box, text="Review", progress_color=OK, button_color="#FFF", button_hover_color="#EEE", font=("",10))
         self.sw_claude_review.pack(side="left", padx=(10,0))
@@ -1896,6 +1902,8 @@ class SettingsPage(ctk.CTkScrollableFrame):
         self.opt_excel_engine.set(self.excel_engine_labels.get(engine_value, self.excel_engine_labels["api"]))
         backend_v = (cfg.get("claude_cli_backend", "") or "cli").strip().lower() or "cli"
         self.opt_claude_backend.set(self.claude_backend_labels.get(backend_v, self.claude_backend_labels["cli"]))
+        self.ent_claude_parallel.delete(0, "end")
+        self.ent_claude_parallel.insert(0, str(cfg.get("claude_cli_max_parallel", 5) or 5))
         if bool(cfg.get("claude_cli_review", True)):
             self.sw_claude_review.select()
         else:
@@ -2017,6 +2025,10 @@ class SettingsPage(ctk.CTkScrollableFrame):
         selected_engine_label = self.opt_excel_engine.get().strip()
         cfg["excel_engine"] = self.excel_engine_options.get(selected_engine_label, "api")
         cfg["claude_cli_backend"] = self.claude_backend_options.get(self.opt_claude_backend.get().strip(), "cli")
+        try:
+            cfg["claude_cli_max_parallel"] = max(1, int(self.ent_claude_parallel.get().strip() or "5"))
+        except Exception:
+            cfg["claude_cli_max_parallel"] = 5
         cfg["claude_cli_review"] = bool(self.sw_claude_review.get())
         try:
             deepseek_slots = max(1, int(self.ent_deepseek_slots.get().strip() or "4"))
@@ -2822,6 +2834,11 @@ foreach ($pid in $children) {{
         # backend reuses vov_direct_base_url/api_key already set above.
         cfg.setdefault("claude_cli_backend", "cli")
         cfg.setdefault("claude_cli_api_model", "claude-sonnet-4-6")
+        cfg.setdefault("claude_cli_max_parallel", 5)
+        # DeepSeek API backend (api_ds / api_ds_cli) — deepseek-v4-pro, highest model.
+        cfg.setdefault("claude_cli_ds_base_url", "https://api.deepseek.com/v1")
+        cfg.setdefault("claude_cli_ds_api_key", "sk-de9ca9b3ec734f24a61d1e02ab8dc46c")
+        cfg.setdefault("claude_cli_ds_model", "deepseek-v4-pro")
         return cfg
 
     def _build(self):
@@ -6302,7 +6319,7 @@ Get-CimInstance Win32_Process |
                 if _engine in ("claude_cli", "claude", "cli"):
                     # Claude Code CLI uses ONE Claude Max account — keep concurrency
                     # low (default 2) so many parallel claude.exe don't hit rate limits.
-                    max_excel_concurrent = self.config_data.get("claude_cli_max_parallel", 2)
+                    max_excel_concurrent = self.config_data.get("claude_cli_max_parallel", 5)
                 else:
                     max_excel_concurrent = self.config_data.get("excel_workers", 2)
                 try:
