@@ -7068,6 +7068,28 @@ Get-CimInstance Win32_Process |
                     if (src_dir / extra).exists():
                         shutil.copy2(src_dir / extra, dst_dir / extra)
                 self._log(f"[IMPORT] Đã nạp {code} vào PROJECTS/{code} ({', '.join(copied)})", "SUCCESS", "ve3")
+            # Neu chua co nv/nv1.png, doc LINK trong cot image_file (sheet characters)
+            # va copy anh do ve nv/nv1.png — dung khi user dien duong dan anh vao Excel.
+            nv_png = dst_dir / "nv" / "nv1.png"
+            if not nv_png.exists():
+                try:
+                    from modules.excel_manager import PromptWorkbook
+                    _wb = PromptWorkbook(str(dst_dir / f"{code}_prompts.xlsx")); _wb.load_or_create()
+                    for _ch in _wb.get_characters():
+                        if str(_ch.id).strip().lower() != "nv1":
+                            continue
+                        link = str(getattr(_ch, "image_file", "") or "").strip()
+                        if link and link not in (".", ".."):
+                            cand = Path(link)
+                            if not cand.is_absolute():
+                                cand = src_dir / link
+                            if cand.exists() and cand.is_file():
+                                nv_png.parent.mkdir(parents=True, exist_ok=True)
+                                shutil.copy2(cand, nv_png)
+                                self._log(f"[IMPORT] Copy anh nhan vat tu link: {cand} -> nv/nv1.png", "SUCCESS", "ve3")
+                        break
+                except Exception as _e:
+                    self._log(f"[IMPORT] Khong copy duoc anh tu image_file: {_e}", "WARN", "ve3")
             has_nv = (dst_dir / "nv" / "nv1.png").exists()
             msg = (f"Đã nạp mã {code} vào PROJECTS.\n"
                    f"{'✓' if has_nv else '⚠ THIẾU'} ảnh nv/nv1.png\n\n"
