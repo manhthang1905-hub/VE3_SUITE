@@ -34,6 +34,14 @@ if errorlevel 1 (
     pip install "httpx>=0.25.0"
     pip install "pyyaml>=6.0"
     pip install "requests>=2.28.0"
+    pip install "DrissionPage>=4.0.0"
+    pip install "pyotp>=2.9.0"
+    pip install "pyperclip>=1.8.2"
+    pip install "openpyxl>=3.1.0"
+    pip install "gspread>=6.1.2"
+    pip install "google-auth>=2.35.0"
+    pip install "google-auth-oauthlib>=1.2.0"
+    pip install "google-api-python-client>=2.140.0"
 )
 echo   [OK]
 echo.
