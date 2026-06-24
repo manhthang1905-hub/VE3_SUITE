@@ -1014,7 +1014,86 @@ Reply with ONLY the corrected JSON object (start with {{ end with }}), no prose.
         if not thumbnails:
             raise RuntimeError("Thieu thumbnail (khuc 0) -> Huy de chay lai.")
         self._log(f"  -> tong {len(all_scenes)} scenes tu {len(chunks)}/{len(chunks)} khuc (DU)")
+        # Cross-chunk dedup: per-chunk review only de-dups within a chunk, so a long
+        # video can still repeat img prompts across chunks. Rewrite the repeats so
+        # every scene is visually distinct.
+        all_scenes = self._dedup_scenes(project_dir, all_scenes, srt_entries, style, topic)
         return {"scenes": all_scenes, "thumbnails": thumbnails}
+
+    def _dedup_scenes(self, project_dir: Path, raw_scenes: list, srt_entries: list,
+                      style: Dict[str, Any], topic: str) -> list:
+        """Rewrite scenes whose img_prompt exactly repeats an earlier scene so every
+        scene is visually distinct (same narration meaning + style). Best-effort:
+        on any failure the originals are kept (never loses data)."""
+        seen: dict = {}
+        dups: list = []
+        for i, sc in enumerate(raw_scenes):
+            key = (str(sc.get("img_prompt", "") or "").strip())
+            if not key:
+                continue
+            if key in seen:
+                dups.append(i)
+            else:
+                seen[key] = i
+        if not dups:
+            return raw_scenes
+        self._log(f"  -> diet trung xuyen-khuc: {len(dups)} canh lap -> viet lai cho khac biet")
+        by_index = {e.index: e for e in srt_entries}
+        items = []
+        for i in dups:
+            sc = raw_scenes[i]
+            try:
+                first = int(sc.get("first") or 0); last = int(sc.get("last") or first)
+            except Exception:
+                continue
+            narr = " ".join(" ".join(str((by_index[j].text if j in by_index else "")).split())
+                            for j in range(first, last + 1) if j in by_index).strip()
+            items.append({"idx": i, "narration": narr[:300],
+                          "current": str(sc.get("img_prompt", "") or "")[:400]})
+        look, palette, negative, audience = self._short_style(style)
+        fixed_n = 0
+        for start in range(0, len(items), 25):
+            batch = items[start:start + 25]
+            prompt = self._build_dedup_prompt(batch, look, audience)
+            try:
+                txt = self._run_claude(prompt, project_dir)
+                obj = self._extract_json_obj(txt or "")
+                arr = (obj or {}).get("fixed") or []
+                for o in arr:
+                    try:
+                        idx = int(o.get("idx"))
+                    except Exception:
+                        continue
+                    nip = str(o.get("img_prompt", "") or "").strip()
+                    nvp = str(o.get("video_prompt", "") or "").strip()
+                    if 0 <= idx < len(raw_scenes) and nip:
+                        raw_scenes[idx]["img_prompt"] = nip
+                        if nvp:
+                            raw_scenes[idx]["video_prompt"] = nvp
+                        fixed_n += 1
+            except Exception as e:
+                self._log(f"  [WARN] dedup batch loi (giu ban goc): {e}", "WARN")
+        self._log(f"  -> dedup: viet lai {fixed_n}/{len(dups)} canh")
+        return raw_scenes
+
+    def _build_dedup_prompt(self, batch: list, look: str, audience: str) -> str:
+        tail = self._neg_tail()
+        body = json.dumps(batch, ensure_ascii=False)
+        return f"""These scene image prompts are DUPLICATES — each one repeats another
+scene's image in the same video. Rewrite EACH to be VISUALLY DISTINCT from any other
+(different setting / camera angle / composition / props / lighting) while keeping:
+- the SAME narration meaning (given as "narration"),
+- the art style: {look},
+- the main character referred to ONLY as "the reference character" (NEVER describe
+  its appearance), flat 2D illustration, NO text in the scene,
+- a matching short video (motion) prompt for the new image.
+Each prompt must end with: {tail}
+
+SCENES (JSON):
+{body}
+
+Reply with ONLY this JSON object (start with {{ end with }}), same idx values:
+{{"fixed": [{{"idx": <int>, "img_prompt": "<new distinct English prompt>", "video_prompt": "<English motion prompt>"}}]}}"""
 
     def _run_chunk(self, project_dir: Path, code: str, i: int, n_chunks: int,
                    chunk: list, style: Dict[str, Any], topic: str) -> dict:
