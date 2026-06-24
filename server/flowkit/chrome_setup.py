@@ -572,15 +572,17 @@ def setup_chrome(
         profile_ok = _profile_config_valid(chrome_dir)
         if not profile_ok:
             log("Profile config corrupt (binary in Local State/Preferences) -> recovering")
-        if not _ext_registered_in(chrome_dir, ext_dir) or not profile_ok:
-            if restore_from_data_copy(chrome_dir, ext_dir, force=not profile_ok):
-                log("Restored full Data from 'Data - Copy'%s" %
-                    (" (profile was corrupt)" if not profile_ok else " (extension was missing)"))
-            elif not profile_ok:
-                # No 'Data - Copy' to restore from -> delete corrupt files so Chrome relaunches
+            # Prefer the golden (keeps login+extension); force so it runs even if ext looks OK.
+            restore_from_data_copy(chrome_dir, ext_dir, force=True)
+            # If still corrupt (no 'Data - Copy' or golden also corrupt) -> delete the bad files
+            # so Chrome regenerates them on launch.
+            if not _profile_config_valid(chrome_dir):
                 gone = reset_corrupt_profile_files(chrome_dir)
                 if gone:
                     log("Deleted corrupt profile files (Chrome will regenerate): %s" % ", ".join(gone))
+        elif not _ext_registered_in(chrome_dir, ext_dir):
+            if restore_from_data_copy(chrome_dir, ext_dir):
+                log("Extension missing -> restored full Data from 'Data - Copy'")
             else:
                 log("Extension missing and no valid 'Data - Copy' to restore from")
     except Exception as e:
@@ -599,6 +601,16 @@ def setup_chrome(
         _enforce_window_layout(page, window_args, log)
     except Exception as e:
         log("Chrome failed: %s" % e)
+        # Safety net: a UTF-8 decode error here = DrissionPage hit a corrupt profile
+        # config file. Delete the bad file(s) so the next retry launches clean.
+        if "codec can't decode" in str(e) or "invalid start byte" in str(e) or "invalid continuation byte" in str(e):
+            try:
+                from launcher import reset_corrupt_profile_files
+                gone = reset_corrupt_profile_files(chrome_dir)
+                if gone:
+                    log("Deleted corrupt profile files (will retry clean): %s" % ", ".join(gone))
+            except Exception:
+                pass
         _kill_chrome_for_dir(chrome_dir)
         return False
 

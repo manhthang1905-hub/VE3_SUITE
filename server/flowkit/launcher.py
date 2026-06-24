@@ -695,19 +695,33 @@ def restore_from_data_copy(chrome_dir: Path, ext_dir: Path, force: bool = False)
 
 # Profile text-config files Chrome/DrissionPage read as UTF-8 on launch. If one of
 # these holds binary garbage (e.g. an interrupted write), the launch dies with
-# "'utf-8' codec can't decode byte ...". Local State sits at the profile root, so it
-# survives clean_chrome_profile() and persists across retries.
-_PROFILE_CONFIG_FILES = ("Local State", "Default/Preferences", "Default/Secure Preferences")
+# "'utf-8' codec can't decode byte ...". DrissionPage's set_prefs/set_flags only
+# catch JSONDecodeError, not UnicodeDecodeError, so a non-UTF-8 byte is fatal.
+# Local State sits at the profile root, so it survives clean_chrome_profile().
+_PROFILE_CONFIG_NAMES = ("Preferences", "Secure Preferences")
+
+
+def _profile_config_paths(chrome_dir: Path):
+    """All text-config files Chrome reads: root Local State + each profile dir's
+    Preferences/Secure Preferences (Default, Profile 1, ...)."""
+    prof = Path(chrome_dir) / "Data" / "profile"
+    if not prof.exists():
+        return
+    ls = prof / "Local State"
+    if ls.is_file():
+        yield ls
+    for d in prof.iterdir():
+        if d.is_dir():
+            for name in _PROFILE_CONFIG_NAMES:
+                p = d / name
+                if p.is_file():
+                    yield p
 
 
 def _profile_config_valid(chrome_dir: Path) -> bool:
-    """True if every existing profile config file is valid UTF-8 JSON."""
+    """True if every profile config file is valid UTF-8 JSON."""
     import json as _json
-    prof = Path(chrome_dir) / "Data" / "profile"
-    for rel in _PROFILE_CONFIG_FILES:
-        p = prof / rel
-        if not p.exists():
-            continue
+    for p in _profile_config_paths(chrome_dir):
         try:
             _json.loads(p.read_text(encoding="utf-8"))
         except Exception:
@@ -717,21 +731,18 @@ def _profile_config_valid(chrome_dir: Path) -> bool:
 
 def reset_corrupt_profile_files(chrome_dir: Path) -> list:
     """Delete any profile config file that isn't valid UTF-8 JSON so Chrome can
-    regenerate it. Last resort when there's no 'Data - Copy' to restore from.
-    Returns the list of files removed."""
+    regenerate it. Last resort when 'Data - Copy' is missing/also corrupt.
+    Returns the relative paths removed."""
     import json as _json
-    prof = Path(chrome_dir) / "Data" / "profile"
+    base = Path(chrome_dir) / "Data" / "profile"
     removed = []
-    for rel in _PROFILE_CONFIG_FILES:
-        p = prof / rel
-        if not p.exists():
-            continue
+    for p in _profile_config_paths(chrome_dir):
         try:
             _json.loads(p.read_text(encoding="utf-8"))
         except Exception:
             try:
                 p.unlink()
-                removed.append(rel)
+                removed.append(str(p.relative_to(base)))
             except Exception:
                 pass
     return removed
