@@ -105,40 +105,18 @@ class ClaudeCliEngine:
         #   "api_cli"    — VOV API first; on failure fall back to claude.exe (this run)
         #   "api_ds"     — POST the prompt to DeepSeek API (deepseek-v4-pro)
         #   "api_ds_cli" — DeepSeek API first; on failure fall back to claude.exe
-        #   "api_aibox"     — POST the prompt to AI Box (deepseek-v4-pro)
-        #   "api_aibox_cli" — AI Box API first; on failure fall back to claude.exe
-        #   "cli_aibox"     — claude.exe FIRST (best quality); when it fails (e.g.
-        #                     Claude Max quota/limit), switch to AI Box for the rest.
-        #                     Use this to run mostly on Max and spill over to AI Box
-        #                     when you run out of Max tokens.
         # Everything else (chunking, auto-split, thumbnails, builder) is identical.
         self.backend = str(self.config.get("claude_cli_backend", "cli") or "cli").strip().lower()
-        if self.backend not in ("cli", "api", "api_cli", "api_ds", "api_ds_cli",
-                                 "api_aibox", "api_aibox_cli", "cli_aibox"):
+        if self.backend not in ("cli", "api", "api_cli", "api_ds", "api_ds_cli"):
             self.backend = "cli"
         # Which transports use the HTTP API (as primary), and which fall back to CLI.
-        self._uses_api = self.backend in ("api", "api_cli", "api_ds", "api_ds_cli", "api_aibox", "api_aibox_cli")
-        self._api_fallback_cli = self.backend in ("api_cli", "api_ds_cli", "api_aibox_cli")
-        # CLI primary with API (AI Box) fallback when Claude Max is exhausted.
-        self._cli_fallback_api = self.backend == "cli_aibox"
-        # Once a transport fails in a fallback mode, disable it for the rest of THIS
-        # run (re-checked on the next code, so quota recovery is picked up).
+        self._uses_api = self.backend in ("api", "api_cli", "api_ds", "api_ds_cli")
+        self._api_fallback_cli = self.backend in ("api_cli", "api_ds_cli")
+        # Once the API fails in a fallback mode, disable it for the rest of THIS run
+        # (re-checked on the next code, so quota recovery is picked up).
         self._api_disabled = False
-        self._cli_disabled = False
-        # Resolve the API endpoint by provider: AI Box for the *_aibox / cli_aibox
-        # backends, DeepSeek for *_ds, else VOV.
-        if self.backend in ("api_aibox", "api_aibox_cli", "cli_aibox"):
-            self.api_base_url = str(
-                self.config.get("claude_cli_aibox_base_url")
-                or "https://api.ai-box.vn/v1"
-            ).strip().rstrip("/")
-            self.api_key = str(
-                self.config.get("claude_cli_aibox_api_key") or ""
-            ).strip()
-            self.api_model = str(
-                self.config.get("claude_cli_aibox_model") or "deepseek-v4-pro"
-            ).strip()
-        elif self.backend in ("api_ds", "api_ds_cli"):
+        # Resolve the API endpoint by provider: DeepSeek for *_ds, else VOV.
+        if self.backend in ("api_ds", "api_ds_cli"):
             self.api_base_url = str(
                 self.config.get("claude_cli_ds_base_url")
                 or "https://api.deepseek.com/v1"
@@ -207,20 +185,6 @@ class ClaudeCliEngine:
             self.chunk_retries = max(0, int(self.config.get("claude_cli_chunk_retries", 4) or 4))
         except Exception:
             self.chunk_retries = 4
-
-        # AI Box (deepseek-v4-pro) is a weaker/slower model for this task: in a big
-        # chunk it tends to REPEAT scene prompts and write shorter ones. So for the
-        # AI Box backends, auto-tune for quality — smaller chunks (fewer scenes per
-        # call -> less repetition + more reliable JSON) and force the QA review pass
-        # (removes any duplicate / near-identical prompts, enriches weak ones).
-        # Verified: this takes duplicates from ~13% to 0% and lifts prompt detail.
-        if self.backend in ("api_aibox", "api_aibox_cli"):
-            try:
-                ai_chunk = int(self.config.get("claude_cli_aibox_chunk_size", 30) or 30)
-            except Exception:
-                ai_chunk = 30
-            self.chunk_size = min(self.chunk_size, max(15, ai_chunk))
-            self.review_enabled = True
 
     @staticmethod
     def _neg_tail() -> str:
@@ -590,25 +554,14 @@ JSON RULES:
                     self._log(f"  [WARN] API loi/het quota ({e}) -> chuyen sang CLI "
                               f"(claude.exe) cho phan con lai cua ma", "WARN")
             return self._run_via_cli(prompt, cwd)
-        if self._cli_fallback_api:
-            # CLI (claude.exe) primary, AI Box fallback. Once CLI fails in this run
-            # (e.g. Claude Max quota), switch to AI Box for the rest of the code.
-            if not self._cli_disabled:
-                try:
-                    return self._run_via_cli(prompt, cwd)
-                except Exception as e:
-                    self._cli_disabled = True
-                    self._log(f"  [WARN] CLI loi/het quota Max ({e}) -> chuyen sang "
-                              f"AI Box cho phan con lai cua ma", "WARN")
-            return self._run_via_api(prompt)
         return self._run_via_cli(prompt, cwd)
 
     def _run_via_api(self, prompt: str) -> str:
         """API transport: POST the same prompt to an OpenAI-compatible endpoint.
-        Uses STREAMING so a slow thinking-model behind a proxy (e.g. AI Box's
-        Cloudflare ~100s cap) does not trip an HTTP 524 — tokens flow incrementally.
-        Only delta.content is accumulated (reasoning_content is ignored), so the
-        returned text is the clean answer the callers parse as JSON."""
+        Uses STREAMING so a slow thinking-model behind a proxy with a response-time
+        cap does not trip an HTTP 524 — tokens flow incrementally. Only delta.content
+        is accumulated (reasoning_content is ignored), so the returned text is the
+        clean answer the callers parse as JSON."""
         import random
         import requests
 
