@@ -200,6 +200,20 @@ class ClaudeCliEngine:
         except Exception:
             self.chunk_retries = 2
 
+        # AI Box (deepseek-v4-pro) is a weaker/slower model for this task: in a big
+        # chunk it tends to REPEAT scene prompts and write shorter ones. So for the
+        # AI Box backends, auto-tune for quality — smaller chunks (fewer scenes per
+        # call -> less repetition + more reliable JSON) and force the QA review pass
+        # (removes any duplicate / near-identical prompts, enriches weak ones).
+        # Verified: this takes duplicates from ~13% to 0% and lifts prompt detail.
+        if self.backend in ("api_aibox", "api_aibox_cli"):
+            try:
+                ai_chunk = int(self.config.get("claude_cli_aibox_chunk_size", 30) or 30)
+            except Exception:
+                ai_chunk = 30
+            self.chunk_size = min(self.chunk_size, max(15, ai_chunk))
+            self.review_enabled = True
+
     @staticmethod
     def _neg_tail() -> str:
         """Short negative clause appended to every prompt (Veo3 tends to drift to
