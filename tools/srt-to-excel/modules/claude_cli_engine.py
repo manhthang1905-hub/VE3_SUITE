@@ -616,8 +616,14 @@ JSON RULES:
                     last_error = f"HTTP {resp.status_code} {resp.text[:160]}"
                 else:
                     parts = []
-                    for line in resp.iter_lines(decode_unicode=True):
-                        if not line or not line.startswith("data:"):
+                    # Decode each SSE line as UTF-8 ourselves — requests' decode_unicode
+                    # defaults to latin-1 for text/event-stream (no charset header),
+                    # which mojibake's curly quotes, accents and CJK (Korean/Japanese).
+                    for raw_line in resp.iter_lines():
+                        if not raw_line:
+                            continue
+                        line = raw_line.decode("utf-8", errors="replace") if isinstance(raw_line, bytes) else raw_line
+                        if not line.startswith("data:"):
                             continue
                         payload = line[5:].strip()
                         if payload == "[DONE]":
