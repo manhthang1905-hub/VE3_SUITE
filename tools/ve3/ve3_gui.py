@@ -1583,6 +1583,22 @@ class SettingsPage(ctk.CTkScrollableFrame):
         self.ent_deepseek_key = type('D',(),{'get':lambda s: '','delete':lambda s,*a:None,'insert':lambda s,*a:None})()
         self.ent_deepseek_keys = type('D',(),{'get':lambda s: '','delete':lambda s,*a:None,'insert':lambda s,*a:None})()
 
+        # Claude proxy (bought "Claude card") — route claude.exe (Backend=CLI) through
+        # a custom Anthropic endpoint instead of personal Max. URL prefilled; each
+        # machine enters its OWN key (saved locally, not committed to git).
+        ctk.CTkLabel(ai, text="Claude Proxy:", font=("",11), text_color=T2).grid(row=4, column=0, padx=(10,6), sticky="e")
+        prox = ctk.CTkFrame(ai, fg_color="transparent")
+        prox.grid(row=4, column=1, sticky="ew", padx=(0,10), pady=2)
+        prox.columnconfigure(1, weight=1)
+        self.ent_claude_proxy_url = ctk.CTkEntry(prox, width=175, height=28, corner_radius=4, font=("Consolas",10), fg_color=EN, border_color=BD, placeholder_text="https://vip.digishop.work")
+        self.ent_claude_proxy_url.grid(row=0, column=0, padx=(0,4))
+        self.ent_claude_proxy_key = ctk.CTkEntry(prox, height=28, corner_radius=4, font=("Consolas",10), fg_color=EN, border_color=BD, placeholder_text="sk-... key card (de trong = dung Max ca nhan)")
+        self.ent_claude_proxy_key.grid(row=0, column=1, sticky="ew")
+        self.btn_proxy_test = ctk.CTkButton(prox, text="Test", width=56, height=28, corner_radius=4, fg_color=RN, hover_color="#1565C0", text_color="#FFF", font=("",10,"bold"), command=self._check_claude_proxy)
+        self.btn_proxy_test.grid(row=0, column=2, padx=(4,0))
+        self.lbl_proxy_status = ctk.CTkLabel(prox, text="", font=("",10,"bold"), text_color=T3)
+        self.lbl_proxy_status.grid(row=1, column=0, columnspan=3, sticky="w", pady=(2,0))
+
         ctk.CTkLabel(ai, text="DeepSeek model:", font=("",11), text_color=T2).grid(row=5, column=0, padx=(10,6), sticky="e")
         self.ent_deepseek_model = ctk.CTkEntry(ai, height=28, corner_radius=4, font=("Consolas",10), fg_color=EN, border_color=BD)
         self.ent_deepseek_model.grid(row=5, column=1, sticky="ew", padx=(0,10), pady=2)
@@ -1824,6 +1840,59 @@ class SettingsPage(ctk.CTkScrollableFrame):
                 keys.append(part)
         return keys
 
+    def _check_claude_proxy(self):
+        """Kiem tra key proxy Claude: quota (con bao nhieu token, han dung) + ping
+        chat that su de chac chan chay duoc truoc khi chay chinh thuc."""
+        key = self.ent_claude_proxy_key.get().strip()
+        url = (self.ent_claude_proxy_url.get().strip().rstrip("/") or "https://vip.digishop.work")
+        if not key:
+            self.lbl_proxy_status.configure(text="⚠ Chua nhap key", text_color=ER)
+            return
+        self.btn_proxy_test.configure(text="...", state="disabled")
+        self.lbl_proxy_status.configure(text="Dang kiem tra...", text_color=T3)
+
+        def _do():
+            import urllib.request, json as _json
+            quota_txt = ""
+            # 1) quota
+            try:
+                req = urllib.request.Request("https://token-quota.digishop.work",
+                                             headers={"Authorization": f"Bearer {key}"})
+                with urllib.request.urlopen(req, timeout=12) as resp:
+                    q = (_json.loads(resp.read()) or {}).get("quota", {})
+                try:
+                    rem = int(q.get("remaining", 0) or 0)
+                except Exception:
+                    rem = q.get("remaining", "?")
+                status = q.get("status", "?")
+                exp = str(q.get("expires_at_iso") or "khong han")[:10]
+                if q.get("is_expired"):
+                    quota_txt = f"❌ HET HAN | {status} | con {rem:,}"
+                else:
+                    quota_txt = f"con {rem:,} token | {status} | han {exp}"
+            except Exception as e:
+                quota_txt = f"quota loi: {str(e)[:50]}"
+            # 2) ping chat that
+            ok_chat = False
+            try:
+                body = _json.dumps({"model": "claude-sonnet-4-6", "max_tokens": 20,
+                                    "messages": [{"role": "user", "content": "PONG"}]}).encode()
+                req = urllib.request.Request(f"{url}/v1/messages", data=body, method="POST",
+                                             headers={"x-api-key": key, "anthropic-version": "2023-06-01",
+                                                      "Content-Type": "application/json"})
+                with urllib.request.urlopen(req, timeout=40) as resp:
+                    d = _json.loads(resp.read())
+                ok_chat = bool(d.get("content"))
+            except Exception as e:
+                quota_txt += f" | chat loi: {str(e)[:40]}"
+            msg = ("✓ CHAY DUOC — " if ok_chat else "✗ KHONG CHAY — ") + quota_txt
+            color = OK if ok_chat else ER
+            self.after(0, lambda: self.lbl_proxy_status.configure(text=msg, text_color=color))
+            self.after(0, lambda: self.btn_proxy_test.configure(text="Test", state="normal"))
+
+        import threading
+        threading.Thread(target=_do, daemon=True).start()
+
     def _check_deepseek_balance(self):
         keys = self._parse_deepseek_keys()
         if not keys:
@@ -1927,6 +1996,10 @@ class SettingsPage(ctk.CTkScrollableFrame):
             self.txt_deepseek_keys.insert("1.0", "\n".join(all_keys))
         self.ent_deepseek_model.delete(0, "end")
         self.ent_deepseek_model.insert(0, str(cfg.get("deepseek_model", "") or "deepseek-v4-pro"))
+        self.ent_claude_proxy_url.delete(0, "end")
+        self.ent_claude_proxy_url.insert(0, str(cfg.get("claude_cli_anthropic_base_url", "") or "https://vip.digishop.work"))
+        self.ent_claude_proxy_key.delete(0, "end")
+        self.ent_claude_proxy_key.insert(0, str(cfg.get("claude_cli_anthropic_key", "") or ""))
         self.ent_deepseek_thinking.delete(0, "end")
         self.ent_deepseek_thinking.insert(0, str(cfg.get("deepseek_thinking_type", "") or "disabled"))
         self.ent_vov_direct_url.delete(0, "end")
@@ -2051,6 +2124,8 @@ class SettingsPage(ctk.CTkScrollableFrame):
         cfg["deepseek_api_key"] = ds_keys[0] if ds_keys else ""
         cfg["deepseek_api_keys"] = ds_keys
         cfg["deepseek_model"] = self.ent_deepseek_model.get().strip() or "deepseek-v4-pro"
+        cfg["claude_cli_anthropic_base_url"] = self.ent_claude_proxy_url.get().strip()
+        cfg["claude_cli_anthropic_key"] = self.ent_claude_proxy_key.get().strip()
         cfg["deepseek_thinking_type"] = self.ent_deepseek_thinking.get().strip() or "disabled"
         cfg["vov_direct_base_url"] = self.ent_vov_direct_url.get().strip() or "https://routerapi.vovantin.online/v1"
         cfg["vov_direct_api_key"] = self.ent_vov_direct_key.get().strip() or "sk-6m5lfOmA6GdmbkZfWKXNYLtB6ouLfyfvf06obd7g3kZKdljB"
