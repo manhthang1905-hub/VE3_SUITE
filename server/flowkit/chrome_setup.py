@@ -12,6 +12,35 @@ from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
+
+# ─── UTF-8-safe os.popen ──────────────────────────────────────
+# DrissionPage runs `tasklist | findstr <pid>` via os.popen and reads it during
+# Chrome launch. On some VMs the command output isn't valid UTF-8 (locale codepage
+# / a process with a non-ASCII name), and Python in UTF-8 mode raises
+# UnicodeDecodeError -> "Chrome failed: 'utf-8' codec can't decode byte ...".
+# Replace os.popen with a tolerant version (errors='replace') so it never crashes.
+def _install_utf8_safe_popen():
+    import io as _io
+    import subprocess as _sp
+    if getattr(os.popen, "_fk_utf8_safe", False):
+        return
+    _orig = os.popen
+
+    def _safe_popen(cmd, mode="r", buffering=-1):
+        if "r" in mode:
+            try:
+                out = _sp.run(cmd, shell=True, capture_output=True, timeout=30).stdout
+            except Exception:
+                out = b""
+            return _io.StringIO(out.decode("utf-8", errors="replace"))
+        return _orig(cmd, mode, buffering)
+
+    _safe_popen._fk_utf8_safe = True
+    os.popen = _safe_popen
+
+
+_install_utf8_safe_popen()
+
 BASE_DIR = Path(__file__).parent
 FLOW_URL = "https://labs.google/fx/tools/flow?hl=en"
 
