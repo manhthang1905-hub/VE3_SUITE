@@ -1465,6 +1465,8 @@ class SettingsPage(ctk.CTkScrollableFrame):
             "API -> CLI (fallback)": "api_cli",
             "API DeepSeek (v4 pro)": "api_ds",
             "API DeepSeek -> CLI": "api_ds_cli",
+            "API AI Box (v4 pro)": "api_aibox",
+            "API AI Box -> CLI": "api_aibox_cli",
         }
         self.claude_backend_labels = {v: k for k, v in self.claude_backend_options.items()}
         self.generation_backend_options = {"Server": "server", "NanoPic": "nanopic", "FlowKit": "flowkit", "Combined": "combined"}
@@ -2839,6 +2841,10 @@ foreach ($pid in $children) {{
         cfg.setdefault("claude_cli_ds_base_url", "https://api.deepseek.com/v1")
         cfg.setdefault("claude_cli_ds_api_key", "sk-de9ca9b3ec734f24a61d1e02ab8dc46c")
         cfg.setdefault("claude_cli_ds_model", "deepseek-v4-pro")
+        # AI Box API backend (api_aibox / api_aibox_cli) — deepseek-v4-pro.
+        cfg.setdefault("claude_cli_aibox_base_url", "https://api.ai-box.vn/v1")
+        cfg.setdefault("claude_cli_aibox_api_key", "sk-crPNAFbJunqbQkKJGvGAuqEvKGkSJrJkxaPRTIUrHJoWYnZN")
+        cfg.setdefault("claude_cli_aibox_model", "deepseek-v4-pro")
         return cfg
 
     def _build(self):

@@ -105,18 +105,32 @@ class ClaudeCliEngine:
         #   "api_cli"    — VOV API first; on failure fall back to claude.exe (this run)
         #   "api_ds"     — POST the prompt to DeepSeek API (deepseek-v4-pro)
         #   "api_ds_cli" — DeepSeek API first; on failure fall back to claude.exe
+        #   "api_aibox"     — POST the prompt to AI Box (deepseek-v4-pro)
+        #   "api_aibox_cli" — AI Box API first; on failure fall back to claude.exe
         # Everything else (chunking, auto-split, thumbnails, builder) is identical.
         self.backend = str(self.config.get("claude_cli_backend", "cli") or "cli").strip().lower()
-        if self.backend not in ("cli", "api", "api_cli", "api_ds", "api_ds_cli"):
+        if self.backend not in ("cli", "api", "api_cli", "api_ds", "api_ds_cli", "api_aibox", "api_aibox_cli"):
             self.backend = "cli"
         # Which transports use the HTTP API, and which fall back to CLI on failure.
-        self._uses_api = self.backend in ("api", "api_cli", "api_ds", "api_ds_cli")
-        self._api_fallback_cli = self.backend in ("api_cli", "api_ds_cli")
+        self._uses_api = self.backend in ("api", "api_cli", "api_ds", "api_ds_cli", "api_aibox", "api_aibox_cli")
+        self._api_fallback_cli = self.backend in ("api_cli", "api_ds_cli", "api_aibox_cli")
         # Once the API fails in a *_cli mode, disable it for the remaining chunks of
         # THIS run so we don't waste retries per chunk (re-checked on the next code).
         self._api_disabled = False
-        # Resolve the API endpoint by provider: DeepSeek for api_ds*, else VOV.
-        if self.backend in ("api_ds", "api_ds_cli"):
+        # Resolve the API endpoint by provider: AI Box / DeepSeek for the *_ds/_aibox
+        # backends, else VOV.
+        if self.backend in ("api_aibox", "api_aibox_cli"):
+            self.api_base_url = str(
+                self.config.get("claude_cli_aibox_base_url")
+                or "https://api.ai-box.vn/v1"
+            ).strip().rstrip("/")
+            self.api_key = str(
+                self.config.get("claude_cli_aibox_api_key") or ""
+            ).strip()
+            self.api_model = str(
+                self.config.get("claude_cli_aibox_model") or "deepseek-v4-pro"
+            ).strip()
+        elif self.backend in ("api_ds", "api_ds_cli"):
             self.api_base_url = str(
                 self.config.get("claude_cli_ds_base_url")
                 or "https://api.deepseek.com/v1"
