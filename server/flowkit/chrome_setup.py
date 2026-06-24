@@ -552,6 +552,21 @@ def _build_options(chrome_dir: Path, ext_dir: Path, port: int, proxy_arg: str = 
         for arg in window_args:
             co.set_argument(arg)
 
+    # When --user-data-dir isn't passed, DrissionPage uses a scratch profile at
+    # %TEMP%/DrissionPage/userData/<port> and reads its Local State / Preferences as
+    # UTF-8 (only catching JSONDecodeError). A leftover non-UTF-8 byte there makes
+    # EVERY launch die with "'utf-8' codec can't decode byte ..." (it persists because
+    # the path is keyed by port). The real Chrome data lives in the Portable's
+    # Data/profile, so this scratch dir is safe to wipe -> DrissionPage recreates it.
+    try:
+        import tempfile as _tf
+        import shutil as _sh
+        _dp_tmp = Path(_tf.gettempdir()) / "DrissionPage" / "userData" / str(port)
+        if _dp_tmp.exists():
+            _sh.rmtree(_dp_tmp, ignore_errors=True)
+    except Exception:
+        pass
+
     return co
 
 
@@ -630,6 +645,12 @@ def setup_chrome(
         _enforce_window_layout(page, window_args, log)
     except Exception as e:
         log("Chrome failed: %s" % e)
+        if "codec can't decode" in str(e):
+            # Log the full traceback so we can see EXACTLY which file/line DrissionPage
+            # chokes on (helps pinpoint the corrupt file / read).
+            import traceback as _tb
+            for _ln in _tb.format_exc().splitlines():
+                log("  [TRACE] %s" % _ln)
         # Safety net: a UTF-8 decode error here = DrissionPage hit a corrupt profile
         # config file. Delete the bad file(s) so the next retry launches clean.
         if "codec can't decode" in str(e) or "invalid start byte" in str(e) or "invalid continuation byte" in str(e):
