@@ -196,9 +196,9 @@ class ClaudeCliEngine:
         # Each chunk retries on failure (rate-limit / timeout) with backoff so the
         # parallelism never loses a chunk to a transient Max throttle.
         try:
-            self.chunk_retries = max(0, int(self.config.get("claude_cli_chunk_retries", 2) or 2))
+            self.chunk_retries = max(0, int(self.config.get("claude_cli_chunk_retries", 4) or 4))
         except Exception:
-            self.chunk_retries = 2
+            self.chunk_retries = 4
 
         # AI Box (deepseek-v4-pro) is a weaker/slower model for this task: in a big
         # chunk it tends to REPEAT scene prompts and write shorter ones. So for the
@@ -934,11 +934,31 @@ Reply with ONLY the corrected JSON object (start with {{ end with }}), no prose.
         n = len(srt_entries)
         if n <= self.chunk_threshold:
             prompt = self._build_prompt(code, srt_entries, style, out_file, topic)
-            result = self._run_claude(prompt, project_dir)
-            data = self._read_data_file(project_dir / out_file, result) or {}
-            if self.review_enabled and data.get("scenes"):
+            data: dict = {}
+            last_err = ""
+            for attempt in range(self.chunk_retries + 1):
+                try:
+                    result = self._run_claude(prompt, project_dir)
+                    data = self._read_data_file(project_dir / out_file, result) or {}
+                    if data.get("scenes") and data.get("thumbnails"):
+                        break
+                    last_err = "thieu scenes hoac thumbnails"
+                except Exception as e:
+                    last_err = str(e)
+                if attempt < self.chunk_retries:
+                    wait = 15 * (attempt + 1)
+                    self._log(f"  [WARN] tao data that bai ({last_err}) -> thu lai sau {wait}s "
+                              f"({attempt + 1}/{self.chunk_retries})", "WARN")
+                    time.sleep(wait)
+            # KHONG chap nhan thieu du lieu -> huy de chay lai (queue se lap lai mã).
+            if not (data.get("scenes") and data.get("thumbnails")):
+                raise RuntimeError(f"Khong tao du data (scenes+thumbnails) sau "
+                                   f"{self.chunk_retries + 1} lan: {last_err}")
+            if self.review_enabled:
                 reviewed = self._run_review_pass(project_dir, code, data)
                 if reviewed and reviewed.get("scenes"):
+                    if data.get("thumbnails") and not reviewed.get("thumbnails"):
+                        reviewed["thumbnails"] = data["thumbnails"]
                     data = reviewed
             return data
 
@@ -966,17 +986,28 @@ Reply with ONLY the corrected JSON object (start with {{ end with }}), no prose.
         # Merge in chunk order so the Scene list stays contiguous with the SRT.
         all_scenes: list = []
         thumbnails: list = []
+        failed: list = []
         for i in range(len(chunks)):
             cdata = results.get(i) or {}
             cs = cdata.get("scenes") or []
             if i == 0:
                 thumbnails = cdata.get("thumbnails") or []
             if not cs:
-                self._log(f"  [WARN] khuc {i + 1} khong co scene -> bo qua", "WARN")
+                failed.append(i + 1)
                 continue
             all_scenes.extend(cs)
             self._log(f"  -> khuc {i + 1}: {len(cs)} scenes")
-        self._log(f"  -> tong {len(all_scenes)} scenes tu {len(chunks)} khuc")
+        # KHONG chap nhan thieu du lieu: neu bat ky khuc nao that bai -> HUY ca lan
+        # chay (khong ghi Excel dở). run() tra ve False, queue se chay lai ca ma cho
+        # toi khi DU 100% — tha chay lai con hon ra Excel thieu canh.
+        if failed:
+            raise RuntimeError(
+                f"Khuc that bai {failed}/{len(chunks)} -> Excel se THIEU du lieu. "
+                f"Huy de chay lai (khong ghi Excel dở).")
+        # Thumbnail (chi khuc 0) cung bat buoc — thieu thi cung huy de chay lai.
+        if not thumbnails:
+            raise RuntimeError("Thieu thumbnail (khuc 0) -> Huy de chay lai.")
+        self._log(f"  -> tong {len(all_scenes)} scenes tu {len(chunks)}/{len(chunks)} khuc (DU)")
         return {"scenes": all_scenes, "thumbnails": thumbnails}
 
     def _run_chunk(self, project_dir: Path, code: str, i: int, n_chunks: int,
@@ -1115,6 +1146,16 @@ Reply with ONLY the corrected JSON object (start with {{ end with }}), no prose.
             return False
         for w in warnings[:10]:
             self._log(f"  [WARN] {w}", "WARN")
+        # KHONG chap nhan thieu du lieu: neu scene chua phu het SRT (con cau cuoi
+        # bi bo sot) -> XOA Excel dở + huy, de queue chay lai cho toi khi DU.
+        if any("Coverage stops" in str(w) for w in warnings):
+            self._log("ERROR: scene chua phu het SRT (thieu cau cuoi) -> xoa Excel + chay lai", "ERROR")
+            try:
+                excel_path.unlink()
+            except Exception:
+                pass
+            _step(4, "error", "Coverage incomplete")
+            return False
         wb = PromptWorkbook(excel_path).load_or_create()
         scenes = wb.get_scenes()
         self._verify_workbook(wb, scenes, srt_entries)
