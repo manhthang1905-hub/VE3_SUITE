@@ -571,8 +571,11 @@ JSON RULES:
         return self._run_via_cli(prompt, cwd)
 
     def _run_via_api(self, prompt: str) -> str:
-        """API transport: POST the same prompt to an OpenAI-compatible endpoint
-        (VOV router serving claude-sonnet-4-6). No claude.exe / no Max login."""
+        """API transport: POST the same prompt to an OpenAI-compatible endpoint.
+        Uses STREAMING so a slow thinking-model behind a proxy (e.g. AI Box's
+        Cloudflare ~100s cap) does not trip an HTTP 524 — tokens flow incrementally.
+        Only delta.content is accumulated (reasoning_content is ignored), so the
+        returned text is the clean answer the callers parse as JSON."""
         import random
         import requests
 
@@ -585,29 +588,47 @@ JSON RULES:
             "messages": [{"role": "user", "content": prompt}],
             "max_tokens": self.api_max_tokens,
             "temperature": 0.6,
-            "stream": False,
+            "stream": True,
         }
-        self._log(f"  -> Calling API ({self.api_model} @ {self.api_base_url}) ...")
+        self._log(f"  -> Calling API ({self.api_model} @ {self.api_base_url}, stream) ...")
         attempts = 3
         last_error = ""
         for attempt in range(attempts):
+            resp = None
             try:
-                resp = requests.post(url, headers=headers, json=data, timeout=self.timeout_seconds)
-                if resp.status_code == 200:
-                    j = resp.json()
-                    choices = j.get("choices") or []
-                    content = (((choices[0] if choices else {}) or {}).get("message") or {}).get("content") or ""
-                    content = content.strip()
+                resp = requests.post(url, headers=headers, json=data,
+                                     timeout=self.timeout_seconds, stream=True)
+                if resp.status_code != 200:
+                    last_error = f"HTTP {resp.status_code} {resp.text[:160]}"
+                else:
+                    parts = []
+                    for line in resp.iter_lines(decode_unicode=True):
+                        if not line or not line.startswith("data:"):
+                            continue
+                        payload = line[5:].strip()
+                        if payload == "[DONE]":
+                            break
+                        try:
+                            obj = json.loads(payload)
+                        except Exception:
+                            continue
+                        for ch in (obj.get("choices") or []):
+                            piece = (ch.get("delta") or {}).get("content")
+                            if piece:
+                                parts.append(piece)
+                    content = ("".join(parts)).strip()
                     if content:
-                        u = j.get("usage") or {}
-                        self._log(f"  -> API done (in={u.get('prompt_tokens','?')} "
-                                  f"out={u.get('completion_tokens','?')} tok)")
+                        self._log(f"  -> API done (stream, ~{len(content)} chars)")
                         return content
                     last_error = "empty content"
-                else:
-                    last_error = f"HTTP {resp.status_code} {resp.text[:160]}"
             except Exception as e:
                 last_error = str(e)
+            finally:
+                if resp is not None:
+                    try:
+                        resp.close()
+                    except Exception:
+                        pass
             if attempt < attempts - 1:
                 wait = min(20, 2 ** attempt) + random.uniform(0.2, 1.0)
                 self._log(f"  [WARN] API fail ({last_error}); retry {attempt + 1}/{attempts} sau {wait:.1f}s", "WARN")
