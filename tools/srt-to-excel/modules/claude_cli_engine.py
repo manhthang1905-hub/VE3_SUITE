@@ -653,12 +653,27 @@ JSON RULES:
         if sys.platform == "win32":
             creationflags = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
 
+        # Optional: route claude.exe through a custom Anthropic-compatible endpoint
+        # (e.g. a bought "Claude card" proxy) instead of the personal Claude Max
+        # account — lets you run on a big shared quota when Max tokens run low.
+        env = None
+        proxy_url = str(self.config.get("claude_cli_anthropic_base_url", "") or "").strip().rstrip("/")
+        proxy_key = str(self.config.get("claude_cli_anthropic_key", "") or "").strip()
+        if proxy_url and proxy_key:
+            env = dict(os.environ)
+            env["ANTHROPIC_BASE_URL"] = proxy_url
+            env["ANTHROPIC_AUTH_TOKEN"] = proxy_key
+            env["ANTHROPIC_API_KEY"] = proxy_key
+            if self.model:
+                env["ANTHROPIC_MODEL"] = self.model
+            self._log(f"     (qua proxy Anthropic: {proxy_url})")
+
         hb = threading.Thread(target=_heartbeat, daemon=True)
         hb.start()
         proc = subprocess.Popen(
             cmd, cwd=str(cwd), stdin=subprocess.PIPE, stdout=subprocess.PIPE,
             stderr=subprocess.PIPE, text=True, encoding="utf-8", errors="replace",
-            creationflags=creationflags,
+            creationflags=creationflags, env=env,
         )
         try:
             out, err = proc.communicate(input=prompt, timeout=self.timeout_seconds)
