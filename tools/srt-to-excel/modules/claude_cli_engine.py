@@ -107,19 +107,27 @@ class ClaudeCliEngine:
         #   "api_ds_cli" — DeepSeek API first; on failure fall back to claude.exe
         #   "api_aibox"     — POST the prompt to AI Box (deepseek-v4-pro)
         #   "api_aibox_cli" — AI Box API first; on failure fall back to claude.exe
+        #   "cli_aibox"     — claude.exe FIRST (best quality); when it fails (e.g.
+        #                     Claude Max quota/limit), switch to AI Box for the rest.
+        #                     Use this to run mostly on Max and spill over to AI Box
+        #                     when you run out of Max tokens.
         # Everything else (chunking, auto-split, thumbnails, builder) is identical.
         self.backend = str(self.config.get("claude_cli_backend", "cli") or "cli").strip().lower()
-        if self.backend not in ("cli", "api", "api_cli", "api_ds", "api_ds_cli", "api_aibox", "api_aibox_cli"):
+        if self.backend not in ("cli", "api", "api_cli", "api_ds", "api_ds_cli",
+                                 "api_aibox", "api_aibox_cli", "cli_aibox"):
             self.backend = "cli"
-        # Which transports use the HTTP API, and which fall back to CLI on failure.
+        # Which transports use the HTTP API (as primary), and which fall back to CLI.
         self._uses_api = self.backend in ("api", "api_cli", "api_ds", "api_ds_cli", "api_aibox", "api_aibox_cli")
         self._api_fallback_cli = self.backend in ("api_cli", "api_ds_cli", "api_aibox_cli")
-        # Once the API fails in a *_cli mode, disable it for the remaining chunks of
-        # THIS run so we don't waste retries per chunk (re-checked on the next code).
+        # CLI primary with API (AI Box) fallback when Claude Max is exhausted.
+        self._cli_fallback_api = self.backend == "cli_aibox"
+        # Once a transport fails in a fallback mode, disable it for the rest of THIS
+        # run (re-checked on the next code, so quota recovery is picked up).
         self._api_disabled = False
-        # Resolve the API endpoint by provider: AI Box / DeepSeek for the *_ds/_aibox
-        # backends, else VOV.
-        if self.backend in ("api_aibox", "api_aibox_cli"):
+        self._cli_disabled = False
+        # Resolve the API endpoint by provider: AI Box for the *_aibox / cli_aibox
+        # backends, DeepSeek for *_ds, else VOV.
+        if self.backend in ("api_aibox", "api_aibox_cli", "cli_aibox"):
             self.api_base_url = str(
                 self.config.get("claude_cli_aibox_base_url")
                 or "https://api.ai-box.vn/v1"
@@ -582,6 +590,17 @@ JSON RULES:
                     self._log(f"  [WARN] API loi/het quota ({e}) -> chuyen sang CLI "
                               f"(claude.exe) cho phan con lai cua ma", "WARN")
             return self._run_via_cli(prompt, cwd)
+        if self._cli_fallback_api:
+            # CLI (claude.exe) primary, AI Box fallback. Once CLI fails in this run
+            # (e.g. Claude Max quota), switch to AI Box for the rest of the code.
+            if not self._cli_disabled:
+                try:
+                    return self._run_via_cli(prompt, cwd)
+                except Exception as e:
+                    self._cli_disabled = True
+                    self._log(f"  [WARN] CLI loi/het quota Max ({e}) -> chuyen sang "
+                              f"AI Box cho phan con lai cua ma", "WARN")
+            return self._run_via_api(prompt)
         return self._run_via_cli(prompt, cwd)
 
     def _run_via_api(self, prompt: str) -> str:

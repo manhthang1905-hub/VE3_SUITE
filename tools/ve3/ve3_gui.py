@@ -1467,6 +1467,7 @@ class SettingsPage(ctk.CTkScrollableFrame):
             "API DeepSeek -> CLI": "api_ds_cli",
             "API AI Box (v4 pro)": "api_aibox",
             "API AI Box -> CLI": "api_aibox_cli",
+            "CLI -> AI Box (het quota Max)": "cli_aibox",
         }
         self.claude_backend_labels = {v: k for k, v in self.claude_backend_options.items()}
         self.generation_backend_options = {"Server": "server", "NanoPic": "nanopic", "FlowKit": "flowkit", "Combined": "combined"}
