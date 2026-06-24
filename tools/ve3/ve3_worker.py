@@ -1879,7 +1879,19 @@ Generator/context error:
                 continue
 
             if img_path.exists() and not char.media_id:
-                self.log(f"  {char.id}: co anh nhung thieu media_id -> can tao lai", "WARN")
+                # Anh tham chieu da co san (user cung cap qua "Tai Excel" / da copy
+                # vao nv/). UPLOAD anh do de lay media_id thay vi SINH MOI — sinh moi
+                # se de len anh cua user. Upload that bai moi sinh moi (giu hanh vi cu).
+                if str(char.id).strip().lower() == "nv1":
+                    self.log(f"  {char.id}: co anh san -> UPLOAD lay media_id (khong sinh de len anh)", "INFO")
+                    try:
+                        if self._register_local_reference_media(wb, char) and str(getattr(char, "media_id", "") or "").strip():
+                            self.on_item_status("char", char.id, "done", str(img_path), {})
+                            continue
+                    except Exception as e:
+                        self.log(f"  {char.id}: upload that bai ({e}) -> sinh moi", "WARN")
+                else:
+                    self.log(f"  {char.id}: co anh nhung thieu media_id -> can tao lai", "WARN")
 
             pending.append((char, img_path))
 
