@@ -567,10 +567,20 @@ def setup_chrome(
     #       folder from 'Data - Copy' (user-managed golden made with the ext + dev
     #       mode on). Login comes from 'Data - Copy'; if stale, login step below re-logs.
     try:
-        from launcher import _ext_registered_in, restore_from_data_copy
-        if not _ext_registered_in(chrome_dir, ext_dir):
-            if restore_from_data_copy(chrome_dir, ext_dir):
-                log("Extension missing -> restored full Data from 'Data - Copy'")
+        from launcher import (_ext_registered_in, restore_from_data_copy,
+                              _profile_config_valid, reset_corrupt_profile_files)
+        profile_ok = _profile_config_valid(chrome_dir)
+        if not profile_ok:
+            log("Profile config corrupt (binary in Local State/Preferences) -> recovering")
+        if not _ext_registered_in(chrome_dir, ext_dir) or not profile_ok:
+            if restore_from_data_copy(chrome_dir, ext_dir, force=not profile_ok):
+                log("Restored full Data from 'Data - Copy'%s" %
+                    (" (profile was corrupt)" if not profile_ok else " (extension was missing)"))
+            elif not profile_ok:
+                # No 'Data - Copy' to restore from -> delete corrupt files so Chrome relaunches
+                gone = reset_corrupt_profile_files(chrome_dir)
+                if gone:
+                    log("Deleted corrupt profile files (Chrome will regenerate): %s" % ", ".join(gone))
             else:
                 log("Extension missing and no valid 'Data - Copy' to restore from")
     except Exception as e:
