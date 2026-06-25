@@ -606,7 +606,7 @@ class FlowKitGUI(tk.Tk):
         return {
             'gateway_host': '0.0.0.0',
             'gateway_port': 5100,
-            'chrome_layout': {'cols': 2, 'gui_width': 700, 'rows': 0, 'zoom': 100},
+            'chrome_layout': {'cols': 2, 'gui_width': 700, 'rows': 0, 'zoom': 50},
             'ipv6': {'enabled': False, 'pool_url': '', 'prefix_length': 56, 'socks_port': 1080},
             'quota': {'cooldown_seconds': 120, 'retry_count': 3, 'retry_delay': 15},
             'rate_limit': {'cooldown_per_instance': 5, 'max_concurrent_per_instance': 1},
