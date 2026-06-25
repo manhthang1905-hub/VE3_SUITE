@@ -1873,7 +1873,9 @@ class SettingsPage(ctk.CTkScrollableFrame):
             except Exception as e:
                 quota_txt = f"quota loi: {str(e)[:50]}"
             # 2) ping chat that
-            ok_chat = False
+            # 2) ping chat that — phan biet ro: OK / server qua tai / key loi
+            ORANGE = "#FF8C00"
+            head, color = "", ER
             try:
                 body = _json.dumps({"model": "claude-sonnet-4-6", "max_tokens": 20,
                                     "messages": [{"role": "user", "content": "PONG"}]}).encode()
@@ -1882,11 +1884,23 @@ class SettingsPage(ctk.CTkScrollableFrame):
                                                       "Content-Type": "application/json"})
                 with urllib.request.urlopen(req, timeout=40) as resp:
                     d = _json.loads(resp.read())
-                ok_chat = bool(d.get("content"))
+                if d.get("content"):
+                    head, color = "✓ PROXY OK", OK
+                else:
+                    head, color = "⚠ Tra ve rong", ORANGE
+            except urllib.error.HTTPError as he:
+                code = he.code
+                if code in (429, 500, 502, 503, 504, 529):
+                    head, color = f"⚠ SERVER QUA TAI/LOI ({code}) — key OK, thu lai sau", ORANGE
+                elif code == 401:
+                    head, color = "✗ KEY SAI (401)", ER
+                elif code == 403:
+                    head, color = "✗ HET QUOTA / BI CAM (403)", ER
+                else:
+                    head, color = f"✗ Loi HTTP {code}", ER
             except Exception as e:
-                quota_txt += f" | chat loi: {str(e)[:40]}"
-            msg = ("✓ CHAY DUOC — " if ok_chat else "✗ KHONG CHAY — ") + quota_txt
-            color = OK if ok_chat else ER
+                head, color = f"✗ Khong ket noi duoc proxy ({str(e)[:30]})", ER
+            msg = f"{head} | {quota_txt}"
             self.after(0, lambda: self.lbl_proxy_status.configure(text=msg, text_color=color))
             self.after(0, lambda: self.btn_proxy_test.configure(text="Test", state="normal"))
 
