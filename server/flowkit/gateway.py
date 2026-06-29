@@ -75,6 +75,9 @@ VIDEO_SUBMIT_TIMEOUT = TIMEOUTS.get("video_submit", 60)
 VIDEO_POLL_TIMEOUT = TIMEOUTS.get("video_poll", 420)
 VIDEO_POLL_INTERVAL = TIMEOUTS.get("video_poll_interval", 10)
 TASK_WATCHDOG_TIMEOUT = TIMEOUTS.get("task_watchdog", 600)
+# I2V tren VM dung token Ultra tren Chrome account Pro -> RECAPTCHA_403 rai rac
+# (1 so instance/IP van pass). Xoay qua nhieu instance thay vi fail sau 1 lan.
+VIDEO_403_MAX_ROTATE = TIMEOUTS.get("video_403_max_rotate", 3)
 
 
 # ─── Instance State ──────────────────────────────────────────
@@ -781,11 +784,17 @@ async def _process_video_task(task_id: str, data: dict):
 
             if status_code == 403:
                 inst.mark_403()
-                # Try another instance (like image does)
-                other = _pick_instance_for_retry([inst.name])
-                if other:
-                    logger.warning("[Gateway] Video %s: 403 from %s, trying %s",
-                                   task_id[:8], inst.name, other.name)
+                # RECAPTCHA_403 tren VM thuong rai rac (Pro-cookie + Ultra-token):
+                # xoay qua NHIEU instance, cai nao pass thi dung — thay vi fail sau 1 lan.
+                tried = [inst.name]
+                rotated_ok = False
+                for _vr in range(VIDEO_403_MAX_ROTATE):
+                    other = _pick_instance_for_retry(tried)
+                    if not other:
+                        break
+                    tried.append(other.name)
+                    logger.warning("[Gateway] Video %s: 403, xoay -> %s (lan %d/%d)",
+                                   task_id[:8], other.name, _vr + 1, VIDEO_403_MAX_ROTATE)
                     other.processing_count += 1
                     try:
                         async with httpx.AsyncClient(timeout=VIDEO_SUBMIT_TIMEOUT + 10) as client_r:
@@ -796,14 +805,20 @@ async def _process_video_task(task_id: str, data: dict):
                             })
                             r_r = resp_r.json()
                         other.processing_count -= 1
-                        if r_r.get("success"):
-                            result = r_r
-                            other.mark_success()
-                            tasks[task_id]["worker"] = other.name
-                            break  # → polling
                     except Exception:
                         other.processing_count -= 1
-                # 403 rotation failed → fail task (fall through to failure section)
+                        continue
+                    if r_r.get("success"):
+                        result = r_r
+                        other.mark_success()
+                        tasks[task_id]["worker"] = other.name
+                        rotated_ok = True
+                        break
+                    if r_r.get("status") == 403:
+                        other.mark_403()  # instance nay cung dinh -> cooling, thu cai khac
+                if rotated_ok:
+                    break  # → polling
+                # het instance kha dung → fail (fall through to failure section)
             elif status_code == 429 or "QUOTA" in error.upper():
                 quota_confirmed = True
                 for q_retry in range(QUOTA_RETRY_COUNT):
