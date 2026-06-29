@@ -185,12 +185,20 @@ class _ExtensionInstanceManager:
             except Exception:
                 pass
 
+    @staticmethod
+    def _resolve_flowkit_dir(suite: Path) -> Path:
+        """Tra ve thu muc flowkit CO chrome_setup.py (uu tien tools/flowkit, roi server/flowkit).
+        Chi check dir ton tai la KHONG du: co VM con sot tools/flowkit rong/thieu file ->
+        chon nham -> 'No module named chrome_setup'. Phai check chinh file chrome_setup.py."""
+        for cand in (suite / "tools" / "flowkit", suite / "server" / "flowkit"):
+            if (cand / "chrome_setup.py").exists():
+                return cand
+        return suite / "server" / "flowkit"  # fallback de bao loi ro
+
     @classmethod
     def _do_start_all(cls, servers: List[dict], suite: Path, log, ready_event=None):
         """Start instances in PARALLEL — y het FlowKit GUI _start_all."""
-        flowkit_dir = suite / "tools" / "flowkit"
-        if not flowkit_dir.exists():
-            flowkit_dir = suite / "server" / "flowkit"
+        flowkit_dir = cls._resolve_flowkit_dir(suite)
         sys.path.insert(0, str(flowkit_dir))
 
         setup_concurrency = max(1, int(os.getenv("CHROME_SETUP_CONCURRENCY", "6")))
@@ -291,7 +299,13 @@ class _ExtensionInstanceManager:
                     log(f"[ExtAuth] {name}: setup_chrome FAILED")
                     return
             except Exception as e:
-                log(f"[ExtAuth] {name}: setup error: {e}")
+                if "chrome_setup" in str(e) or "launcher" in str(e):
+                    fk = cls._resolve_flowkit_dir(suite)
+                    has = (fk / "chrome_setup.py").exists()
+                    log(f"[ExtAuth] {name}: setup error: {e} | flowkit_dir={fk} "
+                        f"chrome_setup.py={'co' if has else 'THIEU - can Update/deploy server/flowkit'}")
+                else:
+                    log(f"[ExtAuth] {name}: setup error: {e}")
                 return
 
         # Step 2: Start agent + wait ready
@@ -465,9 +479,7 @@ class _ExtensionInstanceManager:
             cls._instances[name] = {"api_port": api_port}
             return True
 
-        flowkit_dir = suite / "tools" / "flowkit"
-        if not flowkit_dir.exists():
-            flowkit_dir = suite / "server" / "flowkit"
+        flowkit_dir = cls._resolve_flowkit_dir(suite)
         sys.path.insert(0, str(flowkit_dir))
 
         dummy_sem = threading.Semaphore(1)
