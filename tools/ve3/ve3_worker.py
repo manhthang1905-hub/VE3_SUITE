@@ -3890,17 +3890,25 @@ Generator/context error:
         ar = aspect_ratio or self.aspect_ratio
         aspect_str = ar.name.lower() if hasattr(ar, "name") else str(ar).lower()
         code = self.project_dir.name
+        # Local mode: KHONG dung pick_best_server (gating "busy" kieu cu lam serialize + cho lau).
+        # Cu round-robin server enabled; gateway /api/img/generate tu chia cho Chrome local_ready.
+        servers = [s for s in (self.pool.servers if self.pool else []) if getattr(s, "enabled", True)]
+        if not servers:
+            return False, None, {}, "No server configured"
         sinfo, last_error = {}, ""
-        for attempt in range(self.retry_count):
+        hard = 0          # loi THAT SU -> dem (cap retry_count)
+        soft = 0          # het Chrome ranh / account tam block -> CHO slot, KHONG dem (tu khop capacity)
+        max_soft = 240    # tran ~12 phut/anh de tranh ket vinh vien
+        logged = False
+        while hard < max(1, self.retry_count) and soft < max_soft:
             if self._stop_flag:
                 return False, None, sinfo, "stopped"
-            server = self.pool.pick_best_server() if self.pool else None
-            if not server:
-                server = self.pool.wait_for_server(max_wait=300) if self.pool else None
-            if not server:
-                return False, None, sinfo, "No server available"
+            self._local_rr = getattr(self, "_local_rr", 0) + 1
+            server = servers[self._local_rr % len(servers)]
             sinfo = {"server": server.name, "server_url": server.url}
-            self.log(f"    [local] {output_path.stem} -> {server.name} (token Pro local)")
+            if not logged:
+                self.log(f"    [local] {output_path.stem} -> {server.name} (token Pro local)")
+                logged = True
             try:
                 r = _req.post(f"{server.url}/api/img/generate", json={
                     "prompt": prompt, "project": code, "use_refs": use_refs,
@@ -3908,10 +3916,8 @@ Generator/context error:
                 }, timeout=self.timeout + 280)
                 j = r.json()
             except Exception as e:
-                last_error = str(e)
-                if self.pool and server:
-                    self.pool.mark_task_failed(server)
-                if not self._sleep_with_stop(2 * (attempt + 1)):
+                last_error = str(e); hard += 1
+                if not self._sleep_with_stop(2 * hard):
                     break
                 continue
             if j.get("success") and j.get("images"):
@@ -3919,18 +3925,25 @@ Generator/context error:
                     if self.pool:
                         self.pool.mark_success(server)
                     return True, j["images"][0].get("media_name"), sinfo, ""
-                last_error = "tai anh that bai"
-                if self.pool:
-                    self.pool.mark_task_failed(server)
-            else:
-                last_error = str(j.get("error", "")) or "khong ro loi"
-                transient = any(k in last_error for k in ("NO_LOCAL_READY", "429", "RECAPTCHA", "CAPTCHA"))
-                self.log(f"    [local] {output_path.stem} loi: {last_error[:160]} (lan {attempt+1})",
-                         "WARN" if transient else "ERROR")
-                if self.pool:
-                    self.pool.mark_task_failed(server)
-                if not self._sleep_with_stop(4 if transient else 2):
+                last_error = "tai anh that bai"; hard += 1
+                if not self._sleep_with_stop(2):
                     break
+                continue
+            last_error = str(j.get("error", "")) or "khong ro loi"
+            # NO_LOCAL_READY = het Chrome ranh -> CHO slot (tu khop so Chrome active, khong tinh fail).
+            # 403/429/captcha/cooling = account tam block, VM recovery swap -> cung cho.
+            if any(k in last_error for k in ("NO_LOCAL_READY", "429", "RECAPTCHA", "CAPTCHA", "COOLING")):
+                soft += 1
+                if soft == 1 or soft % 20 == 0:
+                    self.log(f"    [local] {output_path.stem}: cho Chrome ranh... ({last_error[:50]})", "INFO")
+                if not self._sleep_with_stop(3):
+                    break
+                continue
+            # loi that su -> dem
+            hard += 1
+            self.log(f"    [local] {output_path.stem} loi: {last_error[:160]} (lan {hard})", "ERROR")
+            if not self._sleep_with_stop(2):
+                break
         return False, None, sinfo, last_error
 
     def _submit_image(
