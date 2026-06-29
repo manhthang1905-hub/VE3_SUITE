@@ -82,6 +82,6 @@ rotation:
 timeouts:
   health_check: 5
   image_generation: 120
-  video_poll: 420
+  video_poll: 900
   video_poll_interval: 10
   video_submit: 60
