@@ -1,13 +1,13 @@
-style_name: vibrant_cartoon_finance_english
-image_style: Vibrant 2D cartoon finance illustration, the provided reference character identity preserved exactly, emotion expressed through expressive cartoon face and dynamic body language, warm detailed backgrounds with furniture rooms and financial props, rich cel-shaded coloring with soft ambient shadows, warm peach and amber lighting, clean outlines with subtle line-weight variation, story-driven composition showing financial situations, no real humans, no photorealism, no 3D, no readable text, no watermark
-video_style: Same vibrant cartoon finance style, smooth character animation, the provided reference character outfit and proportions preserved exactly, warm ambient lighting, financial props and environments animated with gentle motion, expressive character gestures and reactions
-thumbnail_style: Vibrant cartoon finance YouTube thumbnail, warm bold colors, expressive reference character pose with financial props, dramatic composition with depth, high-CTR engaging design
-scene_plan_style: Vibrant cartoon finance storytelling, expressive character in detailed environments, warm rich backgrounds with financial props, clear visual narrative through character poses and scene composition
-palette: warm peach, amber gold, cream white, soft orange, navy accents, rich brown, warm shadows
+style_name: vibrant_cartoon_finance_english_th3
+image_style: Vibrant 2D cartoon finance illustration, the provided reference character identity preserved exactly, emotion through expressive cartoon face and body language, soft matte gouache finish with paper texture and gentle low-contrast shading, muted earthy palette with soft diffused tone, hand-drawn slightly uneven outlines, no real humans, no photorealism, no 3D, no readable text, no watermark
+video_style: Same soft muted gouache cartoon finance style, smooth character animation, the provided reference character outfit and proportions preserved exactly, soft diffused tone, gentle motion, expressive character gestures and reactions
+thumbnail_style: Soft muted gouache cartoon finance YouTube thumbnail, warm earthy muted grade with paper texture, expressive reference character pose, cozy high-CTR composition with depth
+scene_plan_style: Soft muted gouache cartoon finance storytelling, expressive character, muted earthy color grade, clear visual narrative through character poses
+palette: muted sage green, dusty rose, warm taupe, soft mustard, cream, faded terracotta, gentle earthy shadows
 negative_prompt: no readable text, no real company logos, no specific stock tickers, no real currency amounts, no photorealism, no 3D renders, no cluttered charts, no watermark
 reference_lock: Use the provided reference character image as the exact identity and style anchor. Keep this exact character consistent across all scenes, no redesign, preserve the reference silhouette, proportions, face, outfit, and overall design. Do not re-describe or alter the character appearance.
-technical_suffix: same exact vibrant cartoon finance channel style for all figures, props, rooms, and environments, consistent nv1 reference character when used, rich detailed backgrounds, warm cel-shaded coloring, expressive character design, no readable text, no watermark
-engagement_rules: keep the cartoon finance character as the emotional anchor in detailed environments, use expressive poses and reactions to convey financial concepts, include relevant financial props naturally in the scene, maintain warm inviting atmosphere with rich backgrounds
+technical_suffix: same exact soft muted gouache cartoon finance channel style, consistent nv1 reference character when used, soft matte coloring with paper texture, hand-drawn outlines, expressive character design, no readable text, no watermark
+engagement_rules: keep the cartoon finance character as the emotional anchor, use expressive poses and reactions to convey financial concepts, let the SRT decide props and settings, maintain a soft muted earthy atmosphere
 default_character_prompt: Vibrant 2D cartoon finance character matching the provided reference character exactly, standing on clean white background, warm cel-shaded coloring, expressive cartoon eyes, vibrant cartoon style, no text, no watermark
 default_character_lock: the provided reference character, vibrant 2D cartoon style, preserve exact outfit proportions and face from reference
 audience_language: English
@@ -15,7 +15,7 @@ audience_culture_note: 'Design for English-speaking finance and investment viewe
 cultural_props: dollar bills, credit cards, laptop, smartphone banking app, coffee cup, budget notebook, house keys, car keys, stock charts
 cultural_metaphors: 'growth: plant growing from coins, ladder climbing upward | risk: tightrope walking, stormy seas | security: fortress walls, safety net, umbrella | wealth: overflowing treasure chest, golden eggs, fruit-bearing tree | debt: ball and chain, sinking ship | investment: seeds becoming trees, compound interest snowball | savings: piggy bank filling, water reservoir | opportunity: open door with light, mountain summit | financial_freedom: breaking chains, soaring eagle | retirement: peaceful beach, hammock between palm trees'
 cultural_emotion_style: 'English-speaking audiences value independence and self-reliance in finance. Show concepts through individual empowerment: taking control of money, making smart choices, building wealth independently. Express financial stress through visible worry (checking accounts, calculating bills, sleepless nights) but also determination. Financial success is shown through achievement milestones (debt-free celebration, first investment, home purchase) and freedom (travel, choices, security). Trust is built through transparency, data, and practical steps. Healing comes through education, action plans, and measurable progress. The modern professional context — home office, coffee shop meetings, digital banking — carries financial meaning.'
-thumb_text_style: "white text on vivid red blocks (#FF3B30)"
-thumb_text_shadow: "subtle depth shadow on red blocks only"
-thumb_text_hex: "#FF3B30"
+thumb_text_style: white text on vivid amber blocks (#FF9F0A)
+thumb_text_shadow: subtle depth shadow on amber blocks only
+thumb_text_hex: #FF9F0A
 thumb_text_font: "bold condensed font (Anton / Bebas Neue style)"
