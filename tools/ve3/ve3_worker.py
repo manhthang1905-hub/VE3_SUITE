@@ -3813,16 +3813,31 @@ Generator/context error:
         with self._local_ref_lock:
             if self._local_refs_registered:
                 return
-            import base64 as _b64, requests as _req
+            import base64 as _b64, requests as _req, io as _io
             refs = []
             if self.nv_dir.is_dir():
                 for f in sorted(self.nv_dir.iterdir()):
                     if f.suffix.lower() in (".png", ".jpg", ".jpeg", ".webp") and f.is_file():
                         try:
-                            b64 = _b64.b64encode(f.read_bytes()).decode("utf-8")
+                            # DOWNSCALE ref <=1024px JPEG: anh lon (~1MB) day qua extension bi
+                            # "Failed to fetch" (gioi han size). Giong farm_client.downscale_ref cua FLOW2.
+                            try:
+                                from PIL import Image as _Image
+                                im = _Image.open(_io.BytesIO(f.read_bytes())).convert("RGB")
+                                w, h = im.size
+                                if max(w, h) > 1024:
+                                    s = 1024.0 / float(max(w, h))
+                                    im = im.resize((max(1, int(w * s)), max(1, int(h * s))))
+                                buf = _io.BytesIO()
+                                im.save(buf, format="JPEG", quality=85)
+                                b64 = _b64.b64encode(buf.getvalue()).decode("utf-8")
+                                mime = "image/jpeg"
+                            except Exception:
+                                # Fallback: raw bytes (neu khong co PIL)
+                                b64 = _b64.b64encode(f.read_bytes()).decode("utf-8")
+                                mime = "image/jpeg" if f.suffix.lower() in (".jpg", ".jpeg") else "image/png"
                         except Exception:
                             continue
-                        mime = "image/jpeg" if f.suffix.lower() in (".jpg", ".jpeg") else "image/png"
                         refs.append({"name": f.stem, "image_base64": b64, "mime_type": mime})
             self._local_ref_names = [r["name"] for r in refs]
             code = self.project_dir.name
