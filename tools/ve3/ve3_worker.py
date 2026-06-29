@@ -1692,33 +1692,44 @@ Generator/context error:
             self.log(f"[FLOWKIT] Upload exception: {e}", "ERROR")
             return ""
 
-    def _upload_image_to_ultra(self, image_path: Path) -> str:
-        """FLOW2 local mode: upload anh scene len TAI KHOAN ULTRA (token may chu) -> media_id.
-        Anh tao bang token Pro local nen media_id cu (Pro-bound) KHONG dung duoc cho I2V
-        (I2V chay token Ultra). Upload lai len project Ultra de lay media_id Ultra-bound.
-
-        Dung GoogleFlowAPI.upload_image() THANG len Google bang token Ultra (giong upload
-        anh tham chieu nv1) — khong qua Chrome nen khong lech cookie account. Media_id bound
-        theo TOKEN (Ultra) -> dung duoc cho I2V luong cu."""
-        if not Path(image_path).exists():
-            self.log(f"    [local-video] khong thay anh {image_path}", "WARN")
-            return ""
-        if not self.bearer_token:
-            self.log("    [local-video] chua co token Ultra de upload", "ERROR")
-            return ""
+    def _open_ultra_uploader(self, wb):
+        """FLOW2 local-video: MO CHROME ExtAuth tren MAY CHU (giong luc upload nv1) de
+        upload anh scene qua EXTENSION (KHONG goi GoogleFlowAPI direct — direct bi SSL EOF
+        vi may chu khong goi thang aisandbox-pa.googleapis.com duoc).
+        Tra (ext_auth, token, project_id) hoac (None, "", "")."""
+        import re as _re
         try:
-            api = GoogleFlowAPI(
-                bearer_token=self.bearer_token,
-                project_id=self.flow_project_id,
-                timeout=self.timeout,
-            )
-            ok, img_input, err = api.upload_image(Path(image_path))
-            if ok and img_input:
-                return img_input.name
-            self.log(f"    [local-video] upload Ultra fail: {err}", "WARN")
+            from modules.flow_extension_auth import FlowExtensionAuth
         except Exception as e:
-            self.log(f"    [local-video] upload Ultra loi: {e}", "WARN")
-        return ""
+            self.log(f"[local-video] khong import duoc FlowExtensionAuth: {e}", "ERROR")
+            return None, "", ""
+        srv = self.server_list[0] if self.server_list else {}
+        srv_name = srv.get("name", "sv1")
+        m = _re.match(r'[a-zA-Z]+(\d+)', srv_name)
+        srv_port = 8100 + (int(m.group(1)) - 1) if m else 8100
+        agent_url = f"http://127.0.0.1:{srv_port}"
+        ext_auth = FlowExtensionAuth(agent_url, log_func=self.log)
+        if not ext_auth.is_ready():
+            # Chrome ExtAuth da bi release sau PHASE 1 -> mo lai + lay token (keep_chrome_open)
+            self.log("[local-video] mo lai Chrome ExtAuth tren may chu de upload...", "INFO")
+            try:
+                auth = self.auth_service.ensure_auth(
+                    self.project_dir, wb, force_refresh=True,
+                    keep_chrome_open=True, server_name=srv_name)
+                if auth.get("ok"):
+                    self.bearer_token = auth.get("token", "") or self.bearer_token
+                    self.flow_project_id = auth.get("project_id", "") or self.flow_project_id
+            except Exception as e:
+                self.log(f"[local-video] ensure_auth loi: {e}", "WARN")
+        for _ in range(30):
+            if ext_auth.is_ready():
+                break
+            time.sleep(2)
+        token = self.bearer_token or ext_auth.get_token()
+        pid = self.flow_project_id or ext_auth.get_project_id()
+        if not ext_auth.is_ready() or not token or not pid:
+            return None, "", ""
+        return ext_auth, token, pid
 
     def _register_local_reference_media(self, wb: PromptWorkbook, char: Character) -> bool:
         image_path = self.nv_dir / "nv1.png"
@@ -2853,11 +2864,32 @@ Generator/context error:
         if not todo:
             return
         self.log(f"[local-video] Upload {len(todo)} anh scene len Ultra de lay media_id...")
+        # Mo Chrome ExtAuth tren may chu 1 LAN (giong nv1) -> upload qua extension
+        ext_auth, token, pid = self._open_ultra_uploader(wb)
+        if not ext_auth or not token or not pid:
+            self.log("[local-video] KHONG mo duoc Chrome/token Ultra -> bo qua upload (video se thieu media_id)", "ERROR")
+            return
         ok = 0
         for s in todo:
             if self._stop_flag:
                 break
-            mid = self._upload_image_to_ultra(self.img_dir / f"{s.scene_id}.png")
+            img = self.img_dir / f"{s.scene_id}.png"
+            mid = ""
+            for _try in range(3):
+                try:
+                    mid = ext_auth.upload_image(str(img), token, pid)
+                except Exception as e:
+                    self.log(f"  [local-video] scene {s.scene_id} upload loi: {e}", "WARN")
+                    mid = ""
+                if mid:
+                    break
+                # token co the het han -> lam moi roi thu lai
+                if _try == 0:
+                    fresh = ext_auth.get_token()
+                    if fresh:
+                        token = fresh
+                        self.bearer_token = fresh
+                time.sleep(2)
             if mid:
                 with self._excel_lock:
                     wb.update_scene(s.scene_id, media_id=mid, status_img="done")
@@ -2865,9 +2897,18 @@ Generator/context error:
                         wb._save_pending_write("scene", scene_id=s.scene_id, media_id=mid)
                 s.media_id = mid
                 ok += 1
+                if ok % 10 == 0:
+                    self.log(f"  [local-video] {ok}/{len(todo)} media_id Ultra")
             else:
                 self.log(f"  [local-video] scene {s.scene_id}: upload Ultra that bai", "WARN")
         self.log(f"[local-video] Upload xong: {ok}/{len(todo)} media_id Ultra (san sang I2V)")
+        # Tha Chrome ExtAuth (token van con trong agent cho I2V neu can)
+        try:
+            from modules.flow_extension_auth import _ExtensionInstanceManager
+            sname = self.server_list[0]["name"] if self.server_list else "sv1"
+            _ExtensionInstanceManager.release_chrome(sname, log=self.log)
+        except Exception:
+            pass
 
     def _generate_videos(self, wb: PromptWorkbook) -> Dict:
         """Táº¡o video tá»« áº£nh scene Ä‘Ã£ cÃ³."""
