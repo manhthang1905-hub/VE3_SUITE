@@ -1699,36 +1699,39 @@ Generator/context error:
         Tra (ext_auth, token, project_id) hoac (None, "", "")."""
         import re as _re
         try:
-            from modules.flow_extension_auth import FlowExtensionAuth
+            from modules.flow_extension_auth import FlowExtensionAuth, _ExtensionInstanceManager
         except Exception as e:
             self.log(f"[local-video] khong import duoc FlowExtensionAuth: {e}", "ERROR")
             return None, "", ""
         srv = self.server_list[0] if self.server_list else {}
         srv_name = srv.get("name", "sv1")
         m = _re.match(r'[a-zA-Z]+(\d+)', srv_name)
-        srv_port = 8100 + (int(m.group(1)) - 1) if m else 8100
+        srv_index = (int(m.group(1)) - 1) if m else 0
+        srv_port = 8100 + srv_index
         agent_url = f"http://127.0.0.1:{srv_port}"
         ext_auth = FlowExtensionAuth(agent_url, log_func=self.log)
+        # MO Chrome ExtAuth tren may chu = DUNG start_one (y het PHASE 1: login lua789001 + agent
+        # + Chrome + cho extension ready, GIU Chrome mo). Sau do upload qua ext_auth giong nv1.
+        # ensure_auth KHONG dung duoc o day vi no th@ Chrome ngay sau khi lay token.
         if not ext_auth.is_ready():
-            # Chrome ExtAuth da bi release sau PHASE 1 -> mo lai + lay token (keep_chrome_open)
-            self.log("[local-video] mo lai Chrome ExtAuth tren may chu de upload...", "INFO")
+            self.log("[local-video] mo Chrome ExtAuth tren may chu (giong nv1) de upload...", "INFO")
             try:
-                auth = self.auth_service.ensure_auth(
-                    self.project_dir, wb, force_refresh=True,
-                    keep_chrome_open=True, server_name=srv_name)
-                if auth.get("ok"):
-                    self.bearer_token = auth.get("token", "") or self.bearer_token
-                    self.flow_project_id = auth.get("project_id", "") or self.flow_project_id
+                _ExtensionInstanceManager.start_one(srv_index, srv, str(SUITE_ROOT), log=self.log)
             except Exception as e:
-                self.log(f"[local-video] ensure_auth loi: {e}", "WARN")
-        for _ in range(30):
+                self.log(f"[local-video] start Chrome ExtAuth loi: {e}", "WARN")
+        for _ in range(40):
             if ext_auth.is_ready():
                 break
             time.sleep(2)
         token = self.bearer_token or ext_auth.get_token()
-        pid = self.flow_project_id or ext_auth.get_project_id()
+        pid = self.flow_project_id or ext_auth.get_project_id() or ext_auth.ensure_project()
         if not ext_auth.is_ready() or not token or not pid:
+            self.log(f"[local-video] uploader chua san sang (ready={ext_auth.is_ready()}, token={bool(token)}, pid={bool(pid)})", "WARN")
             return None, "", ""
+        if token:
+            self.bearer_token = token
+        if pid:
+            self.flow_project_id = pid
         return ext_auth, token, pid
 
     def _register_local_reference_media(self, wb: PromptWorkbook, char: Character) -> bool:
