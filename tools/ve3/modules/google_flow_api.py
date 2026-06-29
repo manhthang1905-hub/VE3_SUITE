@@ -1668,7 +1668,7 @@ class GoogleFlowAPI:
         """
         self._log(f"Polling video task {task_id} (job={job_id})...")
 
-        STUCK_TIMEOUT = 600  # 10 phút không thay đổi → bỏ cuộc
+        STUCK_TIMEOUT = 900  # 15 phút khong doi -> bo cuoc (khop video_poll VM; Veo doi khi >10 phut)
 
         operations = None
         start_time = time.time()
