@@ -3975,8 +3975,11 @@ Generator/context error:
                 continue
             last_error = str(j.get("error", "")) or "khong ro loi"
             # NO_LOCAL_READY = het Chrome ranh -> CHO slot (tu khop so Chrome active, khong tinh fail).
+            # NO_FLOW_KEY / NO_LOCAL_PROJECT = VM dang warmup (Chrome chua bat duoc flowKey/project)
+            #   -> CHO, dung instant-fail (giong NO_LOCAL_READY; max_soft van chan ket vinh vien).
             # 403/429/captcha/cooling = account tam block, VM recovery swap -> cung cho.
-            if any(k in last_error for k in ("NO_LOCAL_READY", "429", "RECAPTCHA", "CAPTCHA", "COOLING")):
+            if any(k in last_error for k in ("NO_LOCAL_READY", "NO_FLOW_KEY", "NO_LOCAL_PROJECT",
+                                             "429", "RECAPTCHA", "CAPTCHA", "COOLING")):
                 soft += 1
                 if soft == 1 or soft % 20 == 0:
                     self.log(f"    [local] {output_path.stem}: cho Chrome ranh... ({last_error[:50]})", "INFO")
