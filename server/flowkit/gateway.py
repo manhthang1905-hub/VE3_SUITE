@@ -30,7 +30,7 @@ logger = logging.getLogger(__name__)
 
 # ─── Load Config ─────────────────────────────────────────────
 
-CONFIG_PATH = Path(__file__).parent / "config.yaml"
+CONFIG_PATH = Path(os.environ.get("FLOWKIT_CONFIG") or (Path(__file__).parent / "config.yaml"))
 if not CONFIG_PATH.exists():
     print(f"[FATAL] config.yaml not found: {CONFIG_PATH}")
     print("  Copy config.yaml into the flowkit directory and restart.")
@@ -93,6 +93,7 @@ class AgentInstance:
         self.healthy = False
         self.extension_connected = False
         self.flow_key_present = False
+        self.local_project_present = False  # FLOW2: extension reported account's projectId
         self.consecutive_403 = 0
         self.cooling_until: float = 0
         self.quota_exhausted_until: float = 0
@@ -123,6 +124,11 @@ class AgentInstance:
         if self.processing_count >= MAX_CONCURRENT:
             return False
         return True
+
+    @property
+    def local_ready(self) -> bool:
+        """FLOW2: ready to generate using THIS account's own token + project."""
+        return self.available and self.flow_key_present and self.local_project_present
 
     @property
     def is_cooling(self) -> bool:
@@ -176,6 +182,8 @@ class AgentInstance:
             "healthy": self.healthy,
             "extension_connected": self.extension_connected,
             "flow_key_present": self.flow_key_present,
+            "local_project_present": self.local_project_present,  # FLOW2
+            "local_ready": self.local_ready,  # FLOW2
             "available": self.available,
             "cooling": self.is_cooling,
             "cooling_remaining": max(0, int(self.cooling_until - time.time())) if self.is_cooling else 0,
@@ -240,6 +248,18 @@ def _clear_cooldown(instance_name: str):
             break
 
 
+def _quarantine_instance(instance_name: str, seconds: int):
+    """FLOW2 circuit breaker callback: 403 cu quay lai ngay sau recovery (account/IP bi co).
+    Cho instance NGHI DAI (quota_exhausted) thay vi xoay IPv6 lien tuc lam nghen ca farm."""
+    for inst in instances:
+        if inst.name == instance_name:
+            inst.quota_exhausted_until = time.time() + seconds
+            inst.consecutive_403 = 0
+            logger.warning("[Gateway] %s: QUARANTINE %d phut (403 dai dang sau recovery). "
+                           "Cac Chrome khac chay binh thuong.", instance_name, seconds // 60)
+            break
+
+
 def _pick_instance() -> Optional[AgentInstance]:
     """Pick next available instance (round-robin)."""
     global _round_robin_idx
@@ -290,6 +310,7 @@ async def health_check_loop():
                                 inst.healthy = True
                                 inst.extension_connected = data.get("extension_connected", False)
                                 inst.flow_key_present = data.get("flow_key_present", False)
+                                inst.local_project_present = data.get("local_project_present", False)  # FLOW2
                                 agent_403 = data.get("consecutive_403", 0)
                                 inst.consecutive_403 = max(inst.consecutive_403, agent_403)
                             else:
@@ -388,6 +409,9 @@ def _proxy_and_fa_audit():
         return
     for inst in instances:
         if not inst.enabled:
+            continue
+        # FLOW2: dang quarantine/cooling thi DUNG xoay IPv6 (tranh churn lam nghen farm)
+        if inst.is_quota_exhausted or inst.is_cooling:
             continue
         cfg_list = CONFIG.get("instances", [])
         inst_cfg = next((c for c in cfg_list if c.get("name") == inst.name), None)
@@ -1149,6 +1173,7 @@ async def startup():
         config=CONFIG,
         instances_config=all_configs if fa_enabled else [cfg for cfg in all_configs if cfg.get("enabled", True)],
         on_cooldown_clear=_clear_cooldown,
+        on_quarantine=_quarantine_instance,
     )
     # Load ALL accounts from GUI config (full list), then assign active from .flow_accounts
     import json as _json
@@ -1452,6 +1477,24 @@ async def list_instances():
     return {"instances": [i.status_dict() for i in instances]}
 
 
+@app.get("/api/get-token")
+async def gateway_get_token():
+    """FLOW2: tra token + project_id cua 1 instance (cho master lay token tai khoan dang
+    login tren FlowKit nay — vd tai khoan Ultra de tao video)."""
+    cand = [i for i in instances if i.healthy and i.extension_connected and i.flow_key_present]
+    cand.sort(key=lambda i: (not i.local_project_present, i.processing_count))
+    async with httpx.AsyncClient(timeout=15) as client:
+        for inst in cand:
+            try:
+                j = (await client.get(f"{inst.base_url}/api/get-token")).json()
+                if j.get("success") and j.get("token"):
+                    return {"success": True, "token": j["token"],
+                            "project_id": j.get("project_id"), "instance": inst.name}
+            except Exception:
+                continue
+    return {"success": False, "error": "NO_TOKEN_READY"}
+
+
 @app.get("/api/accounts")
 async def list_accounts():
     """Account pool stats for GUI display."""
@@ -1569,6 +1612,264 @@ async def cleanup_loop():
 @app.on_event("startup")
 async def start_cleanup():
     asyncio.create_task(cleanup_loop())
+
+
+# ─── FLOW2 Image Farm API (local-quota mode) ────────────────────
+# Master sends high-level image jobs; the gateway builds the Google body and routes
+# to a LOCAL-READY instance (agent uses THIS Chrome account's own token + project,
+# burning the VM account's quota — NOT the master's). References are uploaded once
+# per (instance, project) under the local account so media_names stay account-valid.
+
+IMG_TOOL_NAME = "PINHOLE"
+IMG_DEFAULT_MODEL = "GEM_PIX_2"
+IMG_ASPECT_MAP = {
+    "landscape": "IMAGE_ASPECT_RATIO_LANDSCAPE",
+    "portrait": "IMAGE_ASPECT_RATIO_PORTRAIT",
+    "square": "IMAGE_ASPECT_RATIO_SQUARE",
+}
+
+# project -> { ref_name -> {"image_base64":..., "mime_type":...} }  (raw bytes from master)
+_img_ref_bytes: dict[str, dict] = {}
+# (instance_name, project) -> { ref_name -> media_name }  (uploaded under local account)
+_img_ref_media: dict[tuple, dict] = {}
+_img_ref_lock = asyncio.Lock()
+
+
+def _pick_local_instance(exclude: Optional[list] = None) -> Optional[AgentInstance]:
+    """Pick a LOCAL-READY instance (own token + project), least-busy first."""
+    exclude = exclude or []
+    cands = [i for i in instances if i.local_ready and i.name not in exclude]
+    if not cands:
+        return None
+    cands.sort(key=lambda i: (i.processing_count, i.last_request_time))
+    chosen = cands[0]
+    chosen.last_request_time = time.time()
+    return chosen
+
+
+def _img_aspect(value: str) -> str:
+    return IMG_ASPECT_MAP.get((value or "landscape").lower(), "IMAGE_ASPECT_RATIO_LANDSCAPE")
+
+
+def _build_image_body(prompt: str, count: int, aspect_value: str, image_inputs: list) -> dict:
+    """Build Google batchGenerateImages body. projectId left blank — the agent injects
+    the local account's projectId in local mode (_inject_local_project)."""
+    session_id = f";{int(time.time() * 1000)}"
+    ctx = {"sessionId": session_id, "projectId": "", "tool": IMG_TOOL_NAME}
+    requests_data = []
+    for _ in range(max(1, count)):
+        requests_data.append({
+            "clientContext": dict(ctx),
+            "imageModelName": IMG_DEFAULT_MODEL,
+            "imageAspectRatio": aspect_value,
+            "prompt": prompt,
+            "imageInputs": image_inputs or [],
+        })
+    return {"clientContext": dict(ctx), "requests": requests_data}
+
+
+def _parse_images(data: dict) -> list:
+    """Extract images from a Google batchGenerateImages response (media[] format)."""
+    out = []
+    if not isinstance(data, dict):
+        return out
+    for m in (data.get("media") or []):
+        gi = (m.get("image") or {}).get("generatedImage") or {}
+        media_name = (m.get("name") or gi.get("name") or m.get("workflowId")
+                      or gi.get("mediaGenerationId"))
+        url = gi.get("fifeUrl")
+        b64 = gi.get("encodedImage")
+        if url or b64:
+            out.append({
+                "url": url,
+                "base64": b64,
+                "media_name": media_name,
+                "media_id": gi.get("mediaGenerationId"),
+                "seed": gi.get("seed"),
+            })
+    return out
+
+
+def _extract_media_name(jd: dict):
+    if not isinstance(jd, dict):
+        return None
+    if jd.get("name"):
+        return jd["name"]
+    media = jd.get("media")
+    if isinstance(media, list) and media:
+        return media[0].get("name")
+    if isinstance(media, dict):
+        return media.get("name")
+    if isinstance(jd.get("imageInput"), dict):
+        return jd["imageInput"].get("name") or jd["imageInput"].get("mediaName")
+    return jd.get("mediaName")
+
+
+async def _ensure_instance_refs(inst: AgentInstance, project: str) -> dict:
+    """Ensure `project`'s reference images are uploaded under THIS instance's local
+    account. Returns { ref_name -> media_name }. Raises on upload failure.
+
+    Uploads DIRECTLY to Google (server-side) with the instance's own flowKey token,
+    exactly like production google_flow_api.upload_image — avoids the extension/WS
+    size limit that breaks large images going through /api/upload-image."""
+    key = (inst.name, project)
+    if key in _img_ref_media:
+        return _img_ref_media[key]
+    refs = _img_ref_bytes.get(project, {})
+    result: dict = {}
+    # Upload THROUGH the extension (agent /api/upload-image) — the browser context
+    # (cookies/headers) is required; raw server-side POST gets a 404. Agent WS max_size
+    # is raised so large reference images go through.
+    async with httpx.AsyncClient(timeout=120) as client:
+        for name, info in refs.items():
+            resp = await client.post(f"{inst.base_url}/api/upload-image", json={
+                "bearer_token": "",   # local mode → extension uses its own flowKey
+                "image_base64": info["image_base64"],
+                "mime_type": info.get("mime_type", "image/png"),
+                "project_id": "",     # agent uses local projectId
+            })
+            j = resp.json()
+            if not j.get("success") or not j.get("media_name"):
+                raise RuntimeError(f"upload [{name}]: {j.get('error', 'no media_name')}")
+            result[name] = j["media_name"]
+    _img_ref_media[key] = result
+    logger.info("[ImageFarm] %s: uploaded %d refs for project %s", inst.name, len(result), project)
+    return result
+
+
+@app.post("/api/img/register-refs")
+async def img_register_refs(request: Request):
+    """Master registers a project's reference images (raw bytes). Stored in memory and
+    uploaded lazily per instance on first generate.
+    Body: {project, refs: [{name, image_base64, mime_type}]}"""
+    data = await request.json()
+    project = data.get("project", "")
+    refs = data.get("refs", [])
+    if not project or not isinstance(refs, list):
+        return {"success": False, "error": "MISSING_PARAMS"}
+    store = {}
+    for r in refs:
+        if r.get("name") and r.get("image_base64"):
+            store[r["name"]] = {"image_base64": r["image_base64"],
+                                "mime_type": r.get("mime_type", "image/png")}
+    _img_ref_bytes[project] = store
+    for k in [k for k in list(_img_ref_media) if k[1] == project]:
+        _img_ref_media.pop(k, None)  # refs changed → invalidate per-instance uploads
+    return {"success": True, "project": project, "ref_count": len(store)}
+
+
+@app.post("/api/img/generate")
+async def img_generate(request: Request):
+    """Generate image(s) using the LOCAL account quota.
+    Body: {prompt, count?, aspect_ratio?, project?, use_refs?, ref_names?}
+    Returns {success, images:[{url, base64, media_name, ...}], instance}."""
+    data = await request.json()
+    prompt = (data.get("prompt") or "").strip()
+    if not prompt:
+        return {"success": False, "error": "MISSING_PROMPT"}
+    count = int(data.get("count", 1) or 1)
+    aspect_value = _img_aspect(data.get("aspect_ratio", "landscape"))
+    project = data.get("project", "")
+    use_refs = bool(data.get("use_refs", False))
+    ref_names = data.get("ref_names")  # optional subset of registered ref names
+
+    tried: list = []
+    last_err = ""
+    for attempt in range(MAX_RETRIES):
+        inst = _pick_local_instance(exclude=tried)
+        if not inst:
+            if attempt == 0:
+                await asyncio.sleep(2)  # let an instance free up
+                inst = _pick_local_instance(exclude=tried)
+            if not inst:
+                return {"success": False, "error": last_err or "NO_LOCAL_READY_INSTANCE"}
+        tried.append(inst.name)
+
+        image_inputs = []
+        if use_refs and project:
+            try:
+                async with _img_ref_lock:
+                    media_map = await _ensure_instance_refs(inst, project)
+                names = ref_names if isinstance(ref_names, list) else list(media_map.keys())
+                for n in names:
+                    mn = media_map.get(n)
+                    if mn:
+                        image_inputs.append({"imageInputType": "IMAGE_INPUT_TYPE_REFERENCE",
+                                             "name": mn})
+            except Exception as e:
+                last_err = f"REF_UPLOAD_FAILED: {e}"
+                continue
+
+        body = _build_image_body(prompt, count, aspect_value, image_inputs)
+
+        inst.processing_count += 1
+        try:
+            async with httpx.AsyncClient(timeout=IMAGE_TIMEOUT + 30) as client:
+                resp = await client.post(f"{inst.base_url}/api/generate-image", json={
+                    "bearer_token": "",   # FLOW2 local mode
+                    "project_id": "",     # agent uses local project
+                    "body_json": body,
+                }, timeout=IMAGE_TIMEOUT + 30)
+            j = resp.json()
+        except Exception as e:
+            last_err = str(e)
+            inst.mark_failed()
+            continue
+        finally:
+            inst.processing_count = max(0, inst.processing_count - 1)
+
+        if j.get("success"):
+            imgs = _parse_images(j.get("result", {}))
+            if imgs:
+                inst.mark_success()
+                return {"success": True, "images": imgs, "instance": inst.name}
+            last_err = "NO_IMAGE_IN_RESPONSE"
+            inst.mark_failed()
+            continue
+
+        err = str(j.get("error", ""))
+        last_err = err
+        if j.get("status") == 403 or "RECAPTCHA" in err or "CAPTCHA" in err:
+            inst.mark_403()
+        else:
+            inst.mark_failed()
+
+    return {"success": False, "error": last_err or "GENERATION_FAILED", "tried": tried}
+
+
+@app.api_route("/api/img/resolve", methods=["GET", "POST"])
+async def img_resolve():
+    """FLOW2 chẩn đoán/kích hoạt: gọi extract-project-id từng instance để lấy + cache
+    projectId của tài khoản local. Trả về projectId hoặc lỗi cho từng instance."""
+    out = []
+    async with httpx.AsyncClient(timeout=30) as client:
+        for inst in instances:
+            if not (inst.healthy and inst.extension_connected):
+                out.append({"name": inst.name, "skip": "not ready (chua healthy/extension)"})
+                continue
+            try:
+                r = await client.post(f"{inst.base_url}/api/extract-project-id")
+                j = r.json()
+                pid = (j.get("data") or {}).get("projectId")
+                if pid:
+                    inst.local_project_present = True
+                out.append({"name": inst.name, "projectId": pid, "raw": j})
+            except Exception as e:
+                out.append({"name": inst.name, "error": str(e)})
+    return {"resolve": out, "local_ready_now": [i.name for i in instances if i.local_ready]}
+
+
+@app.get("/api/img/health")
+async def img_health():
+    """Image-farm readiness summary (for the master orchestrator)."""
+    local_ready = [i.name for i in instances if i.local_ready]
+    return {
+        "role": "image-farm",
+        "local_ready_count": len(local_ready),
+        "local_ready": local_ready,
+        "instances_total": len(instances),
+        "projects_registered": list(_img_ref_bytes.keys()),
+    }
 
 
 if __name__ == "__main__":

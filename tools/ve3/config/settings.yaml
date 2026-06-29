@@ -2,6 +2,14 @@ accounts:
 - label: Acct 2
   project_id: d024bae6-0475-4270-b43d-847083f2a74c
   token: ''
+claude_cli_anthropic_base_url: https://vip.digishop.work
+claude_cli_anthropic_key: sk-aPTA6ErieibKtiMIGW36Eo0O6UYCIasIrjOOYN8aMYGunAU4
+claude_cli_backend: cli
+claude_cli_chunk_parallel: 3
+claude_cli_chunk_retries: 2
+claude_cli_max_parallel: 5
+claude_cli_model: claude-sonnet-4-6
+claude_cli_review: false
 claude_pool_api_key: sk_cliproxy_local
 claude_pool_base_url: http://127.0.0.1:8318
 claude_pool_model: gpt-5.4
@@ -15,13 +23,16 @@ concurrent_per_server: 4
 deepseek_api_key: sk-e3a4138d816a42778531c1e944ece336
 deepseek_api_keys:
 - sk-e3a4138d816a42778531c1e944ece336
+- sk-a138987932af4ac6a28ac0c99b49fd77
+- sk-de9ca9b3ec734f24a61d1e02ab8dc46c
 deepseek_model: deepseek-v4-pro
-deepseek_parallel_slots: 10
+deepseek_parallel_slots: 1
 deepseek_thinking_type: disabled
 excel_ai_attempts_per_key: 30
 excel_ai_provider: deepseek_vov
 excel_ai_timeout_seconds: 180
-excel_workers: 15
+excel_engine: claude_cli
+excel_workers: 11
 flow_accounts:
 - email: dendalion41@gmail.com
   enabled: true
@@ -41,67 +52,68 @@ flow_timeout: 120
 gemini_api_keys: []
 generation_backend: server
 generation_mode: server
+use_local_token_for_image: false
 local_server_enabled: true
 local_server_list:
 - allowed_topics: ''
   chrome_path: D:\VE3_SUITE\GoogleChromePortable - Copy (1)\GoogleChromePortable.exe
   enabled: true
-  flow_account_bundle: khoangtroicuabe.com@gmail.com|Damuocmo212@1|vfqavfw7n4x3dq4hj4eysui6vqp5nhw3
+  flow_account_bundle: lua789001@gmail.com|ZKGdMeBOVTEexf|dcw3v7ux747ribfgt6doy4fkj4gvzsrr
   flow_account_name: dendalion41
   name: sv1
   url: http://192.168.88.145:5100
 - allowed_topics: ''
   chrome_path: D:\VE3_SUITE\GoogleChromePortable - Copy (2)\GoogleChromePortable.exe
   enabled: true
-  flow_account_bundle: lock05042007@gmail.com|NgOrKmUMrfpDfD|r2kz6qmwjmpsd7kst2jwnjuw257yn6rm
+  flow_account_bundle: ellazokarenkaren@gmail.com|YSx4PoELpc113U7|einzy5zmxa525xlm5qyhey7tbnuimuem
   name: sv2
   url: http://192.168.88.111:5100
 - allowed_topics: ''
   chrome_path: D:\VE3_SUITE\GoogleChromePortable - Copy (3)\GoogleChromePortable.exe
   enabled: true
-  flow_account_bundle: marycarmarycarcatimpuhan@gmail.com|yhdM420mixpc6lP|r4uvsmhhqresrdv455z4b325moegm2gi
+  flow_account_bundle: reena.patel2024@gmail.com|reena.patel2024212@|imw636lhvv2d6f5zboi6xhgpmtoslf3w
   name: sv3
   url: http://192.168.88.131:5100
 - allowed_topics: ''
   chrome_path: D:\VE3_SUITE\GoogleChromePortable - Copy (4)\GoogleChromePortable.exe
   enabled: true
-  flow_account_bundle: lukaogrossoa@gmail.com|JuIXNXIaOXqJVI|sqofmbnlnlvwqpndz64zgwslheekw65s
+  flow_account_bundle: lf177254@gmail.com|SxEZXowdENHjnQ|fdhupr75s6msjcq45s4beik5fsvhsjra
   name: sv4
   url: http://192.168.88.144:5100
 - allowed_topics: ''
   chrome_path: D:\VE3_SUITE\GoogleChromePortable - Copy (5)\GoogleChromePortable.exe
   enabled: true
-  flow_account_bundle: ritchelhermo128@gmail.com|RzFJuolhM3KHq4A|tt6ief2mhc4eoeffazrpjypuluuac6fe
+  flow_account_bundle: santaninaasaali@gmail.com|8Nn8i1CKnwcfSGJ|hnizjrqgpoqg6yzv2kx3u55lyhbwt5nj
   name: sv5
   url: http://192.168.88.152:5100
 - allowed_topics: ''
   chrome_path: D:\VE3_SUITE\GoogleChromePortable - Copy (6)\GoogleChromePortable.exe
   enabled: true
-  flow_account_bundle: boiboioi1504@gmail.com|1504Boiboi@|2pc5zzv5dfspdywrdxi6d6fm5es2huf4
+  flow_account_bundle: lucaslira30y@gmail.com|kfWpjnTaAgLSxV|i74yku75ptdwlfcw5mgw4miogbagtjb7
   name: sv6
   url: http://192.168.88.140:5100
 - allowed_topics: ''
   chrome_path: D:\VE3_SUITE\GoogleChromePortable - Copy (7)\GoogleChromePortable.exe
   enabled: true
-  flow_account_bundle: acorreo153@gmail.com|fN2OzQ88KcwKiHb|walptldmwiuvm2n35itrmixdfcbbxtpq
+  flow_account_bundle: latol0039@gmail.com|obNlVeghJfjWNq|imfmnfv5zve55haay4h3d7mn2eum5hxl
   name: sv7
   url: http://192.168.88.115:5100
 - allowed_topics: ''
   chrome_path: D:\VE3_SUITE\GoogleChromePortable - Copy (8)\GoogleChromePortable.exe
   enabled: true
-  flow_account_bundle: jersoncuarteros619@gmail.com|7GffVc5nXKEB3AI|we6bk3ebmi5stugaaac7y6khlyo7uwpv
+  flow_account_bundle: ng5855653@gmail.com|DlPfVvtv0exq5xR|ileabcqkitbnk6j3mvboq2fyxryk53it
   name: sv8
   url: http://192.168.88.74:5100
 - allowed_topics: ''
   chrome_path: D:\VE3_SUITE\GoogleChromePortable - Copy (9)\GoogleChromePortable.exe
   enabled: true
-  flow_account_bundle: lw4952240@gmail.com|soGMzTYPMVuiZA|wnj6txmp6fihpo2acaawl2klbweghihz
+  flow_account_bundle: lucasff02731@gmail.com|OhCoDPYtdepSli|k2vqf5nqo6oiwompfphdltbsv7vpi6fw
   name: sv9
   url: http://192.168.88.73:5100
 - allowed_topics: ''
   chrome_path: D:\VE3_SUITE\GoogleChromePortable - Copy (10)\GoogleChromePortable.exe
   enabled: true
-  flow_account_bundle: nguyenvantinh2391994@gmail.com|19946269484947GiangB!@|frkn7ovyeee6d4mgrpx2gck4pdxdxad3
+  flow_account_bundle: antonioundadi@gmail.com|fqOQrubohLrhWl5|nvrg3ve334hiv6pu5nrxcf5n2yzreom2
   name: sv10
   url: http://192.168.88.72:5100
 - allowed_topics: ''
@@ -113,77 +125,61 @@ local_server_list:
 - allowed_topics: ''
   chrome_path: D:\VE3_SUITE\GoogleChromePortable - Copy (12)\GoogleChromePortable.exe
   enabled: true
-  flow_account_bundle: khoangtroicuabe.com@gmail.com|Damuocmo212@1|vfqa vfw7 n4x3
-    dq4h j4ey sui6 vqp5 nhw3
+  flow_account_bundle: lock05042007@gmail.com|NgOrKmUMrfpDfD|r2kz6qmwjmpsd7kst2jwnjuw257yn6rm
   name: sv12
   url: http://192.168.88.70:5100
 - allowed_topics: ''
   chrome_path: D:\VE3_SUITE\GoogleChromePortable - Copy (13)\GoogleChromePortable.exe
   enabled: true
-  flow_account_bundle: lock05042007@gmail.com|NgOrKmUMrfpDfD|r2kz 6qmw jmps d7ks t2jw
-    njuw 257y n6rm
+  flow_account_bundle: marycarmarycarcatimpuhan@gmail.com|yhdM420mixpc6lP|r4uvsmhhqresrdv455z4b325moegm2gi
   name: sv13
   url: http://192.168.88.69:5100
 - allowed_topics: ''
   chrome_path: D:\VE3_SUITE\GoogleChromePortable - Copy (14)\GoogleChromePortable.exe
   enabled: true
-  flow_account_bundle: marycarmarycarcatimpuhan@gmail.com|yhdM420mixpc6lP|r4uv smhh
-    qres rdv4 55z4 b325 moeg m2gi
+  flow_account_bundle: lukaogrossoa@gmail.com|JuIXNXIaOXqJVI|sqofmbnlnlvwqpndz64zgwslheekw65s
   name: sv14
   url: http://192.168.88.68:5100
 - allowed_topics: ''
   chrome_path: D:\VE3_SUITE\GoogleChromePortable - Copy (15)\GoogleChromePortable.exe
   enabled: true
-  flow_account_bundle: lukaogrossoa@gmail.com|JuIXNXIaOXqJVI|sqof mbnl nlvw qpnd z64z
-    gwsl heek w65s
+  flow_account_bundle: ritchelhermo128@gmail.com|RzFJuolhM3KHq4A|tt6ief2mhc4eoeffazrpjypuluuac6fe
   name: sv15
   url: http://192.168.88.67:5100
 - allowed_topics: ''
   chrome_path: D:\VE3_SUITE\GoogleChromePortable - Copy (16)\GoogleChromePortable.exe
   enabled: true
-  flow_account_bundle: ritchelhermo128@gmail.com|RzFJuolhM3KHq4A|tt6i ef2m hc4e oeff
-    azrp jypu luua c6fe
+  flow_account_bundle: boiboioi1504@gmail.com|1504Boiboi@|2pc5zzv5dfspdywrdxi6d6fm5es2huf4
   name: sv16
   url: http://192.168.88.66:5100
 - allowed_topics: ''
   chrome_path: D:\VE3_SUITE\GoogleChromePortable - Copy (17)\GoogleChromePortable.exe
   enabled: true
-  flow_account_bundle: boiboioi1504@gmail.com|1504Boiboi@|2pc5 zzv5 dfsp dywr dxi6
-    d6fm 5es2 huf4
+  flow_account_bundle: acorreo153@gmail.com|fN2OzQ88KcwKiHb|walptldmwiuvm2n35itrmixdfcbbxtpq
   name: sv17
   url: http://192.168.88.65:5100
 - allowed_topics: ''
   chrome_path: D:\VE3_SUITE\GoogleChromePortable - Copy (18)\GoogleChromePortable.exe
   enabled: true
-  flow_account_bundle: acorreo153@gmail.com|fN2OzQ88KcwKiHb|walp tldm wiuv m2n3 5itr
-    mixd fcbb xtpq
+  flow_account_bundle: jersoncuarteros619@gmail.com|7GffVc5nXKEB3AI|we6bk3ebmi5stugaaac7y6khlyo7uwpv
   name: sv18
   url: http://192.168.88.40:5100
 - allowed_topics: ''
   chrome_path: D:\VE3_SUITE\GoogleChromePortable - Copy (19)\GoogleChromePortable.exe
   enabled: true
-  flow_account_bundle: jersoncuarteros619@gmail.com|7GffVc5nXKEB3AI|we6b k3eb mi5s
-    tuga aac7 y6kh lyo7 uwpv
+  flow_account_bundle: lw4952240@gmail.com|soGMzTYPMVuiZA|wnj6txmp6fihpo2acaawl2klbweghihz
   name: sv19
   url: http://192.168.88.64:5100
 - allowed_topics: ''
   chrome_path: D:\VE3_SUITE\GoogleChromePortable - Copy (20)\GoogleChromePortable.exe
   enabled: true
-  flow_account_bundle: lw4952240@gmail.com|soGMzTYPMVuiZA|wnj6 txmp 6fih po2a caaw
-    l2kl bweg hihz
+  flow_account_bundle: nguyenvantinh2391994@gmail.com|19946269484947GiangB!@|frkn7ovyeee6d4mgrpx2gck4pdxdxad3
   name: sv20
   url: http://192.168.88.63:5100
-- allowed_topics: ''
-  chrome_path: D:\VE3_SUITE\GoogleChromePortable - Copy (21)\GoogleChromePortable.exe
-  enabled: true
-  flow_account_bundle: nguyenvantinh2391994@gmail.com|19946269484947GiangB!@|frkn
-    7ovy eee6 d4mg rpx2 gck4 pdxd xad3
-  name: sv21
-  url: http://192.168.88.62:5100
-local_server_url: http://192.168.88.145:5100
+local_server_url: http://192.168.88.63:5100
 log_level: INFO
 max_concurrent: 3
-max_parallel_api: 15
+max_parallel_api: 11
 music_workspace_mode_enabled: true
 nanopic_access_token: ''
 nanopic_base_url: https://flow-api.nanoai.pics/api/v2
@@ -210,4 +206,4 @@ vov_direct_model: claude-sonnet-4-6
 vov_direct_model_chain:
 - claude-sonnet-4-6
 - claude-opus-4-6
-vov_direct_parallel_slots: 5
+vov_direct_parallel_slots: 10

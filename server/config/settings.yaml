@@ -11,6 +11,8 @@ chrome_profile: ''
 deepseek_api_key: sk-e3a4138d816a42778531c1e944ece336
 deepseek_api_keys:
 - sk-e3a4138d816a42778531c1e944ece336
+- sk-a138987932af4ac6a28ac0c99b49fd77
+- sk-de9ca9b3ec734f24a61d1e02ab8dc46c
 deepseek_model: deepseek-v4-pro
 early_video_start: 10
 excel_mode: basic

@@ -1,10 +1,14 @@
 chrome_layout:
   cols: 2
+  full_height: true
   gui_width: 700
   rows: 0
   zoom: 50
 gateway_host: 0.0.0.0
 gateway_port: 5100
+# FLOW2 keep-login: 403/429 KHONG doi account / KHONG xoa profile / KHONG login lai
+# (account khong bi dang xuat). GUI toggle "Giu login" ghi de gia tri nay khi Start.
+fixed_account_per_chrome: true
 instances:
 - api_port: 8100
   chrome_path: GoogleChromePortable - Copy (1)/App/Chrome-bin/chrome.exe

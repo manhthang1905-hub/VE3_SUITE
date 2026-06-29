@@ -98,6 +98,12 @@ class VE3Worker:
         self.server_url = config.get("local_server_url", "")
         self.server_list = config.get("local_server_list", [])
         self.bearer_token = config.get("flow_bearer_token", "")
+        # FLOW2: tao anh bang TOKEN PRO LOCAL tren tung server (khong gui token Ultra).
+        # Bat -> dispatch qua /api/img/generate (local_mode); video van dung token Ultra.
+        self.use_local_token_for_image = bool(config.get("use_local_token_for_image", False))
+        self._local_refs_registered = False
+        self._local_ref_names: list = []
+        self._local_ref_lock = threading.Lock()
         self.flow_project_id = config.get("flow_project_id", "")
         self.timeout = config.get("flow_timeout", 120)
         self.retry_count = config.get("retry_count", 3)
@@ -1686,6 +1692,34 @@ Generator/context error:
             self.log(f"[FLOWKIT] Upload exception: {e}", "ERROR")
             return ""
 
+    def _upload_image_to_ultra(self, image_path: Path) -> str:
+        """FLOW2 local mode: upload anh scene len TAI KHOAN ULTRA (token may chu) -> media_id.
+        Anh tao bang token Pro local nen media_id cu (Pro-bound) KHONG dung duoc cho I2V
+        (I2V chay token Ultra). Upload lai len project Ultra de lay media_id Ultra-bound.
+
+        Dung GoogleFlowAPI.upload_image() THANG len Google bang token Ultra (giong upload
+        anh tham chieu nv1) — khong qua Chrome nen khong lech cookie account. Media_id bound
+        theo TOKEN (Ultra) -> dung duoc cho I2V luong cu."""
+        if not Path(image_path).exists():
+            self.log(f"    [local-video] khong thay anh {image_path}", "WARN")
+            return ""
+        if not self.bearer_token:
+            self.log("    [local-video] chua co token Ultra de upload", "ERROR")
+            return ""
+        try:
+            api = GoogleFlowAPI(
+                bearer_token=self.bearer_token,
+                project_id=self.flow_project_id,
+                timeout=self.timeout,
+            )
+            ok, img_input, err = api.upload_image(Path(image_path))
+            if ok and img_input:
+                return img_input.name
+            self.log(f"    [local-video] upload Ultra fail: {err}", "WARN")
+        except Exception as e:
+            self.log(f"    [local-video] upload Ultra loi: {e}", "WARN")
+        return ""
+
     def _register_local_reference_media(self, wb: PromptWorkbook, char: Character) -> bool:
         image_path = self.nv_dir / "nv1.png"
         if not image_path.exists():
@@ -2802,6 +2836,39 @@ Generator/context error:
     # PHASE 4: Video Generation (Image-to-Video)
     # =========================================================================
 
+    def _upload_local_images_for_video(self, wb: PromptWorkbook, scenes: list):
+        """FLOW2 local mode: anh scene tao bang token Pro -> media_id Pro-bound khong dung
+        cho I2V (chay token Ultra). PHASE CHUAN BI: upload anh scene len Ultra (giong upload
+        nv1.png) -> media_id Ultra-bound -> ghi Excel. Sau do _do_video chay luong cu."""
+        todo = []
+        for s in scenes:
+            vp = getattr(s, "video_prompt", "") or ""
+            sv = (getattr(s, "status_vid", "") or "").lower()
+            if not vp or sv in ("skip", "done"):
+                continue
+            if (self.vid_dir / f"{s.scene_id}.mp4").exists():
+                continue
+            if (self.img_dir / f"{s.scene_id}.png").exists():
+                todo.append(s)
+        if not todo:
+            return
+        self.log(f"[local-video] Upload {len(todo)} anh scene len Ultra de lay media_id...")
+        ok = 0
+        for s in todo:
+            if self._stop_flag:
+                break
+            mid = self._upload_image_to_ultra(self.img_dir / f"{s.scene_id}.png")
+            if mid:
+                with self._excel_lock:
+                    wb.update_scene(s.scene_id, media_id=mid, status_img="done")
+                    if not wb.safe_save():
+                        wb._save_pending_write("scene", scene_id=s.scene_id, media_id=mid)
+                s.media_id = mid
+                ok += 1
+            else:
+                self.log(f"  [local-video] scene {s.scene_id}: upload Ultra that bai", "WARN")
+        self.log(f"[local-video] Upload xong: {ok}/{len(todo)} media_id Ultra (san sang I2V)")
+
     def _generate_videos(self, wb: PromptWorkbook) -> Dict:
         """Táº¡o video tá»« áº£nh scene Ä‘Ã£ cÃ³."""
         result = {"total": 0, "completed": 0, "failed": 0}
@@ -2812,6 +2879,11 @@ Generator/context error:
             return result
 
         # Lá»c scene cÃ³ video_prompt vÃ  áº£nh Ä‘Ã£ xong
+        # FLOW2 local mode: upload anh scene len Ultra -> media_id Ultra vao Excel TRUOC khi I2V
+        if self.use_local_token_for_image:
+            self._upload_local_images_for_video(wb, scenes)
+            scenes = wb.get_scenes()  # reload media_id moi (Ultra-bound)
+
         pending = []
         for scene in scenes:
             vp = getattr(scene, 'video_prompt', '') or ''
@@ -2854,7 +2926,7 @@ Generator/context error:
                 return None
             sid = scene.scene_id
             vp = scene.video_prompt
-            media_id = scene.media_id
+            media_id = scene.media_id  # local mode: da duoc upload-phase ghi media_id Ultra vao Excel
             vid_path = self.vid_dir / f"{sid}.mp4"
 
             self.log(f"  [{i+1}/{len(pending)}] Video scene {sid}: {vp[:60]}...")
@@ -3732,6 +3804,120 @@ Generator/context error:
                     break
         return False, None, sinfo, last_error
 
+    # ─── FLOW2: tao anh bang TOKEN PRO LOCAL (qua /api/img/generate) ───────────
+    def _ensure_local_refs_registered(self):
+        """Dang ky raw bytes nv/ len TAT CA server (1 lan/project). Server tu upload
+        len account Pro local cua tung Chrome -> giu nhan vat bang quota local."""
+        if self._local_refs_registered:
+            return
+        with self._local_ref_lock:
+            if self._local_refs_registered:
+                return
+            import base64 as _b64, requests as _req
+            refs = []
+            if self.nv_dir.is_dir():
+                for f in sorted(self.nv_dir.iterdir()):
+                    if f.suffix.lower() in (".png", ".jpg", ".jpeg", ".webp") and f.is_file():
+                        try:
+                            b64 = _b64.b64encode(f.read_bytes()).decode("utf-8")
+                        except Exception:
+                            continue
+                        mime = "image/jpeg" if f.suffix.lower() in (".jpg", ".jpeg") else "image/png"
+                        refs.append({"name": f.stem, "image_base64": b64, "mime_type": mime})
+            self._local_ref_names = [r["name"] for r in refs]
+            code = self.project_dir.name
+            servers = self.pool.servers if self.pool else []
+            for srv in servers:
+                if not refs:
+                    break
+                try:
+                    _req.post(f"{srv.url}/api/img/register-refs",
+                              json={"project": code, "refs": refs}, timeout=180)
+                except Exception as e:
+                    self.log(f"    [local] register-refs {srv.name} fail: {e}", "WARN")
+            if refs:
+                self.log(f"    [local] da dang ky {len(refs)} ref nv/ ({self._local_ref_names}) len {len(servers)} server")
+            self._local_refs_registered = True
+
+    def _download_local_image(self, img: dict, output_path: Path) -> bool:
+        """Luu anh tu ket qua /api/img/generate: uu tien fifeUrl (CDN cong khai), roi base64."""
+        import base64 as _b64, requests as _req
+        data = None
+        if img.get("url"):
+            try:
+                r = _req.get(img["url"], timeout=120)
+                if r.status_code == 200:
+                    data = r.content
+            except Exception as e:
+                self.log(f"    [local] tai fifeUrl fail: {e}", "WARN")
+        if data is None and img.get("base64"):
+            b = img["base64"]
+            if "," in b:
+                b = b.split(",", 1)[1]
+            try:
+                data = _b64.b64decode(b)
+            except Exception:
+                data = None
+        if data:
+            output_path.parent.mkdir(parents=True, exist_ok=True)
+            output_path.write_bytes(data)
+            return True
+        return False
+
+    def _submit_image_local(self, prompt, output_path, refs=None, aspect_ratio=None) -> tuple:
+        """Tao anh bang token Pro LOCAL: POST /api/img/generate (KHONG gui bearer token)
+        -> server dung flowKey + projectId account local. Tra (ok, media_name, sinfo, err)."""
+        import requests as _req
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        self._ensure_local_refs_registered()
+        use_refs = bool(refs) and bool(self._local_ref_names)
+        ref_names = self._local_ref_names if use_refs else None
+        ar = aspect_ratio or self.aspect_ratio
+        aspect_str = ar.name.lower() if hasattr(ar, "name") else str(ar).lower()
+        code = self.project_dir.name
+        sinfo, last_error = {}, ""
+        for attempt in range(self.retry_count):
+            if self._stop_flag:
+                return False, None, sinfo, "stopped"
+            server = self.pool.pick_best_server() if self.pool else None
+            if not server:
+                server = self.pool.wait_for_server(max_wait=300) if self.pool else None
+            if not server:
+                return False, None, sinfo, "No server available"
+            sinfo = {"server": server.name, "server_url": server.url}
+            self.log(f"    [local] {output_path.stem} -> {server.name} (token Pro local)")
+            try:
+                r = _req.post(f"{server.url}/api/img/generate", json={
+                    "prompt": prompt, "project": code, "use_refs": use_refs,
+                    "ref_names": ref_names, "aspect_ratio": aspect_str, "count": 1,
+                }, timeout=self.timeout + 280)
+                j = r.json()
+            except Exception as e:
+                last_error = str(e)
+                if self.pool and server:
+                    self.pool.mark_task_failed(server)
+                if not self._sleep_with_stop(2 * (attempt + 1)):
+                    break
+                continue
+            if j.get("success") and j.get("images"):
+                if self._download_local_image(j["images"][0], output_path):
+                    if self.pool:
+                        self.pool.mark_success(server)
+                    return True, j["images"][0].get("media_name"), sinfo, ""
+                last_error = "tai anh that bai"
+                if self.pool:
+                    self.pool.mark_task_failed(server)
+            else:
+                last_error = str(j.get("error", "")) or "khong ro loi"
+                transient = any(k in last_error for k in ("NO_LOCAL_READY", "429", "RECAPTCHA", "CAPTCHA"))
+                self.log(f"    [local] {output_path.stem} loi: {last_error[:160]} (lan {attempt+1})",
+                         "WARN" if transient else "ERROR")
+                if self.pool:
+                    self.pool.mark_task_failed(server)
+                if not self._sleep_with_stop(4 if transient else 2):
+                    break
+        return False, None, sinfo, last_error
+
     def _submit_image(
         self,
         prompt: str,
@@ -3746,6 +3932,10 @@ Generator/context error:
         Returns:
             (success: bool, media_name: str or None, server_info: dict, error_text: str)
         """
+        # FLOW2: tao anh bang token Pro LOCAL tren server (khong gui token Ultra).
+        if self.use_local_token_for_image:
+            return self._submit_image_local(prompt, output_path, refs, aspect_ratio)
+
         if self.generation_backend == "nanopic":
             return self._submit_image_nanopic(prompt, output_path, refs, poll_callback, aspect_ratio)
 

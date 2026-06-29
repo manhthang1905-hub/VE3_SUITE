@@ -45,6 +45,8 @@ class InstanceRecoveryState:
     recovery_level: int = 0
     recovering: bool = False
     last_recovery_time: float = 0
+    last_recovery_done: float = 0   # FLOW2: thoi diem recovery cuoi THANH CONG (de phat hien spiral)
+    quick_fail_streak: int = 0      # FLOW2: so lan 403 lai ngay sau recovery (account/IP co the bi co)
     recovery_count: int = 0
     current_ipv6: str = ""
     current_seed: int = 0
@@ -54,6 +56,8 @@ class InstanceRecoveryState:
         self.recovery_level = 0
         self.level_attempts = {1: 0, 2: 0, 3: 0}
         self.last_recovery_time = 0
+        self.quick_fail_streak = 0      # FLOW2: chay OK tro lai -> xoa dem spiral
+        self.last_recovery_done = 0
 
     def next_level(self) -> int:
         if self.recovery_level >= 3:
@@ -80,6 +84,7 @@ class RecoveryManager:
         config: dict,
         instances_config: List[dict],
         on_cooldown_clear: Optional[Callable] = None,
+        on_quarantine: Optional[Callable] = None,
     ):
         self.config = config
         self.instances_config = {cfg["name"]: cfg for cfg in instances_config}
@@ -92,6 +97,22 @@ class RecoveryManager:
         self.min_interval = recovery_cfg.get("min_recovery_interval", RECOVERY_CONFIG_DEFAULTS["min_recovery_interval"])
         self.reconnect_timeout = recovery_cfg.get("extension_reconnect_timeout", RECOVERY_CONFIG_DEFAULTS["extension_reconnect_timeout"])
         self.restart_delay = recovery_cfg.get("chrome_restart_delay", RECOVERY_CONFIG_DEFAULTS["chrome_restart_delay"])
+
+        # FLOW2: "1 account co dinh / 1 Chrome" — khi ON, recovery GIU login:
+        # khong rotate account, khong deep-clean, khong login lai (login=False).
+        self._fixed_account = bool(config.get("fixed_account_per_chrome", False))
+
+        # FLOW2 circuit breaker: neu 403 quay lai NGAY sau recovery nhieu lan lien tiep
+        # => account/IP bi Google co; xoay IPv6 vo ich + lam nghen ca farm. Cho instance
+        # nghi DAI (quarantine) thay vi xoay lien tuc.
+        rec_cb = config.get("recovery", {})
+        self._quick_refail_window = rec_cb.get("quick_refail_window", 150)   # 403 lai trong N s = "quick refail"
+        self._max_quick_refails = rec_cb.get("max_quick_refails", 3)         # bao nhieu lan thi quarantine
+        self._quarantine_seconds = rec_cb.get("quarantine_seconds", 1200)    # nghi 20 phut
+        self.on_quarantine = on_quarantine
+        if self._fixed_account:
+            logger.info("[Recovery] fixed_account_per_chrome=ON — keep login "
+                        "(no account rotation / deep-clean / re-login on 403/429)")
 
         self.states: Dict[str, InstanceRecoveryState] = {}
         for name in self.instances_config:
@@ -299,6 +320,28 @@ class RecoveryManager:
                         instance_name, now - state.last_recovery_time)
             return
 
+        # FLOW2 circuit breaker (CHI cho keep-login khong FA): 403 quay lai ngay sau recovery
+        # tren CUNG Chrome/account -> quarantine. FA thi da swap sang Chrome khac nen bo qua.
+        if (not self._fa_enabled) and state.last_recovery_done \
+                and (now - state.last_recovery_done) < self._quick_refail_window:
+            state.quick_fail_streak += 1
+        else:
+            state.quick_fail_streak = 0
+        if (not self._fa_enabled) and state.quick_fail_streak >= self._max_quick_refails:
+            mins = self._quarantine_seconds // 60
+            logger.warning(
+                "[Recovery] %s: 403 lien tuc %d lan ngay sau recovery -> account/IP co the BI CO. "
+                "Xoay IPv6 vo ich + lam nghen farm => QUARANTINE %d phut (ngung xoay).",
+                instance_name, state.quick_fail_streak, mins)
+            state.quick_fail_streak = 0
+            state.last_recovery_done = 0
+            if self.on_quarantine:
+                try:
+                    self.on_quarantine(instance_name, self._quarantine_seconds)
+                except Exception as e:
+                    logger.warning("[Recovery] %s on_quarantine error: %s", instance_name, e)
+            return
+
         task = asyncio.create_task(self._run_recovery(instance_name))
         def _on_done(t, n=instance_name):
             self._recovery_tasks.pop(n, None)
@@ -360,10 +403,15 @@ class RecoveryManager:
                                    "Will retry when pool has IPs.", instance_name)
                     state.recovering = False
                     return
-                if not self._fa_enabled:
+                # FLOW2 keep-login: KHONG doi account khi fixed_account_per_chrome=ON.
+                if not self._fa_enabled and not self._fixed_account:
                     self._rotate_account_for_instance(instance_name)
 
-            success = await self._restart_chrome_instance(instance_name, new_ipv6=new_ip)
+            # FLOW2 keep-login / FA: restart KHONG login lai (tranh deep-clean -> logout;
+            # account da login san tu setup). Ca 2 che do deu giu login.
+            keep_login = self._fixed_account or self._fa_enabled
+            success = await self._restart_chrome_instance(
+                instance_name, new_ipv6=new_ip, login=not keep_login)
 
             if success:
                 logger.info("[SelfHeal] %s: restart OK", instance_name)
@@ -469,9 +517,13 @@ class RecoveryManager:
             success = False
 
             if self._fa_enabled:
-                # Fixed Account mode: 403 → swap Chrome immediately (different account)
+                # Fixed Account mode: 403 → SWAP Chrome (kill 403'd, start standby). Uu tien
+                # hon keep-login vi day chinh la "tat Chrome do, doi sang Chrome khac".
                 logger.info("[Recovery] %s FA mode → SWAP Chrome (kill old, start standby)", instance_name)
                 success = await self._fa_swap_chrome(instance_name)
+            elif self._fixed_account:
+                # FLOW2 keep-login (khong FA): KHONG doi account/deep-clean/login lai — rotate IPv6.
+                success = await self._keep_account_recovery(instance_name, level)
             elif not success and level <= 2 and state.level_attempts[2] < self.level2_max:
                 state.level_attempts[2] += 1
                 self._rotate_account_for_instance(instance_name)
@@ -481,7 +533,8 @@ class RecoveryManager:
                     state.recovery_level = 3
                     level = 3
 
-            if not success and not self._fa_enabled and state.level_attempts[3] < self.level3_max:
+            if (not success and not self._fa_enabled and not self._fixed_account
+                    and state.level_attempts[3] < self.level3_max):
                 state.recovery_level = 3
                 state.level_attempts[3] += 1
                 # Rotate account before L3 restart
@@ -500,6 +553,7 @@ class RecoveryManager:
 
             if success:
                 logger.info("[Recovery] %s recovery DONE at level %d", instance_name, state.recovery_level)
+                state.last_recovery_done = time.time()  # FLOW2: moc de phat hien 403 quay lai ngay (spiral)
                 if self.on_cooldown_clear:
                     self.on_cooldown_clear(instance_name)
             else:
@@ -509,6 +563,21 @@ class RecoveryManager:
             logger.exception("[Recovery] %s error: %s", instance_name, e)
         finally:
             state.recovering = False
+
+    async def _keep_account_recovery(self, instance_name: str, level: int) -> bool:
+        """FLOW2 keep-login recovery (fixed_account_per_chrome=ON).
+
+        GIU NGUYEN tai khoan dang dang nhap — KHONG bao gio doi account / deep-clean /
+        login lai. 403 o day thuong la kieu IP (UNUSUAL_ACTIVITY) -> chi can rotate IPv6.
+
+        Truoc co buoc L1 "reset captcha" qua extension nhung thuc te LUON timeout 30s
+        (extension reset mat >30s) va khong giup gi cho 403-IP -> BO, vao thang IPv6.
+        """
+        new_ip = ""
+        if self._ipv6_client:
+            loop = asyncio.get_running_loop()
+            new_ip = await loop.run_in_executor(None, self._rotate_ipv6, instance_name, "403_keepacct")
+        return await self._restart_chrome_instance(instance_name, new_ipv6=new_ip, login=False)
 
     async def _fa_swap_chrome(self, instance_name: str) -> bool:
         """Fixed Account swap: replace 403'd Chrome with a standby Chrome.
@@ -590,7 +659,9 @@ class RecoveryManager:
             if self._ipv6_client:
                 new_ip = self._rotate_ipv6(standby_name, "fa_swap")
 
-            success = await self._restart_chrome_instance(standby_name, new_ipv6=new_ip)
+            # login=False: standby da login san tu setup -> start nhanh, KHONG wipe.
+            # Agent (_project_resolver_loop) tu vao project -> local_ready.
+            success = await self._restart_chrome_instance(standby_name, new_ipv6=new_ip, login=False)
 
             async with self._fa_swap_lock:
                 self._fa_starting_since.pop(standby_name, None)

@@ -675,6 +675,14 @@ def setup_chrome(
     if account:
         target_email = account['id'].strip().lower()
         current_email = _check_current_account(page, log)
+        # FLOW2: page-check (vao myaccount.google.com) co the FALSE-NEGATIVE khi mang/IPv6
+        # chap chon (10060) -> tra rong -> tuong "chua login" -> WIPE OAN account dang co.
+        # Fallback doc account tu file Preferences (KHONG can mang) de tranh xoa nham.
+        if not current_email:
+            fast_email = _check_current_account_fast(chrome_dir)
+            if fast_email:
+                log("Page-check rong (mang chap chon?) -> dung Preferences: %s" % fast_email)
+                current_email = fast_email
         log("Account hien tai: %s" % (current_email or '(chua login)'))
         log("Account can dung: %s" % target_email)
 

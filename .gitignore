@@ -88,3 +88,5 @@ server/flowkit/.fingerprint_seed_*
 
 old/
 server/flowkit/_workflow_videos/
+
+server/flowkit_backup_*/

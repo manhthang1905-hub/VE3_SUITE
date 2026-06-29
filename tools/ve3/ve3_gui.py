@@ -1525,6 +1525,9 @@ class SettingsPage(ctk.CTkScrollableFrame):
         ctk.CTkLabel(gc, text="Generation:", font=("",11), text_color=T2).grid(row=4, column=0, padx=(10,6), sticky="e")
         self.opt_generation_backend = ctk.CTkOptionMenu(gc, values=list(self.generation_backend_options.keys()), width=120, height=28, corner_radius=4, fg_color=EN, button_color=BD, text_color=T1, font=("",11))
         self.opt_generation_backend.grid(row=4, column=1, sticky="w", pady=(0,4))
+        # FLOW2: tao anh bang token Pro local tren tung server (dot quota account local, khong dung token Ultra)
+        self.sw_use_local_token = ctk.CTkSwitch(gc, text="Tao anh bang token local (Pro)", progress_color=OK, button_color="#FFF", button_hover_color="#EEE")
+        self.sw_use_local_token.grid(row=4, column=2, padx=(10,0), sticky="w")
         self.sw_music_workspace = ctk.CTkSwitch(gc, text="Music Chrome mo lech man hinh", progress_color=OK, button_color="#FFF", button_hover_color="#EEE")
         self.sw_music_workspace.grid(row=5, column=0, columnspan=3, padx=10, pady=(0,8), sticky="w")
         ctk.CTkButton(gc, text="Save settings", width=120, height=30, fg_color=AC, hover_color=AC2, text_color="#FFF", font=("",11,"bold"), corner_radius=6, command=self._save).grid(row=6, column=0, columnspan=3, padx=10, pady=(4,10))
@@ -2070,6 +2073,10 @@ class SettingsPage(ctk.CTkScrollableFrame):
             self.sw_music_workspace.select()
         else:
             self.sw_music_workspace.deselect()
+        if cfg.get("use_local_token_for_image", False):
+            self.sw_use_local_token.select()
+        else:
+            self.sw_use_local_token.deselect()
 
     def _auto_flowkit_server_list(self) -> list:
         """Auto-generate flowkit_server_list from Chrome Portable copies."""
@@ -2107,6 +2114,7 @@ class SettingsPage(ctk.CTkScrollableFrame):
         cfg["flow_auth_auto_enabled"] = bool(self.sw_flow_auto.get())
         cfg["flow_auth_mode"] = "extension" if self.opt_flow_auth_mode.get() == "Extension" else "chrome"
         cfg["music_workspace_mode_enabled"] = bool(self.sw_music_workspace.get())
+        cfg["use_local_token_for_image"] = bool(self.sw_use_local_token.get())
         selected_provider_label = self.opt_excel_ai_provider.get().strip() or "DeepSeek"
         cfg["excel_ai_provider"] = self.excel_ai_provider_options.get(selected_provider_label, "deepseek")
         selected_engine_label = self.opt_excel_engine.get().strip()

@@ -208,6 +208,26 @@ class FlowKitGUI(tk.Tk):
         self._cooldown.pack(side='left', padx=4)
         self._cooldown.insert(0, "300")
 
+        # ── Recovery khi 403/429 (giu login) ──
+        keep = tk.LabelFrame(p, text=" Recovery 403/429 ", bg=BG2, fg=FG2,
+                             font=('Segoe UI', 8, 'bold'), bd=1, relief='groove')
+        keep.pack(fill='x', padx=10, pady=2)
+        keep_row = tk.Frame(keep, bg=BG2)
+        keep_row.pack(fill='x', padx=6, pady=4)
+        self._keep_login_var = tk.BooleanVar(value=True)
+        tk.Checkbutton(
+            keep_row, text="Giu login — KHONG doi tai khoan khi 403/429",
+            variable=self._keep_login_var, bg=BG2, fg=FG, selectcolor=BG,
+            activebackground=BG2, font=('Segoe UI', 9),
+            command=self._on_keep_login_toggle).pack(side='left')
+        self._keep_login_info = tk.Label(keep, text="", bg=BG2, fg=FG2, font=('Segoe UI', 8))
+        self._keep_login_info.pack(padx=6, pady=(0, 2), anchor='w')
+        try:
+            self._keep_login_var.set(self._settings.get('keep_login', True))
+        except Exception:
+            pass
+        self._on_keep_login_toggle()
+
         # ── IPv6 Pool ──
         f = tk.LabelFrame(p, text=" IPv6 Pool ", bg=BG2, fg=FG2,
                           font=('Segoe UI', 8, 'bold'), bd=1, relief='groove')
@@ -248,6 +268,16 @@ class FlowKitGUI(tk.Tk):
             chrome_row, textvariable=self._chrome_count_var,
             values=chrome_options, state='readonly', width=8)
         self._chrome_count_combo.pack(side='left', padx=6)
+        # Setup dong thoi (so Chrome login/warmup CUNG luc) — it hon = nhe mang luc khoi dong,
+        # do bi 10060/wipe oan. Mac dinh 3.
+        tk.Label(chrome_row, text="Setup đồng thời:", bg=BG2, fg=FG,
+                 font=('Segoe UI', 9)).pack(side='left', padx=(12, 0))
+        self._setup_conc = tk.Spinbox(
+            chrome_row, from_=1, to=12, width=4, bg=BG, fg=FG,
+            insertbackground=FG, font=('Consolas', 10), bd=1, relief='solid')
+        self._setup_conc.pack(side='left', padx=4)
+        self._setup_conc.delete(0, 'end')
+        self._setup_conc.insert(0, str(self._settings.get('setup_concurrency', 3)))
         # Load saved value
         try:
             saved = self._settings.get('chrome_count', 0)
@@ -458,6 +488,16 @@ class FlowKitGUI(tk.Tk):
         else:
             self._fa_info.config(text="", fg=FG2)
 
+    def _on_keep_login_toggle(self):
+        if self._keep_login_var.get():
+            self._keep_login_info.config(
+                text="403/429: reset captcha mem -> rotate IPv6 + restart (login=False). "
+                     "Account KHONG bi dang xuat.", fg=GREEN)
+        else:
+            self._keep_login_info.config(
+                text="403/429: doi account + xoa profile + login lai (CO THE bi dang xuat).",
+                fg=ORANGE)
+
     # Settings
     # ============================================================
     def _load_settings(self):
@@ -482,6 +522,10 @@ class FlowKitGUI(tk.Tk):
             self._fa_concurrent.delete(0, 'end')
             self._fa_concurrent.insert(0, str(data.get('fixed_account_concurrent', 2)))
             self._on_fa_toggle()
+            self._keep_login_var.set(data.get('keep_login', True))
+            self._on_keep_login_toggle()
+            self._setup_conc.delete(0, 'end')
+            self._setup_conc.insert(0, str(data.get('setup_concurrency', 3)))
             self._auto_restart_var.set(data.get('auto_restart_enabled', True))
             self._restart_hours.delete(0, 'end')
             self._restart_hours.insert(0, str(data.get('auto_restart_hours', 3)))
@@ -520,6 +564,8 @@ class FlowKitGUI(tk.Tk):
             'chrome_count': self._get_chrome_count(),
             'fixed_account_enabled': self._fixed_account_var.get(),
             'fixed_account_concurrent': int(self._fa_concurrent.get() or 2),
+            'keep_login': self._keep_login_var.get(),
+            'setup_concurrency': int(self._setup_conc.get() or 3),
             'autostart_enabled': self._autostart_var.get(),
             'auto_restart_enabled': self._auto_restart_var.get(),
             'auto_restart_hours': int(self._restart_hours.get() or 3),
@@ -640,6 +686,8 @@ class FlowKitGUI(tk.Tk):
         config['gateway_port'] = int(self._gateway_port.get() or 5100)
         config['rotation']['max_consecutive_403'] = int(self._max_403.get() or 3)
         config['rotation']['cooldown_seconds'] = int(self._cooldown.get() or 300)
+        # FLOW2: giu login (khong doi tai khoan / deep-clean khi 403/429)
+        config['fixed_account_per_chrome'] = bool(self._keep_login_var.get())
 
         ipv6_cfg = config.get('ipv6', {})
         ipv6_cfg['enabled'] = self._ipv6_enabled.get()
@@ -807,6 +855,8 @@ class FlowKitGUI(tk.Tk):
         # Sync the LOGIN window layout to the running-Chrome (Flow) layout so both have
         # the same position + full height. Same slot count (real # of Chromes, not the
         # 6 enabled in config), same columns, same left reserve as launcher chrome_layout.
+        # FLOW2: full chieu cao xuyen suot setup/login/warmup/running (1 hang, de nhau 1 phan).
+        os.environ["CHROME_LAYOUT_FULL_HEIGHT"] = "1"
         try:
             from launcher import CONFIG as _lcfg
             _cl = _lcfg.get("chrome_layout", {})
@@ -815,16 +865,25 @@ class FlowKitGUI(tk.Tk):
             os.environ["CHROME_LAYOUT_LEFT_RESERVED"] = str(_cl.get("gui_width", 700))
         except Exception:
             os.environ["CHROME_LAYOUT_SLOTS"] = str(max(1, len(enabled)))
-        account_map = {}
+        # ── Account assignment (FLOW2): CO DINH theo thu tu — acc dong i -> Chrome i ──
+        # acc[0]->flowkit-1, acc[1]->flowkit-2, ... (giong thiet ke goc, de kiem soat).
+        # Lan dau neu Chrome dang login sai acc -> setup_chrome se login lai dung acc cua
+        # slot do (1 lan). Sau do co dinh; keep_login chong xoay account khi 403/retry.
+        keep_login = bool(config.get('fixed_account_per_chrome', True))
+
+        def _mk_acc(a):
+            return {"id": a["email"], "password": a["password"],
+                    "totp_secret": a.get("totp_secret", "")}
+
+        assigned_acc = {}  # idx -> {id,password,totp_secret}
         if accounts:
-            for i, inst in enumerate(instances):
-                if not inst.get('enabled', True):
-                    continue
-                acc = accounts[i % len(accounts)]
-                account_map[inst["name"]] = {
-                    "id": acc["email"], "password": acc["password"],
-                    "totp_secret": acc.get("totp_secret", ""),
-                }
+            for i, inst in enabled:
+                assigned_acc[i] = _mk_acc(accounts[i % len(accounts)])
+
+        account_map = {}
+        for i, inst in enabled:
+            if i in assigned_acc:
+                account_map[inst["name"]] = assigned_acc[i]
         try:
             accounts_file = BASE_DIR / "config" / ".flow_accounts.json"
             accounts_file.parent.mkdir(exist_ok=True)
@@ -832,9 +891,13 @@ class FlowKitGUI(tk.Tk):
         except Exception:
             pass
 
-        # Per-instance pipeline
-        setup_concurrency = max(1, int(os.getenv("CHROME_SETUP_CONCURRENCY", "6")))
+        # Per-instance pipeline. setup_concurrency = so Chrome login/warmup CUNG luc.
+        # Lay tu GUI (mac dinh 3) — it hon = nhe mang luc khoi dong, do 10060/wipe oan.
+        # Env CHROME_SETUP_CONCURRENCY (neu set) van uu tien de override.
+        _gui_conc = int(self._settings.get('setup_concurrency', 3) or 3)
+        setup_concurrency = max(1, int(os.getenv("CHROME_SETUP_CONCURRENCY", str(_gui_conc))))
         setup_stagger = max(0.0, float(os.getenv("CHROME_SETUP_STAGGER_SEC", "3.0")))
+        self._log(f"Setup dong thoi: {setup_concurrency} Chrome/dot", "INFO")
 
         setup_sem = threading.Semaphore(setup_concurrency)
         ready_count = [0]
@@ -850,14 +913,7 @@ class FlowKitGUI(tk.Tk):
             debug_port = 19200 + (inst_cfg['api_port'] - 8100)
             proxy_arg = f"socks5://127.0.0.1:{proxy_port_map[idx]}" if idx in proxy_port_map else ""
 
-            account_info = None
-            if accounts:
-                acc = accounts[idx % len(accounts)]
-                account_info = {
-                    'id': acc['email'],
-                    'password': acc['password'],
-                    'totp_secret': acc.get('totp_secret', ''),
-                }
+            account_info = assigned_acc.get(idx)  # FLOW2: account da gan thong minh
 
             win_args = []
             try:
@@ -885,8 +941,8 @@ class FlowKitGUI(tk.Tk):
                     if attempt > 1:
                         from chrome_setup import _kill_chrome_for_dir
                         _kill_chrome_for_dir(chrome_dir)
-                        # FA mode: NEVER rotate accounts — each Chrome = fixed account
-                        if not fa_enabled and account_info and accounts and len(accounts) > 1:
+                        # FA mode / keep-login: NEVER rotate accounts — each Chrome = fixed account
+                        if not fa_enabled and not keep_login and account_info and accounts and len(accounts) > 1:
                             old_email = account_info['id']
                             tried_accounts.add(old_email)
                             new_acc = None

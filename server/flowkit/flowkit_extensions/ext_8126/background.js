@@ -12,6 +12,7 @@ const API_KEY = 'AIzaSyBtrm0o5ab1c-Ec8ZuLcGt3oJAA5VWt3pY';
 
 let ws = null;
 let flowKey = null;
+let localProjectId = null;  // FLOW2: projectId of the account logged in on THIS Chrome (local quota mode)
 let callbackSecret = null;  // Auth secret for HTTP callback, received from server on WS connect
 let state = 'off'; // off | idle | running
 let manualDisconnect = false;
@@ -74,8 +75,9 @@ chrome.alarms.onAlarm.addListener(async (alarm) => {
 });
 
 async function init() {
-  const data = await chrome.storage.local.get(['flowKey', 'metrics', 'callbackSecret']);
+  const data = await chrome.storage.local.get(['flowKey', 'localProjectId', 'metrics', 'callbackSecret']);
   if (data.flowKey) flowKey = data.flowKey;
+  if (data.localProjectId) localProjectId = data.localProjectId;  // FLOW2
   if (data.metrics) Object.assign(metrics, data.metrics);
   if (data.callbackSecret) callbackSecret = data.callbackSecret;
   connectToAgent();
@@ -101,6 +103,19 @@ chrome.webRequest.onBeforeSendHeaders.addListener(
     metrics.tokenCapturedAt = Date.now();
     chrome.storage.local.set({ flowKey, metrics });
     console.log('[FlowAgent] Bearer token captured');
+
+    // FLOW2: capture local account's projectId from the Flow API request URL
+    // (URLs look like .../v1/projects/{projectId}/...). Used in local-quota mode so
+    // the agent can build requests with THIS account's project, not the master's.
+    const _pm = (details.url || '').match(/\/projects\/([^/]+)/);
+    if (_pm && _pm[1] && _pm[1] !== localProjectId) {
+      localProjectId = _pm[1];
+      chrome.storage.local.set({ localProjectId });
+      console.log('[FlowAgent] Local projectId captured:', localProjectId);
+      if (ws?.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({ type: 'project_captured', projectId: localProjectId }));
+      }
+    }
 
     // Notify agent
     if (ws?.readyState === WebSocket.OPEN) {
@@ -176,6 +191,9 @@ function connectToAgent() {
     }));
     if (flowKey) {
       ws.send(JSON.stringify({ type: 'token_captured', flowKey }));
+    }
+    if (localProjectId) {
+      ws.send(JSON.stringify({ type: 'project_captured', projectId: localProjectId }));  // FLOW2
     }
   };
 

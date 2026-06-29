@@ -18,13 +18,20 @@ from typing import Dict, Optional
 import yaml
 
 BASE_DIR = Path(__file__).parent
-CONFIG_PATH = BASE_DIR / "config.yaml"
+# FLOW2: cho phep chay vm/ voi config khac (vd node Ultra cua master) qua bien FLOWKIT_CONFIG
+CONFIG_PATH = Path(os.environ.get("FLOWKIT_CONFIG") or (BASE_DIR / "config.yaml"))
 
 if not CONFIG_PATH.exists():
     print(f"[FATAL] config.yaml not found: {CONFIG_PATH}")
     sys.exit(1)
 with open(CONFIG_PATH) as f:
     CONFIG = yaml.safe_load(f)
+
+# FLOW2: Chrome full chieu cao 1 hang (kin man hinh, de nhau 1 phan) xuyen suot
+# setup/login/warmup/running. Config-driven (mac dinh BAT) -> ap dung ca GUI lan
+# headless; set env de google_login + subprocess cung thay. Tat: chrome_layout.full_height=false
+if (CONFIG.get("chrome_layout", {}) or {}).get("full_height", True) and not os.getenv("CHROME_LAYOUT_FULL_HEIGHT"):
+    os.environ["CHROME_LAYOUT_FULL_HEIGHT"] = "1"
 
 
 # ─── Screen / Window Layout ────────────────────────────────
@@ -63,6 +70,16 @@ def _calc_chrome_layout(slot: int, total_slots: int) -> tuple[int, int, int, int
         rows = max(1, -(-total_slots // cols))  # ceil division
 
     usable_w = max(300, scr_w - gui_width)
+
+    # FLOW2: setup/login/warmup — 1 HANG full chieu cao, phu kin be ngang, de nhau 1 phan.
+    # Trang login/Flow can du chieu cao de render + thay nut. Sau setup Chrome se minimize.
+    if os.getenv("CHROME_LAYOUT_FULL_HEIGHT", "") == "1":
+        n = max(1, total_slots)
+        win_w = max(520, usable_w // 2)
+        step = (usable_w - win_w) // (n - 1) if n > 1 else 0
+        x = gui_width + max(0, slot * step)
+        return x, 0, win_w, max(400, scr_h - 70)
+
     cell_w = max(320, usable_w // cols)
     cell_h = max(180, scr_h // rows)
 

@@ -242,6 +242,14 @@ class SrtToExcelApp(tk.Tk):
         self.cfg["whisper_language"] = self.var_whisper_lang.get()
         self.cfg["min_scene_duration"] = int(self.var_min_dur.get() or 5)
         self.cfg["max_scene_duration"] = int(self.var_max_dur.get() or 8)
+        # Engine tạo Excel
+        if hasattr(self, "var_engine"):
+            self.cfg["excel_engine"] = self.ENGINE_FROM_DISPLAY.get(
+                self.var_engine.get(), "api")
+        if hasattr(self, "var_claude_model"):
+            self.cfg["claude_cli_model"] = self.var_claude_model.get().strip()
+        if hasattr(self, "var_claude_path"):
+            self.cfg["claude_cli_path"] = self.var_claude_path.get().strip()
         with open(cfg_path, "w", encoding="utf-8") as f:
             yaml.dump(self.cfg, f, allow_unicode=True, sort_keys=False)
 
@@ -455,6 +463,48 @@ class SrtToExcelApp(tk.Tk):
         canvas.bind("<Configure>", _on_resize)
         inner.bind("<Configure>", lambda e: canvas.configure(
             scrollregion=canvas.bbox("all")))
+
+        # ─ Engine tạo Excel ─
+        self.ENGINE_DISPLAY = {
+            "api": "API pipeline (DeepSeek / VOV) — nhiều bước",
+            "claude_cli": "Claude Code CLI (Claude Max) — đơn giản, 1 lần gọi",
+        }
+        self.ENGINE_FROM_DISPLAY = {v: k for k, v in self.ENGINE_DISPLAY.items()}
+
+        e_card = tk.Frame(inner, bg=CARD, padx=16, pady=14)
+        e_card.pack(fill="x", padx=20, pady=8)
+        tk.Label(e_card, text="⚙️  Engine tạo Excel",
+                 bg=CARD, fg=FG, font=FONT_TITLE).pack(anchor="w", pady=(0, 8))
+
+        cur_engine = str(self.cfg.get("excel_engine", "api") or "api").strip().lower()
+        if cur_engine not in self.ENGINE_DISPLAY:
+            cur_engine = "api"
+        self.var_engine = tk.StringVar(value=self.ENGINE_DISPLAY[cur_engine])
+        ttk.Combobox(e_card, textvariable=self.var_engine,
+                     values=list(self.ENGINE_DISPLAY.values()),
+                     state="readonly").pack(fill="x", pady=(0, 6))
+
+        tk.Label(e_card,
+                 text="• API pipeline: dùng key DeepSeek/VOV, phân tích qua nhiều bước (mặc định cũ).\n"
+                      "• Claude Code CLI: dùng Claude Max đã đăng nhập, đọc SRT → ra Excel 1 lần.\n"
+                      "  Nhân vật & phong cách tự lấy theo kênh từ reference_characters/<topic>/<kênh>/style.yaml.",
+                 bg=CARD, fg=FG2, font=FONT_SMALL, justify="left", anchor="w").pack(anchor="w", pady=(0, 8))
+
+        erow = tk.Frame(e_card, bg=CARD)
+        erow.pack(fill="x")
+        tk.Label(erow, text="Claude model (trống = mặc định):", bg=CARD, fg=FG2,
+                 font=FONT_BODY, width=28, anchor="w").grid(row=0, column=0, sticky="w")
+        self.var_claude_model = tk.StringVar(value=str(self.cfg.get("claude_cli_model", "") or ""))
+        tk.Entry(erow, textvariable=self.var_claude_model,
+                 bg=PANEL, fg=FG, insertbackground=FG, relief="flat",
+                 font=FONT_BODY, width=24).grid(row=0, column=1, sticky="w")
+
+        tk.Label(erow, text="Claude CLI path (trống = auto):", bg=CARD, fg=FG2,
+                 font=FONT_BODY, width=28, anchor="w").grid(row=1, column=0, sticky="w", pady=4)
+        self.var_claude_path = tk.StringVar(value=str(self.cfg.get("claude_cli_path", "") or ""))
+        tk.Entry(erow, textvariable=self.var_claude_path,
+                 bg=PANEL, fg=FG, insertbackground=FG, relief="flat",
+                 font=FONT_BODY, width=24).grid(row=1, column=1, sticky="w")
 
         # ─ API Keys card ─
         self._settings_card(inner, "🔑  API Keys", [
@@ -737,18 +787,8 @@ class SrtToExcelApp(tk.Tk):
                 self._finish_pipeline(False)
                 return
 
-            # ── Steps 1–7: Progressive API ─────────────────────
-            try:
-                from modules.progressive_prompts import ProgressivePromptsGenerator
-                gen = ProgressivePromptsGenerator(self.cfg)
-            except Exception as e:
-                self._log(f"❌  Không load được module: {e}", "err")
-                # Thử fallback cơ bản
-                self._run_fallback_pipeline()
-                return
-
             def on_step(step_idx: int, status: str, msg: str = ""):
-                """Callback từ ProgressivePromptsGenerator."""
+                """Callback chung cho cả 2 engine."""
                 if 1 <= step_idx <= 7:
                     row = self.step_rows[step_idx - 1]
                     pct = {
@@ -765,20 +805,52 @@ class SrtToExcelApp(tk.Tk):
                     tag = {"done": "ok", "error": "err", "running": "info"}.get(status, "info")
                     self._log(msg, tag)
 
-            self._log(f"🚀  Bắt đầu pipeline cho project: {name}", "step")
-            self._log(f"    SRT: {self.srt_path}", "info")
-            self._log("─" * 60, "info")
-
-            success = gen.run_all_steps(
-                self.project_dir,
-                name,
-                log_callback=lambda msg, level="INFO": (
-                    self._log(f"   {msg}",
-                              {"SUCCESS": "ok", "WARN": "warn",
-                               "ERROR": "err"}.get(level, "info"))
-                ),
-                step_callback=on_step if hasattr(gen, "run_all_steps") else None,
+            _log_cb = lambda msg, level="INFO": (
+                self._log(f"   {msg}",
+                          {"SUCCESS": "ok", "WARN": "warn",
+                           "ERROR": "err"}.get(level, "info"))
             )
+
+            engine = str(self.cfg.get("excel_engine", "api") or "api").strip().lower()
+
+            # ── Engine 2: Claude Code CLI (1 lần gọi) ──────────
+            if engine in ("claude_cli", "claude", "cli"):
+                self._log(f"🤖  Engine: Claude Code CLI  |  project: {name}", "step")
+                self._log(f"    SRT: {self.srt_path}", "info")
+                self._log("─" * 60, "info")
+                try:
+                    from modules.claude_cli_engine import ClaudeCliEngine
+                    eng = ClaudeCliEngine(self.cfg)
+                except Exception as e:
+                    self._log(f"❌  Không load được Claude CLI engine: {e}", "err")
+                    success = False
+                else:
+                    success = eng.run(
+                        self.project_dir, name,
+                        log_callback=_log_cb,
+                        step_callback=on_step,
+                    )
+            else:
+                # ── Engine 1: Progressive API (DeepSeek/VOV) ───
+                try:
+                    from modules.progressive_prompts import ProgressivePromptsGenerator
+                    gen = ProgressivePromptsGenerator(self.cfg)
+                except Exception as e:
+                    self._log(f"❌  Không load được module: {e}", "err")
+                    # Thử fallback cơ bản
+                    self._run_fallback_pipeline()
+                    return
+
+                self._log(f"🚀  Bắt đầu pipeline cho project: {name}", "step")
+                self._log(f"    SRT: {self.srt_path}", "info")
+                self._log("─" * 60, "info")
+
+                success = gen.run_all_steps(
+                    self.project_dir,
+                    name,
+                    log_callback=_log_cb,
+                    step_callback=on_step,
+                )
 
             # Đánh dấu tất cả steps
             for i, row in enumerate(self.step_rows):

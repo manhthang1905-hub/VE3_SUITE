@@ -71,6 +71,7 @@ async def run_ws_server():
                 ws_handler, WS_HOST, WS_PORT,
                 ping_interval=60,
                 ping_timeout=120,
+                max_size=64 * 1024 * 1024,  # FLOW2: allow large reference-image uploads
             )
             logger.info("[%s] WS server on ws://%s:%d", INSTANCE_NAME, WS_HOST, WS_PORT)
             await asyncio.Future()
@@ -98,7 +99,67 @@ app.add_middleware(
 async def startup():
     global _ws_task
     _ws_task = asyncio.create_task(run_ws_server())
+    asyncio.create_task(_project_resolver_loop())  # FLOW2: auto-resolve local projectId
     logger.info("[%s] Agent starting on %s:%d", INSTANCE_NAME, API_HOST, API_PORT)
+
+
+# ─── FLOW2: resolve this account's local projectId ──────────────
+_last_ensure_project: float = 0  # moc lan cuoi click "Create" (tranh spam)
+
+
+async def _ensure_local_project(log_err: bool = False, create: bool = True) -> str:
+    """Lay projectId cua tai khoan local.
+    - Doc tu tab Flow (extract_project_id: URL/DOM /project/{uuid}).
+    - Neu tab DANG o landing "Create with Google Flow" (chua vao project) thi
+      CHU DONG click "Du an moi" (ensure_project) roi doc lai. Day la diem mau chot:
+      khong vao project thi extension khong co projectId -> instance KHONG local_ready
+      -> master bo qua Chrome do -> farm cham. create=True bat dam bao moi Chrome vao project.
+    """
+    global _last_ensure_project
+    if _client.local_project_id:
+        return _client.local_project_id
+    if not (_client.connected and _client.flow_key_present):
+        return ""
+    # 1) Doc project hien tai (re)
+    try:
+        res = await _client.extract_project_id()
+        pid = ((res or {}).get("data", {}) or {}).get("projectId") or (res or {}).get("projectId")
+        if pid:
+            _client._local_project_id = pid
+            logger.info("[%s] Local projectId resolved: %s", INSTANCE_NAME, pid)
+            return pid
+    except Exception as e:
+        if log_err:
+            logger.warning("[%s] extract project failed: %s", INSTANCE_NAME, e)
+    # 2) Chua co project -> click "Create"/"Du an moi" de vao project (backoff 30s)
+    if create and (time.time() - _last_ensure_project > 30):
+        _last_ensure_project = time.time()
+        try:
+            logger.info("[%s] Chua co project mo -> ensure_project (click Create)", INSTANCE_NAME)
+            await _client.ensure_project()
+            await asyncio.sleep(3)  # cho Flow dieu huong vao /project/{uuid}
+            res = await _client.extract_project_id()
+            pid = ((res or {}).get("data", {}) or {}).get("projectId") or (res or {}).get("projectId")
+            if pid:
+                _client._local_project_id = pid
+                logger.info("[%s] Local projectId sau khi tao project: %s", INSTANCE_NAME, pid)
+                return pid
+        except Exception as e:
+            if log_err:
+                logger.warning("[%s] ensure_project failed: %s", INSTANCE_NAME, e)
+    return ""
+
+
+async def _project_resolver_loop():
+    """Nen: dinh ky tu lay projectId sau khi da co token, cho den khi co.
+    Tu dong vao project (click Create) neu Chrome dang dung o landing -> local_ready."""
+    while True:
+        await asyncio.sleep(8)
+        try:
+            if _client.connected and _client.flow_key_present and not _client.local_project_id:
+                await _ensure_local_project(log_err=False, create=True)
+        except Exception:
+            pass
 
 
 # ─── Extension Callback ─────────────────────────────────────
@@ -126,6 +187,8 @@ async def health():
         "instance": INSTANCE_NAME,
         "extension_connected": _client.connected,
         "flow_key_present": _client.flow_key_present,
+        "local_project_present": bool(_client.local_project_id),  # FLOW2
+        "local_ready": _client.connected and _client.flow_key_present and bool(_client.local_project_id),
         "processing": _processing_count,
         "total_completed": _total_completed,
         "total_failed": _total_failed,
@@ -140,6 +203,7 @@ async def get_token():
     """Return captured bearer token for VE3 to use."""
     if _client._flow_key:
         return {"success": True, "token": _client._flow_key,
+                "project_id": _client.local_project_id,  # FLOW2
                 "age_seconds": int(time.time() - (_client._ws_connected_at or time.time()))}
     return {"success": False, "error": "NO_TOKEN"}
 
@@ -169,10 +233,24 @@ async def generate_image(request: Request):
     body_json = data.get("body_json", {})
     flow_url = data.get("flow_url", "")
 
-    if not bearer_token:
-        return {"success": False, "error": "MISSING_BEARER_TOKEN"}
+    # FLOW2 local-quota mode: master omits bearer_token → use THIS Chrome account's
+    # own token (flowKey) + own projectId captured by the extension. This burns the
+    # quota of the account logged in on the VM, NOT the master's account.
+    local_mode = not bearer_token
+    if local_mode:
+        if not _client.flow_key_present:
+            return {"success": False, "error": "LOCAL_TOKEN_NOT_READY"}
+        if not project_id:
+            project_id = _client.local_project_id or await _ensure_local_project()
+        if not project_id:
+            return {"success": False, "error": "LOCAL_PROJECT_NOT_READY"}
+        # Override any project embedded in the body with the local account's project
+        _inject_local_project(body_json, project_id)
+        # bearerToken="" → extension uses its freshest captured flowKey (local account)
 
     if not flow_url:
+        if not project_id:
+            return {"success": False, "error": "MISSING_PROJECT_ID"}
         flow_url = f"{GOOGLE_FLOW_API}/v1/projects/{project_id}/flowMedia:batchGenerateImages"
 
     # Ensure recaptchaContext exists for captcha injection
@@ -242,11 +320,20 @@ async def generate_video(request: Request):
 
     data = await request.json()
     bearer_token = data.get("bearer_token", "")
+    project_id = data.get("project_id", "")
     body_json = data.get("body_json", {})
     flow_url = data.get("flow_url", "")
 
-    if not bearer_token:
-        return {"success": False, "error": "MISSING_BEARER_TOKEN"}
+    # FLOW2 local-quota mode: master omits bearer_token → use THIS account's creds.
+    local_mode = not bearer_token
+    if local_mode:
+        if not _client.flow_key_present:
+            return {"success": False, "error": "LOCAL_TOKEN_NOT_READY"}
+        if not project_id:
+            project_id = _client.local_project_id or await _ensure_local_project()
+        if not project_id:
+            return {"success": False, "error": "LOCAL_PROJECT_NOT_READY"}
+        _inject_local_project(body_json, project_id)
     if not flow_url:
         flow_url = f"{GOOGLE_FLOW_API}/v1/video:batchAsyncGenerateVideoReferenceImages"
 
@@ -310,10 +397,10 @@ async def poll_video(request: Request):
         return {"success": False, "error": "EXTENSION_NOT_CONNECTED"}
 
     data = await request.json()
-    bearer_token = data.get("bearer_token", "")
+    bearer_token = data.get("bearer_token", "")  # "" in local mode → extension uses flowKey
     operations = data.get("operations", [])
 
-    if not bearer_token or not operations:
+    if not operations:
         return {"success": False, "error": "MISSING_PARAMS"}
 
     check_url = f"{GOOGLE_FLOW_API}/v1/video:batchCheckAsyncVideoGenerationStatus"
@@ -379,13 +466,30 @@ async def upload_image(request: Request):
     mime_type = data.get("mime_type", "image/png")
     project_id = data.get("project_id", "")
 
-    if not bearer_token or not image_b64:
+    if not image_b64:
         return {"success": False, "error": "MISSING_PARAMS"}
 
+    # FLOW2 local-quota mode: master omits bearer_token → upload under THIS account.
+    local_mode = not bearer_token
+    if local_mode:
+        if not _client.flow_key_present:
+            return {"success": False, "error": "LOCAL_TOKEN_NOT_READY"}
+        if not project_id:
+            project_id = _client.local_project_id or await _ensure_local_project()
+        if not project_id:
+            return {"success": False, "error": "LOCAL_PROJECT_NOT_READY"}
+        # bearerToken="" → extension uses its freshest captured flowKey (local account)
+
+    if not project_id:
+        return {"success": False, "error": "MISSING_PROJECT_ID"}
+
+    # FlowKit-proven upload endpoint (same as original server/flowkit agent):
+    #   POST /v1/flow/uploadImage  (tool=PINHOLE, imageBytes). Goes through the
+    #   extension so it has browser context. Refs are downscaled by the master.
     upload_url = f"{GOOGLE_FLOW_API}/v1/flow/uploadImage"
     body = {
         "clientContext": {"projectId": project_id, "tool": "PINHOLE"},
-        "fileName": "image.jpg",
+        "fileName": "ref.jpg",
         "imageBytes": image_b64,
         "isHidden": False,
         "isUserUploaded": True,
@@ -403,13 +507,21 @@ async def upload_image(request: Request):
     if result.get("error"):
         return {"success": False, "error": result["error"]}
 
-    response_data = result.get("data", {})
+    response_data = result.get("data", {}) or {}
     media_name = ""
     if isinstance(response_data, dict):
-        media = response_data.get("media", {})
+        media = response_data.get("media")
         if isinstance(media, dict):
             media_name = media.get("name", "")
+        elif isinstance(media, list) and media:
+            media_name = media[0].get("name", "")
+        elif response_data.get("name"):
+            media_name = response_data["name"]
+        elif isinstance(response_data.get("imageInput"), dict):
+            media_name = response_data["imageInput"].get("name", "")
 
+    if not media_name:
+        return {"success": False, "error": "UPLOAD_NO_MEDIA_NAME", "result": str(response_data)[:300]}
     return {"success": True, "result": response_data, "media_name": media_name}
 
 
@@ -454,7 +566,11 @@ async def extract_project_id():
     if result.get("error"):
         return {"success": False, "error": result["error"]}
 
-    return {"success": True, "data": result.get("data", {})}
+    data = result.get("data", {}) or {}
+    pid = data.get("projectId")
+    if pid:
+        _client._local_project_id = pid  # FLOW2: cache so local mode + /health pick it up
+    return {"success": True, "data": data}
 
 
 # ─── Helpers ─────────────────────────────────────────────────
@@ -495,6 +611,24 @@ def _classify_403(result: dict) -> str:
     if "CAPTCHA_FAILED" in error_str:
         return "CAPTCHA_FAILED"
     return "RECAPTCHA_403"
+
+
+def _inject_local_project(body: dict, project_id: str):
+    """FLOW2: force the local account's projectId into the request body, overriding
+    whatever project the master may have embedded. Covers top-level clientContext
+    and per-request clientContext (batchGenerateImages uses requests[])."""
+    if not isinstance(body, dict) or not project_id:
+        return
+    cc = body.get("clientContext")
+    if not isinstance(cc, dict):
+        cc = {}
+        body["clientContext"] = cc
+    cc["projectId"] = project_id
+    # Chi set projectId vao clientContext DA CO SAN o moi request (anh co; video KHONG co).
+    # Khong tao moi -> tranh "Unknown name clientContext at requests[0]" cua endpoint video.
+    for req in body.get("requests", []):
+        if isinstance(req, dict) and isinstance(req.get("clientContext"), dict):
+            req["clientContext"]["projectId"] = project_id
 
 
 def _ensure_recaptcha_context(body: dict):

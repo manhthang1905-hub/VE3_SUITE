@@ -24,6 +24,7 @@ class FlowClient:
         self._extension_ws = None
         self._pending: dict[str, asyncio.Future] = {}
         self._flow_key: Optional[str] = None
+        self._local_project_id: Optional[str] = None  # FLOW2: projectId of THIS Chrome's account
         self.instance_name = instance_name
         self._ws_connect_count = 0
         self._ws_connected_at: Optional[float] = None
@@ -54,10 +55,22 @@ class FlowClient:
     def flow_key_present(self) -> bool:
         return bool(self._flow_key)
 
+    @property
+    def local_project_id(self) -> Optional[str]:
+        """FLOW2: projectId of the Google account logged in on this Chrome."""
+        return self._local_project_id
+
     async def handle_message(self, data: dict):
         if data.get("type") == "token_captured":
             self._flow_key = data.get("flowKey")
             logger.info("[%s] Flow key captured from extension", self.instance_name)
+            return
+
+        if data.get("type") == "project_captured":  # FLOW2
+            pid = data.get("projectId")
+            if pid and pid != self._local_project_id:
+                self._local_project_id = pid
+                logger.info("[%s] Local projectId captured: %s", self.instance_name, pid)
             return
 
         if data.get("type") == "extension_ready":
@@ -115,6 +128,7 @@ class FlowClient:
             "instance": self.instance_name,
             "connected": self.connected,
             "flow_key_present": self.flow_key_present,
+            "local_project_present": bool(self._local_project_id),  # FLOW2
             "connects": self._ws_connect_count,
             "uptime_s": uptime,
         }

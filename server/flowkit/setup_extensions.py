@@ -16,7 +16,7 @@ from pathlib import Path
 import yaml
 
 BASE_DIR = Path(__file__).parent
-CONFIG_PATH = BASE_DIR / "config.yaml"
+CONFIG_PATH = Path(os.environ.get("FLOWKIT_CONFIG") or (BASE_DIR / "config.yaml"))
 
 if not CONFIG_PATH.exists():
     print(f"[FATAL] config.yaml not found: {CONFIG_PATH}")

@@ -98,6 +98,12 @@ def _calc_window_layout(chrome_exe: str, worker_id: int):
     reserve_left = int(os.getenv("CHROME_LAYOUT_LEFT_RESERVED", default_reserve))
     reserve_left = max(0, min(reserve_left, sw - 300))
     usable_w = max(300, sw - reserve_left)
+    # FLOW2: full chieu cao, 1 hang, de nhau 1 phan (dong bo voi launcher._calc_chrome_layout)
+    if os.getenv("CHROME_LAYOUT_FULL_HEIGHT", "") == "1":
+        n = max(1, total_slots)
+        win_w = max(520, usable_w // 2)
+        step = (usable_w - win_w) // (n - 1) if n > 1 else 0
+        return slot, reserve_left + max(0, slot * step), 0, win_w, max(400, sh - 70)
     cell_w = max(320, usable_w // cols)
     cell_h = max(180, sh // rows)
     col = slot % cols
@@ -107,10 +113,23 @@ def _calc_window_layout(chrome_exe: str, worker_id: int):
     return slot, x, y, cell_w, cell_h
 
 
-def _enforce_window_layout(driver, chrome_exe: str, worker_id: int):
-    """Ep vi tri/size bang CDP sau khi Chrome da mo."""
+def _enforce_window_layout(driver, chrome_exe: str, worker_id: int, window_args=None):
+    """Ep vi tri/size bang CDP sau khi Chrome da mo.
+
+    FLOW2: neu co window_args (tu flowkit_gui) thi DUNG CHINH no de vi tri/size DONG BO
+    voi setup/warmup/running (tranh login nhay ve layout khac). Khong co thi tu tinh.
+    """
     try:
-        slot, x, y, cell_w, cell_h = _calc_window_layout(chrome_exe, worker_id)
+        x = y = cell_w = cell_h = None
+        slot = worker_id
+        if window_args:
+            for arg in window_args:
+                if '--window-position=' in arg:
+                    p = arg.split('=', 1)[1].split(','); x, y = int(p[0]), int(p[1])
+                elif '--window-size=' in arg:
+                    p = arg.split('=', 1)[1].split(','); cell_w, cell_h = int(p[0]), int(p[1])
+        if x is None or cell_w is None:
+            slot, x, y, cell_w, cell_h = _calc_window_layout(chrome_exe, worker_id)
         info = driver.run_cdp('Browser.getWindowForTarget')
         window_id = info.get('windowId')
         if not window_id:
@@ -1122,7 +1141,7 @@ def login_google_chrome(account_info: dict, chrome_portable: str = None, profile
 
         # Má»Ÿ Chrome má»›i
         driver = ChromiumPage(options)
-        _enforce_window_layout(driver, chrome_exe, worker_id)
+        _enforce_window_layout(driver, chrome_exe, worker_id, window_args=window_args)
 
         # v1.0.650: Inject fingerprint NGAY SAU khi mo Chrome, TRUOC khi navigate
         # Dam bao login va tao anh dung CUNG fingerprint â†’ Google khong detect thay doi
