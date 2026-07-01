@@ -434,7 +434,7 @@ class HomePage(ctk.CTkScrollableFrame):
         # Overview section - matching tool color scheme
         overview = ctk.CTkFrame(c, fg_color=CD, corner_radius=8, border_width=1, border_color=BD)
         overview.grid(row=1, column=0, padx=8, pady=(4,4), sticky="ew")
-        overview.grid_columnconfigure((0,1,2,3,4,5), weight=1)
+        overview.grid_columnconfigure((0,1,2,3,4,5,6,7), weight=1)
 
         # Total projects - Blue theme
         f1 = ctk.CTkFrame(overview, fg_color="#F5F5F5", corner_radius=6, border_width=1, border_color=BD)
@@ -477,6 +477,20 @@ class HomePage(ctk.CTkScrollableFrame):
         ctk.CTkLabel(f6, text="CHỜ VE3", font=("",9,"bold"), text_color=T2).pack(pady=(6,2))
         self.lbl_overview_ve3_wait = ctk.CTkLabel(f6, text="0", font=("",18,"bold"), text_color=T2)
         self.lbl_overview_ve3_wait.pack(pady=(0,6))
+
+        # Anh hom nay (do luong khai thac tao anh - dem file .png tao trong ngay)
+        f7 = ctk.CTkFrame(overview, fg_color="#EAF4FF", corner_radius=6, border_width=1, border_color=BD)
+        f7.grid(row=0, column=6, padx=4, pady=8, sticky="ew")
+        ctk.CTkLabel(f7, text="ẢNH HÔM NAY", font=("",9,"bold"), text_color=T2).pack(pady=(6,2))
+        self.lbl_overview_img_today = ctk.CTkLabel(f7, text="0", font=("",20,"bold"), text_color="#0A7")
+        self.lbl_overview_img_today.pack(pady=(0,6))
+
+        # Video hom nay (do luong khai thac tao video - dem file .mp4 tao trong ngay)
+        f8 = ctk.CTkFrame(overview, fg_color="#FFF0E6", corner_radius=6, border_width=1, border_color=BD)
+        f8.grid(row=0, column=7, padx=4, pady=8, sticky="ew")
+        ctk.CTkLabel(f8, text="VIDEO HÔM NAY", font=("",9,"bold"), text_color=T2).pack(pady=(6,2))
+        self.lbl_overview_vid_today = ctk.CTkLabel(f8, text="0", font=("",20,"bold"), text_color="#E60")
+        self.lbl_overview_vid_today.pack(pady=(0,6))
 
         self.projects_list = ctk.CTkScrollableFrame(c, height=600, fg_color="#F3F5F7", corner_radius=6, border_width=1, border_color=BD2)
         self.projects_list.grid(row=2, column=0, padx=8, pady=(0,8), sticky="nsew")
@@ -735,7 +749,7 @@ class HomePage(ctk.CTkScrollableFrame):
             self.pb_music.set(cur/max(tot,1)); self.lbl_music.configure(text=f"{cur}/{tot}")
             self.pb_music_left.set(cur/max(tot,1)); self.lbl_music_left.configure(text=f"{cur}/{tot}")
 
-    def refresh_projects_overview(self, rows, archived_today=0):
+    def refresh_projects_overview(self, rows, archived_today=0, images_today=0, videos_today=0):
         def normalize_code(value):
             return str(value or "").strip().upper()
 
@@ -827,6 +841,13 @@ class HomePage(ctk.CTkScrollableFrame):
             self.lbl_overview_excel_wait.configure(text=str(excel_wait))
             self.lbl_overview_ve3_wait.configure(text=str(ve3_wait))
         except Exception as e:
+            pass
+
+        # Chi so KHAI THAC hom nay (do luong thuc te: dem file anh/video tao trong ngay)
+        try:
+            self.lbl_overview_img_today.configure(text=str(int(images_today)))
+            self.lbl_overview_vid_today.configure(text=str(int(videos_today)))
+        except Exception:
             pass
 
         # Update progress bars from active projects (RUN or WAIT), with stable slot order.
@@ -1467,8 +1488,11 @@ class SettingsPage(ctk.CTkScrollableFrame):
             "API DeepSeek -> CLI": "api_ds_cli",
         }
         self.claude_backend_labels = {v: k for k, v in self.claude_backend_options.items()}
-        self.generation_backend_options = {"Server": "server", "NanoPic": "nanopic", "FlowKit": "flowkit", "Combined": "combined"}
+        self.generation_backend_options = {"Server": "server", "NanoPic": "nanopic", "FlowKit": "flowkit", "Combined": "combined", "Veo3top": "veo3top", "Veo3top-B": "veo3top_b", "Veo3top-B-Ultra": "veo3top_b_ultra", "Veo3top-B-Pool (nha may chung)": "veo3top_b_pool"}
         self.generation_backend_labels = {v: k for k, v in self.generation_backend_options.items()}
+        # Backend TAO ANH (ban thang Flow API giong video). "" = dung backend anh cu (server/local token).
+        self.image_backend_options = {"Mac dinh": "", "Veo3top-B (anh)": "blank", "Veo3top-B-Ultra (anh)": "account", "Veo3top-B-Pool (anh)": "pool"}
+        self.image_backend_labels = {v: k for k, v in self.image_backend_options.items()}
         self.grid_columnconfigure(0, weight=1)
 
         # Server pairs
@@ -1528,9 +1552,13 @@ class SettingsPage(ctk.CTkScrollableFrame):
         # FLOW2: tao anh bang token Pro local tren tung server (dot quota account local, khong dung token Ultra)
         self.sw_use_local_token = ctk.CTkSwitch(gc, text="Tao anh bang token local (Pro)", progress_color=OK, button_color="#FFF", button_hover_color="#EEE")
         self.sw_use_local_token.grid(row=4, column=2, padx=(10,0), sticky="w")
+        # Backend TAO ANH: ban thang Flow API (giong video Veo3top-B). "Mac dinh" = giu backend anh cu.
+        ctk.CTkLabel(gc, text="Tao anh:", text_color=T1, font=("",11)).grid(row=5, column=0, padx=10, sticky="w")
+        self.opt_image_backend = ctk.CTkOptionMenu(gc, values=list(self.image_backend_options.keys()), width=160, height=28, corner_radius=4, fg_color=EN, button_color=BD, text_color=T1, font=("",11))
+        self.opt_image_backend.grid(row=5, column=1, columnspan=2, sticky="w", pady=(0,4))
         self.sw_music_workspace = ctk.CTkSwitch(gc, text="Music Chrome mo lech man hinh", progress_color=OK, button_color="#FFF", button_hover_color="#EEE")
-        self.sw_music_workspace.grid(row=5, column=0, columnspan=3, padx=10, pady=(0,8), sticky="w")
-        ctk.CTkButton(gc, text="Save settings", width=120, height=30, fg_color=AC, hover_color=AC2, text_color="#FFF", font=("",11,"bold"), corner_radius=6, command=self._save).grid(row=6, column=0, columnspan=3, padx=10, pady=(4,10))
+        self.sw_music_workspace.grid(row=6, column=0, columnspan=3, padx=10, pady=(0,8), sticky="w")
+        ctk.CTkButton(gc, text="Save settings", width=120, height=30, fg_color=AC, hover_color=AC2, text_color="#FFF", font=("",11,"bold"), corner_radius=6, command=self._save).grid(row=7, column=0, columnspan=3, padx=10, pady=(4,10))
         self.lbl_saved = ctk.CTkLabel(gc, text="", font=("",9), text_color=OK)
         self.lbl_saved.grid(row=7, column=0, columnspan=3, padx=10, pady=(0,6))
 
@@ -2077,6 +2105,10 @@ class SettingsPage(ctk.CTkScrollableFrame):
             self.sw_use_local_token.select()
         else:
             self.sw_use_local_token.deselect()
+        img_mode = str(cfg.get("veo3top_image_mode") or "").strip().lower()
+        if img_mode in ("ultra", "veo3top_b_ultra"):
+            img_mode = "account"
+        self.opt_image_backend.set(self.image_backend_labels.get(img_mode if img_mode in ("blank", "account", "pool") else "", "Mac dinh"))
 
     def _auto_flowkit_server_list(self) -> list:
         """Auto-generate flowkit_server_list from Chrome Portable copies."""
@@ -2115,6 +2147,7 @@ class SettingsPage(ctk.CTkScrollableFrame):
         cfg["flow_auth_mode"] = "extension" if self.opt_flow_auth_mode.get() == "Extension" else "chrome"
         cfg["music_workspace_mode_enabled"] = bool(self.sw_music_workspace.get())
         cfg["use_local_token_for_image"] = bool(self.sw_use_local_token.get())
+        cfg["veo3top_image_mode"] = self.image_backend_options.get(self.opt_image_backend.get().strip(), "")
         selected_provider_label = self.opt_excel_ai_provider.get().strip() or "DeepSeek"
         cfg["excel_ai_provider"] = self.excel_ai_provider_options.get(selected_provider_label, "deepseek")
         selected_engine_label = self.opt_excel_engine.get().strip()
@@ -2238,6 +2271,7 @@ class VE3App(ctk.CTk):
         self._start_watchdog()
         # Cleanup phien truoc (Chrome/agent con sot lai)
         self._kill_extension_instances()
+        self._kill_veo3top_chromes()   # don chrome token-factory veo3top sot lai tu phien truoc
         self.after(400, self._boot)
 
     def _start_watchdog(self):
@@ -2411,11 +2445,117 @@ foreach ($pid in $children) {{
             self._kill_own_child_processes()
             # Kill extension Chrome + agents (y het FlowKit _on_stop)
             self._kill_extension_instances()
+            # Kill chrome token-factory cua veo3top option (theo PID da dang ky) — ke ca orphan/blank-mode
+            self._kill_veo3top_chromes()
         finally:
             try:
                 self.destroy()
             except Exception:
                 pass
+
+    def _kill_pool_services(self):
+        """Kill service NHÀ MÁY CHUNG (video port 8788 + ảnh 8789) khi tắt/restart — taskkill /T kill luôn
+        chrome token con của service. Xoá PID + lock file."""
+        import subprocess as _sp
+        CF = 0x08000000
+        for pidf, lockf in ((".veo3top_pool.pid", ".veo3top_pool_start.lock"),
+                            (".veo3top_imgpool.pid", ".veo3top_imgpool_start.lock")):
+            try:
+                p = SUITE_ROOT / pidf
+                pid = (p.read_text() or "").strip() if p.exists() else ""
+                if pid.isdigit() and int(pid) > 4:
+                    _sp.run(['taskkill', '/F', '/T', '/PID', pid], capture_output=True, timeout=8, creationflags=CF)
+            except Exception:
+                pass
+            for fn in (pidf, lockf):
+                try:
+                    (SUITE_ROOT / fn).unlink(missing_ok=True)
+                except Exception:
+                    pass
+
+    def _kill_veo3top_chromes(self):
+        """Kill chrome token-factory cua veo3top (PID da dang ky trong .veo3top_pids\\*.pid).
+        Bat duoc ca chrome bi orphan khoi subprocess VA blank-mode (system chrome, khong co 'GoogleChromePortable').
+        Loc IMAGENAME=chrome.exe de an toan neu PID bi tai su dung."""
+        import subprocess as _sp
+        CF = 0x08000000
+        self._kill_pool_services()   # dọn service nhà máy chung (video 8788 + ảnh 8789) + chrome con
+        pid_dir = SUITE_ROOT / ".veo3top_pids"
+        if not pid_dir.exists():
+            return
+        for f in pid_dir.glob("*.pid"):
+            try:
+                pid = (f.read_text() or "").strip()
+                if pid.isdigit() and int(pid) > 4:
+                    _sp.run(['taskkill', '/F', '/T', '/FI', f'PID eq {pid}', '/FI', 'IMAGENAME eq chrome.exe'],
+                            capture_output=True, timeout=5, creationflags=CF)
+            except Exception:
+                pass
+            try:
+                f.unlink()
+            except Exception:
+                pass
+        # Quét sạch: giết MỌI chrome debug-port 9600-9899 (bắt cả orphan .pid cũ/thiếu).
+        # An toàn vì hàm này chỉ chạy lúc START/STOP/RESTART — không có mã nào cần giữ.
+        try:
+            sweep = r'''
+$ErrorActionPreference='SilentlyContinue'
+$cim = Get-CimInstance Win32_Process -Filter "name='chrome.exe'"; if(-not $cim){ exit }
+$cp=@($cim.ProcessId)
+$listen = Get-NetTCPConnection -State Listen | ?{ $cp -contains $_.OwningProcess -and $_.LocalPort -ge 9600 -and $_.LocalPort -le 9899 }
+$tok=@($listen | Select-Object -ExpandProperty OwningProcess -Unique)
+$kill=New-Object System.Collections.Generic.HashSet[int]; $q=New-Object System.Collections.Queue
+foreach($r in $tok){ if($kill.Add([int]$r)){ $q.Enqueue([int]$r) } }
+while($q.Count -gt 0){ $p=$q.Dequeue(); foreach($c in ($cim|?{[int]$_.ParentProcessId -eq $p})){ $ci=[int]$c.ProcessId; if($kill.Add($ci)){ $q.Enqueue($ci) } } }
+foreach($k in $kill){ taskkill /F /T /PID $k 2>$null | Out-Null }
+'''
+            _sp.run(['powershell', '-NoProfile', '-Command', sweep],
+                    capture_output=True, timeout=30, creationflags=CF)
+        except Exception:
+            pass
+        # Dọn profile temp veo3tok_* (chrome đã bị giết -> profile free). An toàn ở start/stop/restart.
+        try:
+            import os as _os, tempfile as _tf, shutil as _sh, glob as _gl
+            for d in _gl.glob(_os.path.join(_tf.gettempdir(), "veo3tok_*")):
+                if _os.path.isdir(d):
+                    _sh.rmtree(d, ignore_errors=True)
+        except Exception:
+            pass
+
+    def _reap_orphan_chromes(self):
+        """Định kỳ (chạy elevated) giết chrome token-factory MỒ CÔI = worker cha ĐÃ CHẾT.
+        Worker chết bẩn -> chrome elevated còn sống -> phình dần (nguyên nhân 'nhiều chrome').
+        CHỈ giết chrome debug-port 9600-9899 có cha chết -> KHÔNG đụng mã đang chạy (cha còn sống).
+        Trả số chrome đã reap (để log)."""
+        import subprocess as _sp
+        CF = 0x08000000
+        ps = r'''
+$ErrorActionPreference='SilentlyContinue'
+$alive=@{}; Get-Process | %{ $alive[[int]$_.Id]=$true }
+$cim = Get-CimInstance Win32_Process -Filter "name='chrome.exe'"
+if(-not $cim){ Write-Output 0; exit }
+$cp = @($cim.ProcessId)
+$listen = Get-NetTCPConnection -State Listen | ?{ $cp -contains $_.OwningProcess -and $_.LocalPort -ge 9600 -and $_.LocalPort -le 9899 }
+$tok = @($listen | Select-Object -ExpandProperty OwningProcess -Unique)
+$roots = $cim | ?{ $tok -contains [int]$_.ProcessId -and -not $alive[[int]$_.ParentProcessId] }
+if(-not $roots){ Write-Output 0; exit }
+$kill = New-Object System.Collections.Generic.HashSet[int]
+$q = New-Object System.Collections.Queue
+foreach($r in $roots){ $id=[int]$r.ProcessId; if($kill.Add($id)){ $q.Enqueue($id) } }
+while($q.Count -gt 0){ $p=$q.Dequeue(); foreach($c in ($cim|?{[int]$_.ParentProcessId -eq $p})){ $ci=[int]$c.ProcessId; if($kill.Add($ci)){ $q.Enqueue($ci) } } }
+foreach($k in $kill){ taskkill /F /T /PID $k 2>$null | Out-Null }
+Write-Output $kill.Count
+'''
+        try:
+            out = _sp.run(['powershell', '-NoProfile', '-Command', ps],
+                          capture_output=True, text=True, timeout=30, creationflags=CF).stdout or ""
+            n = int((out.strip().splitlines() or ["0"])[-1] or "0")
+            if n:
+                try: self._log(f"[reaper] don {n} chrome token mo coi (worker cha da chet)")
+                except Exception: pass
+            return n
+        except Exception:
+            return 0
 
     def _kill_extension_instances(self):
         """Kill all Chrome + agent + cleanup lock files."""
@@ -3159,6 +3299,7 @@ foreach ($pid in $children) {{
                         self._kill_pid_tree(proc.pid)
                 self._kill_own_child_processes()
                 self._kill_extension_instances()
+                self._kill_veo3top_chromes()
             except Exception as e:
                 self._log(f"[RESTART] cleanup error: {e}", "ERROR")
             _time.sleep(15)
@@ -3218,6 +3359,14 @@ foreach ($pid in $children) {{
     def _refresh_process_monitor_worker(self):
         rows = []
         err = None
+        # reap chrome token mồ côi (worker cha chết) — throttle 120s, chạy trong chính vòng monitor (elevated)
+        try:
+            _now = _time.time()
+            if _now - getattr(self, "_last_reap_ts", 0) >= 120:
+                self._last_reap_ts = _now
+                self._reap_orphan_chromes()
+        except Exception:
+            pass
         try:
             rows = self._collect_ve3_process_rows()
         except Exception as exc:
@@ -3425,6 +3574,51 @@ Get-CimInstance Win32_Process |
             pass
         return count
 
+    def _count_production_today(self):
+        """Do luong THUC TE: dem so ANH (.png/.jpg) va VIDEO (.mp4) co mtime = HOM NAY tren
+        PROJECTS + old/ (dedup theo code de tranh dem trung). Chay o background thread."""
+        today_start = _time.mktime(_time.localtime()[:3] + (0, 0, 0, 0, 0, -1))
+        imgs = 0
+        vids = 0
+        seen = set()
+        for base in (PROJECTS_DIR, ARCHIVE_DIR):
+            try:
+                if not base.exists():
+                    continue
+                for pd in base.iterdir():
+                    if not pd.is_dir():
+                        continue
+                    code = pd.name.rsplit("_", 1)[0] if (base is ARCHIVE_DIR and "_" in pd.name) else pd.name
+                    if code in seen:
+                        continue
+                    got = False
+                    for sub, do_img in ((pd / "img", True), (pd / "vid", False)):
+                        if not sub.exists():
+                            continue
+                        try:
+                            if sub.stat().st_mtime < today_start:
+                                continue   # prune: khong co file moi hom nay
+                        except OSError:
+                            continue
+                        if do_img:
+                            for f in list(sub.glob("*.png")) + list(sub.glob("*.jpg")):
+                                try:
+                                    if f.stat().st_mtime >= today_start:
+                                        imgs += 1; got = True
+                                except OSError:
+                                    pass
+                        for f in sub.glob("*.mp4"):   # img/{n}.mp4 (I2V) + vid/{n}.mp4 = video
+                            try:
+                                if f.stat().st_mtime >= today_start:
+                                    vids += 1; got = True
+                            except OSError:
+                                pass
+                    if got:
+                        seen.add(code)
+            except Exception:
+                pass
+        return imgs, vids
+
     def _refresh_project_views_worker(self):
         rows = []
         err = None
@@ -3442,15 +3636,19 @@ Get-CimInstance Win32_Process |
             state_order = {"RUN": 0, "WAIT": 1, "DONE": 2, "BLOCK": 3}
             rows.sort(key=lambda r: (state_order.get(r.get("state", "BLOCK"), 9), r.get("code", "")))
             archived_today = self._count_archived_today()
+            imgs_today, vids_today = self._count_production_today()
         except Exception as exc:
             err = exc
-        self.after(0, lambda rows=rows, err=err, at=archived_today: self._apply_project_views(rows, err, at))
+            imgs_today = vids_today = 0
+        self.after(0, lambda rows=rows, err=err, at=archived_today, it=imgs_today, vt=vids_today:
+                   self._apply_project_views(rows, err, at, it, vt))
 
-    def _apply_project_views(self, rows, err=None, archived_today=0):
+    def _apply_project_views(self, rows, err=None, archived_today=0, images_today=0, videos_today=0):
         if err is not None:
             self._log(f"Khng qut c PROJECTS: {err}", "WARN")
         try:
-            self.pages["home"].refresh_projects_overview(rows, archived_today=archived_today)
+            self.pages["home"].refresh_projects_overview(rows, archived_today=archived_today,
+                                                         images_today=images_today, videos_today=videos_today)
             self.pages["gen"].update_project_list(rows)
         except Exception as e:
             import traceback

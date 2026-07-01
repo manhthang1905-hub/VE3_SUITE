@@ -90,3 +90,21 @@ old/
 server/flowkit/_workflow_videos/
 
 server/flowkit_backup_*/
+
+# === VEO3TOP ENGINE: code commit, runtime/credentials BO QUA ===
+veo3top_engine/_auth_cache/
+veo3top_engine/out/
+veo3top_engine/__pycache__/
+veo3top_engine/.veo3top_warm_profiles/
+veo3top_engine/.veo3top_blank_profiles/
+veo3top_engine/.ipv6_override_*
+.veo3top_pids/
+.veo3top_rate/
+.veo3top_pool.pid
+.veo3top_imgpool.pid
+.veo3top_pool_start.lock
+.veo3top_imgpool_start.lock
+.ipv6_override_*
+server/flowkit/.proxy_health_*
+**/__pycache__/
+*.pyc

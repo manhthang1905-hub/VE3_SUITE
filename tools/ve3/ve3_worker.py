@@ -85,8 +85,25 @@ class VE3Worker:
 
         # Generation backend config
         self.generation_backend = str(config.get("generation_backend") or config.get("generation_mode") or "server").strip().lower()
-        if self.generation_backend not in {"server", "nanopic", "flowkit", "combined"}:
+        if self.generation_backend not in {"server", "nanopic", "flowkit", "combined", "veo3top", "veo3top_b", "veo3top_b_ultra", "veo3top_b_pool"}:
             self.generation_backend = "server"
+        # veo3top (A): chrome account thuong tru/mã. veo3top_b (B): token-chrome chung + auth cache.
+        # Chi anh huong buoc tao VIDEO; upload anh / status van nhu cu. Lazy-init.
+        self._veo3top_provider = None
+        self._veo3top_provider_b = None
+        # ===== TAO ANH bang veo3top-b (ban thang Flow API, giong video) — option MOI, song song =====
+        # "" = tat (dung backend anh cu). "blank" = token chrome trang no-login (nhe).
+        # "account"/"ultra" = token tu chrome account login (score cao, ultra). Chi anh huong buoc TAO ANH.
+        self.veo3top_image_mode = str(config.get("veo3top_image_mode") or "").strip().lower()
+        if self.veo3top_image_mode in ("ultra", "veo3top_b_ultra"):
+            self.veo3top_image_mode = "account"
+        if self.veo3top_image_mode not in ("", "blank", "account", "pool"):
+            self.veo3top_image_mode = ""
+        self.use_veo3top_for_image = self.veo3top_image_mode in ("blank", "account", "pool")
+        self._veo3top_image_provider = None
+        # Neu CA anh VA video deu ban thang veo3top -> KHONG can server pool / bearer worker (moi buoc tu lay auth).
+        self._veo3top_only = self.use_veo3top_for_image and \
+            self.generation_backend in ("veo3top", "veo3top_b", "veo3top_b_ultra")
         self.nanopic_fallback_enabled = bool(config.get("nanopic_fallback_enabled", True))
 
         # FlowKit config
@@ -617,6 +634,11 @@ class VE3Worker:
                 ("VOV Direct", self._call_vov_direct_rewrite),
                 ("Claude Pool", self._call_claude_pool_rewrite),
             ]
+        # Uu tien claude.exe CLI (Claude Code, cung backend/digishop tool dung cho Excel) neu excel_engine=claude_cli.
+        # Cac provider VOV/DeepSeek hay chet -> dat Claude CLI len DAU khi tool dang chay claude_cli.
+        if str(self.config.get("excel_engine", "") or "").strip().lower() == "claude_cli":
+            providers = [("Claude CLI", self._call_claude_cli_rewrite)] + \
+                        [p for p in providers if p[0] != "Claude CLI"]
 
         for idx, (provider_name, provider_func) in enumerate(providers):
             rewritten = provider_func(instruction, temperature=temperature, max_tokens=max_tokens)
@@ -627,6 +649,34 @@ class VE3Worker:
             if idx < len(providers) - 1:
                 self.log(f"    [REWRITE] {provider_name} khong kha dung, thu provider tiep theo", "WARN")
         return None
+
+    def _call_claude_cli_rewrite(self, instruction: str, temperature: float = 0.3, max_tokens: int = 700) -> Optional[str]:
+        """Rewrite bang claude.exe (Claude Code CLI) qua digishop — cung backend tool dung cho Excel.
+        Fall-through (tra None) neu claude.exe/engine khong san sang."""
+        try:
+            eng = getattr(self, "_claude_cli_engine", None)
+            if eng is None:
+                srt_mod = str(SUITE_ROOT / "tools" / "srt-to-excel" / "modules")
+                if srt_mod not in sys.path:
+                    sys.path.insert(0, srt_mod)
+                from claude_cli_engine import ClaudeCliEngine
+                eng = ClaudeCliEngine(self.config)
+                self._claude_cli_engine = eng
+            cwd = self.project_dir if getattr(self, "project_dir", None) else SUITE_ROOT
+            from pathlib import Path as _P
+            txt = eng._run_claude(instruction, _P(str(cwd)))
+            if not txt:
+                return None
+            txt = txt.strip()
+            # neu model boc trong ```/json thi lay phan text; else tra thang
+            if txt.startswith("```"):
+                txt = txt.strip("`")
+                if txt.lower().startswith("json"):
+                    txt = txt[4:].strip()
+            return txt or None
+        except Exception as e:
+            self.log(f"    [REWRITE] Claude CLI loi: {type(e).__name__}: {e}", "WARN")
+            return None
 
     def _call_deepseek_rewrite(self, instruction: str, temperature: float = 0.3, max_tokens: int = 700) -> Optional[str]:
         if not self.deepseek_keys:
@@ -1112,7 +1162,9 @@ Generator/context error:
         """
         result = {"success": False, "total": 0, "completed": 0, "failed": 0, "errors": []}
 
-        if not self.pool and not self.flowkit_pool and self.generation_backend != "nanopic" and not self._should_try_nanopic_fallback("No server available"):
+        if (not self.pool and not self.flowkit_pool and self.generation_backend != "nanopic"
+                and not self.use_veo3top_for_image
+                and not self._should_try_nanopic_fallback("No server available")):
             result["errors"].append("Khong co server URL")
             return result
 
@@ -1145,24 +1197,27 @@ Generator/context error:
             self.bearer_token = self.bearer_token[7:].strip()
             self.log("ÄÃ£ tá»± Ä‘á»™ng bá» prefix 'Bearer ' khá»i token", "WARN")
 
-        # Auth: get token + project_id (flowkit mode keeps Chrome open for extension)
-        if (not self.bearer_token or not self.flow_project_id) and not self._ensure_flow_auth(wb, force_refresh=False, reason="startup"):
-            result["errors"].append("Missing token/project_id and cannot get Flow auth")
-            return result
+        # Auth: get token + project_id (flowkit mode keeps Chrome open for extension).
+        # _veo3top_only (anh+video deu ban thang veo3top) -> KHONG can bearer/project worker (moi buoc tu lay auth).
+        if not self._veo3top_only:
+            if (not self.bearer_token or not self.flow_project_id) and not self._ensure_flow_auth(wb, force_refresh=False, reason="startup"):
+                result["errors"].append("Missing token/project_id and cannot get Flow auth")
+                return result
 
-        if not self.bearer_token:
-            result["errors"].append("Missing bearer token!")
-            return result
+            if not self.bearer_token:
+                result["errors"].append("Missing bearer token!")
+                return result
 
-        if not self.flow_project_id:
-            result["errors"].append("Missing flow_project_id!")
-            return result
+            if not self.flow_project_id:
+                result["errors"].append("Missing flow_project_id!")
+                return result
 
         # FlowKit: ensure Chrome open + extension connected
         if self.generation_backend in ("flowkit", "combined") and self.flowkit_pool:
             self._ensure_flowkit_chrome_open()
 
-        if not self.bearer_token.startswith("ya29.") and self.generation_backend not in ("flowkit", "combined"):
+        if (not self._veo3top_only and not self.bearer_token.startswith("ya29.")
+                and self.generation_backend not in ("flowkit", "combined")):
             result["errors"].append(
                 f"Bearer token khÃ´ng há»£p lá»‡ (pháº£i báº¯t Ä’áº§u báº±ng ‘ya29.’). "
                 f"Token hiá»‡n táº¡i: ‘{self.bearer_token[:20]}...’. "
@@ -2867,12 +2922,27 @@ Generator/context error:
         if not todo:
             return
         self.log(f"[local-video] Upload {len(todo)} anh scene len Ultra de lay media_id...")
-        # Mo Chrome ExtAuth tren may chu 1 LAN (giong nv1) -> upload qua extension
-        ext_auth, token, pid = self._open_ultra_uploader(wb)
-        if not ext_auth or not token or not pid:
-            self.log("[local-video] KHONG mo duoc Chrome/token Ultra -> bo qua upload (video se thieu media_id)", "ERROR")
-            return
+        use_veo3top_upload = self.generation_backend in ("veo3top", "veo3top_b", "veo3top_b_ultra")
+        ext_auth = None
+        if use_veo3top_upload:
+            # veo3top: KHONG dung ExtAuth agent. Lay bearer+project tu chinh account (nhu provider).
+            token, pid = self._veo3top_auth()
+            if not token or not pid:
+                self.log("[local-video] veo3top: KHONG lay duoc bearer/project cua account -> bo upload", "ERROR")
+                return
+            self.log("[local-video] upload qua veo3top (curl_cffi DIRECT IPv4 may), KHONG qua ExtAuth")
+        else:
+            # Mo Chrome ExtAuth tren may chu 1 LAN (giong nv1) -> upload qua extension
+            ext_auth, token, pid = self._open_ultra_uploader(wb)
+            if not ext_auth or not token or not pid:
+                self.log("[local-video] KHONG mo duoc Chrome/token Ultra -> bo qua upload (video se thieu media_id)", "ERROR")
+                return
         ok = 0
+        if use_veo3top_upload:
+            # veo3top: upload SONG SONG (curl_cffi DIRECT IPv4 may), nhanh; KHONG can WARP.
+            ok = self._veo3top_upload_parallel(wb, todo, token, pid)
+            self.log(f"[local-video] Upload xong: {ok}/{len(todo)} media_id Ultra (san sang I2V)")
+            return
         for s in todo:
             if self._stop_flag:
                 break
@@ -2887,7 +2957,7 @@ Generator/context error:
                 if mid:
                     break
                 # token co the het han -> lam moi roi thu lai
-                if _try == 0:
+                if _try == 0 and ext_auth:
                     fresh = ext_auth.get_token()
                     if fresh:
                         token = fresh
@@ -2924,7 +2994,8 @@ Generator/context error:
 
         # Lá»c scene cÃ³ video_prompt vÃ  áº£nh Ä‘Ã£ xong
         # FLOW2 local mode: upload anh scene len Ultra -> media_id Ultra vao Excel TRUOC khi I2V
-        if self.use_local_token_for_image:
+        # veo3top_b_pool: NHÀ MÁY CHUNG tự upload ảnh per-account -> KHÔNG bulk upload ở đây.
+        if self.use_local_token_for_image and self.generation_backend != "veo3top_b_pool":
             self._upload_local_images_for_video(wb, scenes)
             scenes = wb.get_scenes()  # reload media_id moi (Ultra-bound)
 
@@ -2951,7 +3022,9 @@ Generator/context error:
             # Cáº§n cÃ³ áº£nh + media_id Ä‘á»ƒ lÃ m Image-to-Video
             img_path = self.img_dir / f"{scene.scene_id}.png"
             media_id = getattr(scene, 'media_id', '') or ''
-            if not img_path.exists() or not media_id:
+            # pool: chỉ cần ẢNH (nhà máy tự upload lấy media_id); mode khác cần media_id sẵn.
+            need_media = self.generation_backend != "veo3top_b_pool"
+            if not img_path.exists() or (need_media and not media_id):
                 self.log(f"  Skip scene {scene.scene_id}: chÆ°a cÃ³ áº£nh hoáº·c media_id")
                 continue
             pending.append(scene)
@@ -3079,7 +3152,15 @@ Generator/context error:
                                     {"elapsed": elapsed, "phase": "video", **server_info})
                 return False
 
-        with ThreadPoolExecutor(max_workers=self.max_concurrent) as executor:
+        # veo3top: chay nhieu luong de "thu li bat khe ho rate". Mac dinh 10 (can bang: du luong bat khe ho
+        # nhung khong dap qua nhieu tu lam bao hoa rate tren 1 may). Config veo3top_video_concurrency de chinh.
+        vid_workers = self.max_concurrent
+        if self.generation_backend in ("veo3top", "veo3top_b", "veo3top_b_ultra"):
+            vid_workers = int(self.config.get("veo3top_video_concurrency", 7) or 7)
+        elif self.generation_backend == "veo3top_b_pool":
+            # pool: đẩy NHIỀU job vào hàng đợi chung để 10 account-worker luôn có việc (service tự điều phối)
+            vid_workers = int(self.config.get("veo3top_pool_concurrency", 20) or 20)
+        with ThreadPoolExecutor(max_workers=vid_workers) as executor:
             futures = {executor.submit(_do_video, i, s): s for i, s in enumerate(pending)}
             for future in as_completed(futures):
                 if self._stop_flag:
@@ -3149,6 +3230,346 @@ Generator/context error:
     def _nanopic_video_aspect_ratio(self) -> str:
         ar_str = self.config.get("flow_aspect_ratio", "landscape").upper()
         return getattr(VideoAspectRatio, ar_str, VideoAspectRatio.LANDSCAPE).value
+
+    # ===== VEO3TOP video backend (option moi, khong dung server) =====
+    def _get_veo3top_provider(self):
+        if self._veo3top_provider is not None:
+            return self._veo3top_provider
+        engine_dir = str(SUITE_ROOT / "veo3top_engine")
+        if engine_dir not in sys.path:
+            sys.path.insert(0, engine_dir)
+        from provider import Veo3topProvider
+        # Chrome cua account (giong luc tool mo de upload anh)
+        account = None
+        try:
+            account_name = (self.config.get("flow_account_name", "") or "").strip()
+            account = self.auth_service.pick_account(account_name) if self.auth_service else None
+        except Exception:
+            account = None
+        chrome_exe = (getattr(account, "chrome_path", None) if account else None) or \
+                     (self.auth_service.chrome_path() if self.auth_service else None)
+        profile_dir = getattr(account, "profile_dir", None) if account else None
+        if not chrome_exe or not profile_dir:
+            self.log("veo3top: khong tim thay chrome_path/profile cua account", "ERROR")
+            return None
+        # Port CDP RIENG cho moi ma (chay dong thoi nhieu ma): lay tu so Copy (N) cua chrome.
+        # Moi ma = 1 account = 1 Copy khac nhau -> port khac nhau -> khong dung cong/profile.
+        m = re.search(r"Copy \((\d+)\)", str(chrome_exe))
+        dbg_port = 9850 + (int(m.group(1)) if m else (abs(hash(str(profile_dir))) % 120))
+        prov = Veo3topProvider(str(chrome_exe), str(profile_dir), debug_port=dbg_port, log=self.log)
+        prov.project = (self.flow_project_id or "").strip() or None
+        prov.video_aspect = self._nanopic_video_aspect_ratio()
+        if not prov.start():
+            self.log("veo3top: provider.start() that bai (chrome/auth)", "ERROR")
+            return None
+        self._veo3top_provider = prov
+        self.log(f"veo3top: provider san sang (project={prov.project})")
+        return prov
+
+    def _veo3top_auth(self):
+        """Lay (bearer, project_id) cua account theo backend veo3top -> KHONG dung ExtAuth."""
+        try:
+            if self.generation_backend in ("veo3top_b", "veo3top_b_ultra"):
+                prov = self._get_veo3top_provider_b()
+                if not prov:
+                    return None, None
+                auth = prov._get_auth()
+                return (auth or {}).get("bearer"), (auth or {}).get("project")
+            prov = self._get_veo3top_provider()   # Option A
+            if not prov:
+                return None, None
+            return prov.bearer, prov.project
+        except Exception as e:
+            self.log(f"    [veo3top-auth] loi: {type(e).__name__}: {e}", "WARN")
+            return None, None
+
+    def _veo3top_upload_image(self, img_path, bearer, project_id):
+        """Upload 1 anh len Ultra (curl_cffi + /v1/flow/uploadImage qua WARP). Tra media_id hoac ''.
+        WARP da duoc ensure boi caller (khong goi ensure moi anh -> cham)."""
+        try:
+            engine_dir = str(SUITE_ROOT / "veo3top_engine")
+            if engine_dir not in sys.path:
+                sys.path.insert(0, engine_dir)
+            import flow_client as _fc
+            sid = f";{int(time.time()*1000)}"
+            mid, err = _fc.upload_image(bearer, project_id, sid, str(img_path))
+            if not mid:
+                self.log(f"    [veo3top-upload] fail: {err}", "WARN")
+            return mid or ""
+        except Exception as e:
+            self.log(f"    [veo3top-upload] loi: {type(e).__name__}: {e}", "WARN")
+            return ""
+
+    def _veo3top_upload_parallel(self, wb, todo, bearer, pid):
+        """Upload SONG SONG danh sach anh (veo3top). Tra so anh thanh cong."""
+        from concurrent.futures import ThreadPoolExecutor
+        conc = int(self.config.get("veo3top_upload_concurrency", 6) or 6)
+        self.log(f"[local-video] upload SONG SONG {len(todo)} anh (concurrency={conc}), KHONG qua ExtAuth")
+        done = [0]
+        lock = threading.Lock()
+
+        def _up_one(s):
+            if self._stop_flag:
+                return False
+            img = self.img_dir / f"{s.scene_id}.png"
+            mid = ""
+            for _try in range(3):
+                mid = self._veo3top_upload_image(str(img), bearer, pid)
+                if mid:
+                    break
+                time.sleep(1.2)
+            if mid:
+                with self._excel_lock:
+                    wb.update_scene(s.scene_id, media_id=mid, status_img="done")
+                    if not wb.safe_save():
+                        wb._save_pending_write("scene", scene_id=s.scene_id, media_id=mid)
+                s.media_id = mid
+                with lock:
+                    done[0] += 1
+                    if done[0] % 10 == 0:
+                        self.log(f"  [local-video] {done[0]}/{len(todo)} media_id Ultra")
+                return True
+            self.log(f"  [local-video] scene {s.scene_id}: upload Ultra that bai", "WARN")
+            return False
+
+        with ThreadPoolExecutor(max_workers=conc) as ex:
+            results = list(ex.map(_up_one, todo))
+        return sum(1 for r in results if r)
+
+    def _submit_video_veo3top_b_pool(self, prompt, output_path):
+        """NHÀ MÁY CHUNG: gửi ảnh scene tới video_factory service (dùng chung 10 account ultra).
+        Service tự lease account rảnh nhất -> upload ảnh (account đó) -> generate (egress ladder) -> download.
+        Trả (success, info, error) khớp _submit_video."""
+        from pathlib import Path as _P
+        img_path = self.img_dir / f"{_P(output_path).stem}.png"
+        if not img_path.exists():
+            return False, {}, f"veo3top-b-pool: khong thay anh scene {img_path}"
+        try:
+            import sys as _s
+            _eng = r"D:\VE3_SUITE\veo3top_engine"
+            if _eng not in _s.path:
+                _s.path.insert(0, _eng)
+            import video_factory_client as vfc
+        except Exception as e:
+            return False, {}, f"veo3top-b-pool: import client loi: {e}"
+        aspect = self._nanopic_video_aspect_ratio()
+        return vfc.generate(str(img_path), prompt, str(output_path), aspect=aspect, log=self.log)
+
+    def _submit_video_veo3top(self, prompt, output_path, reference_image_id):
+        """Thay the buoc tao video bang phuong phap veo3top. Tra (success, info, error) nhu _submit_video."""
+        if not reference_image_id:
+            return False, {}, "veo3top: thieu media_id (anh chua upload xong)"
+        try:
+            prov = self._get_veo3top_provider()
+        except Exception as e:
+            return False, {}, f"veo3top init loi: {e}"
+        if not prov:
+            return False, {}, "veo3top: khong khoi tao duoc provider"
+        prov.video_aspect = self._nanopic_video_aspect_ratio()
+        return prov.submit_video(prompt, reference_image_id, str(output_path))
+
+    # ===== VEO3TOP-B: token-chrome CHUNG + auth cache per-account (giong veo3top, nhe khi nhieu ma) =====
+    def _account_chrome(self):
+        """Tra (chrome_exe, profile_dir, copy_number) cua account bound cho ma nay."""
+        account = None
+        try:
+            account_name = (self.config.get("flow_account_name", "") or "").strip()
+            account = self.auth_service.pick_account(account_name) if self.auth_service else None
+        except Exception:
+            account = None
+        chrome_exe = (getattr(account, "chrome_path", None) if account else None) or \
+                     (self.auth_service.chrome_path() if self.auth_service else None)
+        profile_dir = getattr(account, "profile_dir", None) if account else None
+        name = getattr(account, "email", None) if account else (self.config.get("flow_account_name", "") or "")
+        m = re.search(r"Copy \((\d+)\)", str(chrome_exe or ""))
+        copyn = int(m.group(1)) if m else None
+        return chrome_exe, profile_dir, name, copyn
+
+    def _get_veo3top_provider_b(self):
+        if self._veo3top_provider_b is not None:
+            return self._veo3top_provider_b
+        engine_dir = str(SUITE_ROOT / "veo3top_engine")
+        if engine_dir not in sys.path:
+            sys.path.insert(0, engine_dir)
+        from provider_b import Veo3topProviderB
+        chrome_exe, profile_dir, name, copyn = self._account_chrome()
+        if not chrome_exe or not profile_dir:
+            self.log("veo3top-b: khong tim thay chrome/profile cua account", "ERROR")
+            return None
+        idx = copyn if copyn is not None else (abs(hash(str(profile_dir))) % 60)
+        auth_port = 9850 + idx
+        # mode: veo3top_b_ultra -> token tu chrome ACCOUNT (login); veo3top_b -> chrome TRANG.
+        token_mode = "account" if self.generation_backend == "veo3top_b_ultra" else "blank"
+        # blank: 1 chrome trang/ma (giong veo3top, nhe may). Nhu cau token thap (~0.1 tok/s/ma) +
+        # rate_coordinator ghim submit + buffer 24 -> 1 chrome du. Nut that la quota recaptcha CHUNG, khong phai token.
+        # token_port cach nhau *4/ma -> toi da 4 chrome trang/ma khong dung port (van cho phep tang qua config).
+        _default_chromes = 1
+        token_chromes = int(self.config.get("veo3top_token_chromes", _default_chromes) or _default_chromes)
+        if token_mode == "account":
+            token_chromes = 1
+        token_chromes = max(1, min(4, token_chromes))
+        # token_port RIENG/ma (tranh dung port giua subprocess): 9600 + idx*4
+        token_port = 9600 + (idx * 4)
+        prov = Veo3topProviderB(
+            account_name=name, chrome_exe=str(chrome_exe), profile_dir=str(profile_dir),
+            auth_port=auth_port, token_port=token_port, token_chromes=token_chromes,
+            token_mode=token_mode,
+            video_aspect=self._nanopic_video_aspect_ratio(), log=self.log,
+        )
+        if not prov.start():
+            self.log("veo3top-b: token factory khong khoi tao duoc", "ERROR")
+            return None
+        self._veo3top_provider_b = prov
+        self.log(f"veo3top-b: san sang (token factory = chrome TRANG no-login, {token_chromes} chrome)")
+        return prov
+
+    def _submit_video_veo3top_b(self, prompt, output_path, reference_image_id):
+        if not reference_image_id:
+            return False, {}, "veo3top-b: thieu media_id (anh chua upload xong)"
+        try:
+            prov = self._get_veo3top_provider_b()
+        except Exception as e:
+            return False, {}, f"veo3top-b init loi: {e}"
+        if not prov:
+            return False, {}, "veo3top-b: khong khoi tao duoc provider"
+        prov.video_aspect = self._nanopic_video_aspect_ratio()
+        return prov.submit_video(prompt, reference_image_id, str(output_path))
+
+    # ===== TAO ANH veo3top-b: ban thang flowMedia:batchGenerateImages (tai dung ha tang video) =====
+    def _veo3top_image_aspect(self) -> str:
+        """Map aspect_ratio anh -> IMAGE_ASPECT_RATIO_* cho endpoint anh."""
+        ar = self.aspect_ratio
+        name = ar.name.upper() if hasattr(ar, "name") else str(ar).upper()
+        if "PORTRAIT" in name:
+            return "IMAGE_ASPECT_RATIO_PORTRAIT"
+        if "SQUARE" in name:
+            return "IMAGE_ASPECT_RATIO_SQUARE"
+        return "IMAGE_ASPECT_RATIO_LANDSCAPE"
+
+    def _get_veo3top_image_provider(self):
+        if self._veo3top_image_provider is not None:
+            return self._veo3top_image_provider
+        engine_dir = str(SUITE_ROOT / "veo3top_engine")
+        if engine_dir not in sys.path:
+            sys.path.insert(0, engine_dir)
+        from provider_image_b import Veo3topImageProviderB
+        chrome_exe, profile_dir, name, copyn = self._account_chrome()
+        if not chrome_exe or not profile_dir:
+            self.log("img-b: khong tim thay chrome/profile cua account", "ERROR")
+            return None
+        idx = copyn if copyn is not None else (abs(hash(str(profile_dir))) % 60)
+        auth_port = 9910 + idx
+        token_mode = "account" if self.veo3top_image_mode == "account" else "blank"
+        # blank: 3 chrome trắng đẻ đủ token cho nhiều scene chạy SONG SONG (dưới tải quota nặng cần
+        # bắn đồng thời nhiều request mới chui qua RESOURCE_EXHAUSTED — giống farm video).
+        _default_chromes = 3 if token_mode == "blank" else 1
+        token_chromes = int(self.config.get("veo3top_image_token_chromes", _default_chromes) or _default_chromes)
+        if token_mode == "account":
+            token_chromes = 1
+        token_chromes = max(1, min(4, token_chromes))
+        # token_port RIENG cho anh (tach hang video 9600+idx*4): 9700 + idx*4
+        token_port = 9700 + (idx * 4)
+        prov = Veo3topImageProviderB(
+            account_name=name, chrome_exe=str(chrome_exe), profile_dir=str(profile_dir),
+            auth_port=auth_port, token_port=token_port, token_chromes=token_chromes,
+            token_mode=token_mode, image_aspect=self._veo3top_image_aspect(), log=self.log,
+        )
+        if not prov.start():
+            self.log("img-b: token factory khong khoi tao duoc", "ERROR")
+            return None
+        self._veo3top_image_provider = prov
+        self.log(f"img-b: san sang (token {token_mode}, {token_chromes} chrome) - tao anh ban thang Flow API")
+        return prov
+
+    def _submit_image_veo3top_b(self, prompt, output_path, refs=None, aspect_ratio=None) -> tuple:
+        """Tao anh bang veo3top-b. Tra (ok, media_name, sinfo, err) khop _submit_image."""
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            prov = self._get_veo3top_image_provider()
+        except Exception as e:
+            return False, None, {}, f"img-b init loi: {type(e).__name__}: {e}"
+        if not prov:
+            return False, None, {}, "img-b: khong khoi tao duoc provider"
+        # refs (List[ImageInput]) -> image_inputs dicts. name la media_name (hop le neu ref cung tao
+        # tren cung account veo3top). base64 fallback neu chua co name.
+        image_inputs = None
+        if refs:
+            image_inputs = []
+            for r in refs:
+                try:
+                    d = r.to_dict() if hasattr(r, "to_dict") else (r if isinstance(r, dict) else None)
+                    if d and (d.get("name") or d.get("rawImageBytes")):
+                        image_inputs.append(d)
+                except Exception:
+                    pass
+            image_inputs = image_inputs or None
+        aspect = None
+        if aspect_ratio is not None:
+            an = aspect_ratio.name.upper() if hasattr(aspect_ratio, "name") else str(aspect_ratio).upper()
+            aspect = ("IMAGE_ASPECT_RATIO_PORTRAIT" if "PORTRAIT" in an else
+                      "IMAGE_ASPECT_RATIO_SQUARE" if "SQUARE" in an else "IMAGE_ASPECT_RATIO_LANDSCAPE")
+        ok, info, err = prov.submit_image(prompt, str(output_path), image_inputs=image_inputs, aspect=aspect)
+        sinfo = {"backend": "veo3top-b-image", "account": prov.account}
+        if info:
+            sinfo.update({k: info[k] for k in ("bytes", "seed") if k in info})
+        return (ok, (info or {}).get("media_name"), sinfo, err if not ok else "")
+
+    def _refs_to_raw_inputs(self, refs):
+        """Refs (ImageInput) -> image_inputs rawImageBytes (embed) cho NHÀ MÁY ẢNH POOL.
+        Pool dùng account KHÁC nhau -> mediaId (account-scoped) VÔ DỤNG, phải embed bytes ảnh reference.
+        Ưu tiên base64_data; ref chỉ có mediaId -> đọc FILE ảnh (nếu resolve được)."""
+        if not refs:
+            return None
+        import base64 as _b64
+        out = []
+        for r in refs:
+            try:
+                b64 = getattr(r, "base64_data", "") or ""
+                mime = getattr(r, "mime_type", "image/png") or "image/png"
+                it = getattr(r, "input_type", None)
+                itype = getattr(it, "value", None) or "IMAGE_INPUT_TYPE_REFERENCE"
+                if not b64:
+                    fp = self._resolve_ref_image_file(r)
+                    if fp and os.path.exists(fp):
+                        with open(fp, "rb") as f:
+                            b64 = _b64.b64encode(f.read()).decode()
+                        mime = "image/jpeg" if str(fp).lower().endswith((".jpg", ".jpeg")) else "image/png"
+                if b64:
+                    out.append({"imageInputType": itype, "rawImageBytes": b64, "mimeType": mime})
+            except Exception:
+                pass
+        return out or None
+
+    def _resolve_ref_image_file(self, ref):
+        """Tìm FILE ảnh reference để embed bytes (pool account khác -> cần bytes, không dùng mediaId).
+        HIỆN: ImageInput chỉ có mediaId, chưa map ngược ra file -> trả None (chạy text-to-image).
+        SẼ HOÀN THIỆN cùng kế hoạch account ảnh (map ref_name -> file nhân vật đã lưu)."""
+        return None
+
+    def _submit_image_veo3top_b_pool(self, prompt, output_path, refs=None, aspect_ratio=None) -> tuple:
+        """NHÀ MÁY ẢNH CHUNG: gửi tới image_factory service (pool 10 account, IPv6 riêng, 7 luồng/account).
+        Ảnh đồng bộ (không poll). Trả (ok, media_name, sinfo, err) khớp _submit_image."""
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        image_inputs = self._refs_to_raw_inputs(refs)
+        aspect = None
+        if aspect_ratio is not None:
+            an = aspect_ratio.name.upper() if hasattr(aspect_ratio, "name") else str(aspect_ratio).upper()
+            aspect = ("IMAGE_ASPECT_RATIO_PORTRAIT" if "PORTRAIT" in an else
+                      "IMAGE_ASPECT_RATIO_SQUARE" if "SQUARE" in an else "IMAGE_ASPECT_RATIO_LANDSCAPE")
+        try:
+            import sys as _s
+            _eng = r"D:\VE3_SUITE\veo3top_engine"
+            if _eng not in _s.path:
+                _s.path.insert(0, _eng)
+            import image_factory_client as ifc
+        except Exception as e:
+            return False, None, {}, f"img-pool: import client loi: {e}"
+        ok, info, err = ifc.generate_image(prompt, str(output_path), aspect=aspect,
+                                           image_inputs=image_inputs, log=self.log)
+        sinfo = {"backend": "veo3top-b-image-pool"}
+        if info:
+            sinfo.update({k: info[k] for k in ("bytes", "seed", "account", "egress") if k in info})
+        return (ok, (info or {}).get("media_name"), sinfo, err if not ok else "")
 
     def _nanopic_client(self) -> NanoPicAPI:
         use_flow_proxy = self.config.get("nanopic_use_flow_proxy", False)
@@ -3255,6 +3676,13 @@ Generator/context error:
         Returns:
             (success: bool, server_info: dict, error_text: str)
         """
+        if self.generation_backend == "veo3top":
+            return self._submit_video_veo3top(prompt, output_path, reference_image_id)
+        if self.generation_backend in ("veo3top_b", "veo3top_b_ultra"):
+            return self._submit_video_veo3top_b(prompt, output_path, reference_image_id)
+        if self.generation_backend == "veo3top_b_pool":
+            return self._submit_video_veo3top_b_pool(prompt, output_path)
+
         if self.generation_backend == "nanopic":
             ok, sinfo, err = self._submit_video_nanopic(prompt, output_path, reference_image_id)
             return ok, sinfo, err
@@ -4007,6 +4435,12 @@ Generator/context error:
         Returns:
             (success: bool, media_name: str or None, server_info: dict, error_text: str)
         """
+        # OPTION MOI: tao anh bang veo3top-b (ban thang Flow API, giong video). Uu tien cao nhat khi bat.
+        if self.use_veo3top_for_image:
+            if self.veo3top_image_mode == "pool":
+                return self._submit_image_veo3top_b_pool(prompt, output_path, refs, aspect_ratio)
+            return self._submit_image_veo3top_b(prompt, output_path, refs, aspect_ratio)
+
         # FLOW2: tao anh bang token Pro LOCAL tren server (khong gui token Ultra).
         if self.use_local_token_for_image:
             return self._submit_image_local(prompt, output_path, refs, aspect_ratio)
