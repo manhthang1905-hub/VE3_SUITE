@@ -25,6 +25,7 @@ import flow_client as fc
 import token_factory as tf
 import ipv6_transport as ip6t
 import rate_coordinator
+import account_manager as am
 from auth_cache import AuthCache
 from pool_accounts import load_pool_accounts
 
@@ -49,9 +50,10 @@ def _log(msg):
 
 class Account:
     """1 account ultra trong pool + trạng thái runtime (nghỉ, thắng/thua, egress)."""
-    def __init__(self, name, email, chrome_path, cache):
+    def __init__(self, name, email, chrome_path, cache, bundle=""):
         self.name = name; self.email = email; self.chrome_path = chrome_path
         self.cache = cache
+        self.bundle = bundle      # email|password|totp -> auto login password khi profile hết đăng nhập
         self.ipv6 = None          # IPv6 transport RIÊNG của account (như veo3top-b: mỗi account 1 IP)
         self.resume_at = 0.0
         self.rest_streak = 0
@@ -60,6 +62,31 @@ class Account:
         self.egress_wins = {}     # egress name -> count
         self.last_kind = ""       # loại lỗi gần nhất (ratelimit/recaptcha_quota/unusual...)
         self._lock = threading.Lock()
+        self._recovering = False       # đang được RecoveryManager chữa (nền)
+        import re as _re
+        m = _re.search(r"Copy \((\d+)\)", str(chrome_path or ""))
+        self._copyn = int(m.group(1)) if m else (abs(hash(email or "")) % 80)
+        # VIDEO dùng dải port RIÊNG với ẢNH (warm 988x, login_wid 14x) -> 2 factory không đụng cổng
+        self.relogin_port = 9880 + self._copyn
+        self._login_wid = 140 + self._copyn
+
+    def recover(self, log=lambda *_: None):
+        """Chạy NỀN bởi RecoveryManager: clear+login(password)+warm+cookie. Thành công+validate -> clear rest.
+        Thất bại -> nghỉ dài + báo. KHÔNG chặn worker (worker chỉ submit + park + requeue)."""
+        import account_manager as am
+        self._recovering = True
+        try:
+            nd = am.full_recover(self.email, self.bundle, self.chrome_path, self.cache, self._copyn,
+                                 name=self.name, login_worker_id=self._login_wid, warm_port=self.relogin_port, log=log)
+            if nd and nd.get("bearer") and am.validate_auth(nd):
+                self.clear_rest()
+                log(f"✅ VIDEO: {self.email} ĐÃ CHỮA XONG (login+warm+cookie) -> hoạt động lại.")
+                return nd
+            self.rest(3600)
+            log(f"⚠️ VIDEO: {self.email} chữa KHÔNG thành (có thể bị chặn Flow / cần kiểm tra thủ công) -> nghỉ 1h.")
+            return None
+        finally:
+            self._recovering = False
 
     def rest_remaining(self):
         return max(0.0, self.resume_at - time.time())
@@ -74,7 +101,8 @@ class Account:
             self.rest_streak = 0; self.resume_at = 0.0
 
     def auth(self, force=False):
-        """CHỈ refresh TỪ COOKIE (không mở chrome trong service). None nếu cookie chết/không có."""
+        """Auth NHẸ (không mở chrome -> KHÔNG chặn worker): cache còn hạn -> refresh TỪ COOKIE.
+        Cookie chết/không project -> None (recovery mở chrome chạy NỀN qua RecoveryManager)."""
         d = self.cache._load(self.email)
         if not force and self.cache._fresh(d):
             return d
@@ -108,6 +136,26 @@ class VideoFactory:
         # counters
         self.total_done = 0; self.total_fail = 0; self.started_ts = time.time()
         self._clock = threading.Lock()
+        self.recovery = am.RecoveryManager(log=self.log)   # chữa account lỗi ở NỀN (không chặn tiến độ)
+
+    def _startup_check(self):
+        """Đầu giờ: CHECK nhanh từng account (cookie -> validate 1 POST). Lỗi -> chữa NỀN. KHÔNG chặn."""
+        healthy = []; broken = []; lock = threading.Lock()
+        def _check(a):
+            try:
+                auth = a.auth(); ok = bool(auth) and am.validate_auth(auth)
+            except Exception:
+                ok = False
+            with lock:
+                (healthy if ok else broken).append(a)
+            if not ok:
+                a.rest(1800)
+                self.recovery.submit(a.email, lambda a=a: a.recover(self.log))
+        ths = [threading.Thread(target=_check, args=(a,), daemon=True) for a in self.accounts]
+        for t in ths: t.start()
+        for t in ths: t.join(timeout=60)
+        self.log(f"pool VIDEO: {len(self.accounts)} account -> {len(healthy)} SỐNG, {len(broken)} lỗi đang chữa nền "
+                 f"({', '.join(a.name for a in broken) if broken else 'không có'})")
 
     def _cached_media(self, email, image_path):
         with self._media_lock:
@@ -121,9 +169,8 @@ class VideoFactory:
     def start(self):
         # 1) accounts
         pool = load_pool_accounts()
-        self.accounts = [Account(a["name"], a["email"], a["chrome_path"], self.cache) for a in pool]
-        ready = sum(1 for a in self.accounts if a.auth())
-        self.log(f"pool: {len(self.accounts)} account, {ready} sẵn sàng (cookie ok)")
+        self.accounts = [Account(a["name"], a["email"], a["chrome_path"], self.cache, a.get("bundle", "")) for a in pool]
+        self._startup_check()
 
         # 2) egress: MỖI ACCOUNT 1 IPv6 RIÊNG (giống veo3top-b) -> quota reCAPTCHA per-IP KHÔNG dùng chung
         #    -> 10 account = 10 IP độc lập = ~10x throughput (thay vì chung 1 IP bị nghẽn).
@@ -164,6 +211,9 @@ class VideoFactory:
     def stop(self):
         self._running = False
         try:
+            if self.recovery: self.recovery.stop()
+        except Exception: pass
+        try:
             if self.factory: self.factory.stop()
         except Exception: pass
         for a in self.accounts:
@@ -189,16 +239,23 @@ class VideoFactory:
             media_id, err = fc.upload_image(bearer, project, sess, job["image_path"], aspect=aspect)
             if not media_id:
                 if err and err.startswith("401"):
-                    a2 = account.auth(force=True)
+                    a2 = account.auth(force=True)   # refresh cookie nhanh
                     if a2 and a2.get("bearer"):
                         bearer = a2["bearer"]; cookie = a2.get("cookie"); project = a2.get("project") or project
                         media_id, err = fc.upload_image(bearer, project, sess, job["image_path"], aspect=aspect)
+                    if not media_id:
+                        # vẫn 401 -> chữa NỀN + PARK + requeue sang account SỐNG (không fail cứng job)
+                        self.log(f"VIDEO: {account.email} 401 lúc upload ref -> chữa NỀN, PARK + requeue.")
+                        account.rest(1800)
+                        self.recovery.submit(account.email, lambda a=account: a.recover(self.log))
+                        return "retry_soft"
                 if not media_id:
                     return ("fail", f"upload ref fail: {err}")
             self._put_media(account.email, job["image_path"], media_id)
 
         # 2) generate I2V — RETRY TOKEN MỚI KIÊN NHẪN (như veo3top). Lỗi chính = reCAPTCHA đánh giá trượt
         #    -> cứ bắn token mới, backoff NGẮN, KHÔNG nghỉ account. Xoay egress phòng lỗi per-IP.
+        auth_fails = 0
         for attempt in range(GEN_ATTEMPTS):
             tok = self.factory.get()
             if not tok:
@@ -243,10 +300,19 @@ class VideoFactory:
                         time.sleep(3)
                 return ("fail", "download fail")
             elif kind == "auth":
-                a2 = account.auth(force=True)
-                if a2 and a2.get("bearer"):
-                    bearer = a2["bearer"]; cookie = a2.get("cookie")
-                continue
+                # 401: (1) refresh cookie NHANH (inline); vẫn 401 -> chữa NỀN (login+warm+cookie) + PARK +
+                # requeue sang account SỐNG. Worker KHÔNG mở chrome -> không chặn tiến độ, tool không khựng.
+                auth_fails += 1
+                if auth_fails == 1:
+                    a2 = account.auth(force=True)
+                    if a2 and a2.get("bearer"):
+                        bearer = a2["bearer"]; cookie = a2.get("cookie"); project = a2.get("project") or project
+                        continue
+                account.last_kind = "auth_recovering"
+                self.log(f"VIDEO: {account.email} 401 -> chữa NỀN (login+warm+cookie), PARK + requeue (account khác chạy tiếp).")
+                account.rest(1800)
+                self.recovery.submit(account.email, lambda a=account: a.recover(self.log))
+                return "retry_soft"
             else:
                 account.last_kind = f"{kind}@{ename}"
                 if kind in ("ratelimit", "ip_block"):

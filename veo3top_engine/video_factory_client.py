@@ -30,18 +30,35 @@ def is_up(timeout=3):
         return False
 
 
+_LOGF = os.path.join(_SUITE, ".veo3top_pool.log")
+
+
 def _spawn_service(log=print):
     exe = sys.executable
-    script = os.path.join(_HERE, "video_factory.py")
-    args = [exe, script, "--port", str(PORT), "--token-chromes", str(_TOKEN_CHROMES)]
+    # OPT-IN: VEO3TOP_VIDEO_BROWSER_POOL=1 -> dùng nhà máy video BROWSER (in-page, để dành khi video lỗi nhiều).
+    # Mặc định TẮT -> giữ video_factory curl_cffi ĐANG CHẠY TỐT (không đụng đường kiếm tiền chính).
+    if os.environ.get("VEO3TOP_VIDEO_BROWSER_POOL", "0") == "1":
+        script = os.path.join(_HERE, "video_pool_browser.py")
+        args = [exe, script, "--port", str(PORT),
+                "--accounts", os.environ.get("VEO3TOP_VID_POOL_ACCOUNTS", "8")]
+    else:
+        script = os.path.join(_HERE, "video_factory.py")
+        args = [exe, script, "--port", str(PORT), "--token-chromes", str(_TOKEN_CHROMES)]
     CF = 0x08000000  # CREATE_NO_WINDOW
-    p = subprocess.Popen(args, creationflags=CF, cwd=_HERE)
+    # GHI log service ra FILE (CREATE_NO_WINDOW nuốt stdout -> trước đây không thấy token/generate lỗi gì).
+    try:
+        lf = open(_LOGF, "a", buffering=1, encoding="utf-8", errors="replace")
+        lf.write(f"\n===== video_factory START (port {PORT}, {time.strftime('%Y-%m-%d %H:%M:%S')}) =====\n"); lf.flush()
+        out = lf
+    except Exception:
+        out = subprocess.DEVNULL
+    p = subprocess.Popen(args, creationflags=CF, cwd=_HERE, stdout=out, stderr=subprocess.STDOUT)
     try:
         with open(_PIDF, "w") as f:
             f.write(str(p.pid))
     except Exception:
         pass
-    log(f"[pool-client] đã bật video_factory service (PID {p.pid}, port {PORT})")
+    log(f"[pool-client] đã bật video_factory service (PID {p.pid}, port {PORT}) — log: {_LOGF}")
     return p
 
 
@@ -83,7 +100,7 @@ def ensure_service(log=print, wait_up=90):
     return is_up()
 
 
-def generate(image_path, prompt, out_path, aspect=None, seed=None, timeout=1300, log=print):
+def generate(image_path, prompt, out_path, aspect=None, seed=None, timeout=1600, log=print):
     """Gửi 1 job video tới nhà máy. Trả (success, info, error) — KHỚP _submit_video."""
     if requests is None:
         return False, {}, "pool-client: thiếu requests"

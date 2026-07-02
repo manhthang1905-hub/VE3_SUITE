@@ -50,6 +50,7 @@ def load_pool_accounts(settings_path=None):
             "name": s.get("name") or email,
             "email": email,
             "chrome_path": s.get("chrome_path") or "",
+            "bundle": s.get("flow_account_bundle") or "",   # email|password|totp -> auto password-login khi cần
         })
     return accounts
 
@@ -73,7 +74,8 @@ def load_image_pool_accounts(settings_path=None):
         for s in direct:
             if isinstance(s, dict) and s.get("email"):
                 out.append({"name": s.get("name") or s["email"], "email": s["email"],
-                            "chrome_path": s.get("chrome_path") or ""})
+                            "chrome_path": s.get("chrome_path") or "",
+                            "bundle": s.get("flow_account_bundle") or ""})
         if out:
             return out
     # (b) image_server_list (giống local_server_list: flow_account_bundle)
@@ -87,7 +89,8 @@ def load_image_pool_accounts(settings_path=None):
             if email and email.lower() not in seen:
                 seen.add(email.lower())
                 out.append({"name": s.get("name") or email, "email": email,
-                            "chrome_path": s.get("chrome_path") or ""})
+                            "chrome_path": s.get("chrome_path") or "",
+                            "bundle": s.get("flow_account_bundle") or ""})
         if out:
             return out
     # (c) fallback: dùng chung pool video (trước mắt)

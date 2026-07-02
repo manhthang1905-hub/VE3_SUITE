@@ -22,11 +22,19 @@ if _HERE not in sys.path:
 import flow_client as fc
 import token_factory as tf
 import ipv6_transport as ip6t
+import account_manager as am
 from auth_cache import AuthCache
 from pool_accounts import load_image_pool_accounts
 
 GEN_ATTEMPTS = 40          # grind token mới /1 lượt (ảnh: 429 hay do IP -> IPv6 riêng cứu; recaptcha_quota thì chờ)
-JOB_MAX_CYCLES = 30
+JOB_MAX_CYCLES = 6         # bound số lần requeue 1 job (tránh treo khi quota/ratelimit kéo dài)
+IMG_QUOTA_GIVEUP = int(os.environ.get("VEO3TOP_IMG_QUOTA_GIVEUP", "6") or "6")  # recaptcha_quota liên tiếp/1 model -> coi model đó hết quota
+# MODEL ẢNH theo THỨ TỰ CHẤT LƯỢNG cao->thấp. Mỗi account có quota RIÊNG mỗi model -> hết model này
+# nhà máy TỰ CHUYỂN model kế (khai thác hết quota, ra nhiều ảnh nhất). Cấu hình qua env (thêm mã Lite khi có).
+#   GEM_PIX_2 = Nano Banana Pro | NARWHAL = Nano Banana 2 | HARBOR_SEAL = Nano Banana 2 Lite
+#   (mã xác nhận từ response 200 thật: modelNameType). Thứ tự = ưu tiên chất lượng cao->thấp.
+IMG_MODELS = [m.strip() for m in os.environ.get("VEO3TOP_IMG_MODELS", "GEM_PIX_2,NARWHAL,HARBOR_SEAL").split(",") if m.strip()]
+MODEL_REST_SECS = int(os.environ.get("VEO3TOP_IMG_MODEL_REST", "1800") or "1800")  # 1 model hết quota -> nghỉ (account) 30'
 REST_SOFT = 8
 
 
@@ -36,14 +44,43 @@ def _log(msg):
 
 class Account:
     """1 account ultra trong pool + IPv6 RIÊNG (mỗi account 1 IP -> quota reCAPTCHA độc lập)."""
-    def __init__(self, name, email, chrome_path, cache):
+    def __init__(self, name, email, chrome_path, cache, bundle=""):
         self.name = name; self.email = email; self.chrome_path = chrome_path
         self.cache = cache
+        self.bundle = bundle          # email|password|totp -> auto login password khi profile hết đăng nhập
         self.ipv6 = None
         self.resume_at = 0.0; self.rest_streak = 0
         self.busy = False; self.wins = 0; self.fails = 0
         self.egress_wins = {}; self.last_kind = ""
+        self.model_wins = {}           # model -> số ảnh ra (thống kê khai thác quota)
+        self.model_rest = {}           # model -> ts hết nghỉ (model đó hết quota tạm -> bỏ qua tới ts)
         self._lock = threading.Lock()
+        self._recovering = False       # đang được RecoveryManager chữa (nền) -> worker không submit trùng
+        import re as _re
+        m = _re.search(r"Copy \((\d+)\)", str(chrome_path or ""))
+        self._copyn = int(m.group(1)) if m else (abs(hash(email or "")) % 80)
+        # ẢNH dùng dải port RIÊNG với VIDEO (warm 992x, login_wid 18x) -> 2 factory không đụng cổng
+        self.relogin_port = 9920 + self._copyn
+        self._login_wid = 180 + self._copyn
+
+    def recover(self, log=lambda *_: None):
+        """Chạy NỀN bởi RecoveryManager: clear+login(password)+warm+cookie. Thành công+validate -> clear rest
+        (account trở lại NGAY). Thất bại -> nghỉ dài + báo (account có thể bị chặn Flow / cần xem thủ công).
+        KHÔNG chặn worker (worker chỉ submit + park + requeue)."""
+        import account_manager as am
+        self._recovering = True
+        try:
+            nd = am.full_recover(self.email, self.bundle, self.chrome_path, self.cache, self._copyn,
+                                 name=self.name, login_worker_id=self._login_wid, warm_port=self.relogin_port, log=log)
+            if nd and nd.get("bearer") and am.validate_auth(nd):
+                self.clear_rest()
+                log(f"✅ ẢNH: {self.email} ĐÃ CHỮA XONG (login+warm+cookie) -> hoạt động lại.")
+                return nd
+            self.rest(3600)   # chịu thua lâu hơn (1h) rồi thử lại; job đã requeue sang account sống
+            log(f"⚠️ ẢNH: {self.email} chữa KHÔNG thành (có thể bị chặn Flow / cần kiểm tra thủ công) -> nghỉ 1h.")
+            return None
+        finally:
+            self._recovering = False
 
     def rest_remaining(self):
         return max(0.0, self.resume_at - time.time())
@@ -58,6 +95,8 @@ class Account:
             self.rest_streak = 0; self.resume_at = 0.0
 
     def auth(self, force=False):
+        """Auth NHẸ (không mở chrome -> KHÔNG chặn worker): cache còn hạn -> refresh TỪ COOKIE.
+        Cookie chết/không project -> None (recovery mở chrome chạy NỀN qua RecoveryManager)."""
         d = self.cache._load(self.email)
         if not force and self.cache._fresh(d):
             return d
@@ -69,6 +108,22 @@ class Account:
 
     def note_egress_win(self, egress):
         self.egress_wins[egress] = self.egress_wins.get(egress, 0) + 1
+
+    def pick_model(self, models):
+        """Chọn model CHẤT LƯỢNG CAO NHẤT còn quota (chưa nghỉ) cho account này. None nếu mọi model đang nghỉ."""
+        now = time.time()
+        for m in models:                      # models đã theo thứ tự cao->thấp
+            if now >= self.model_rest.get(m, 0):
+                return m
+        return None
+
+    def rest_model(self, model, secs):
+        """1 model hết quota -> cho nghỉ (account này) tới khi thử lại; job dùng model kế."""
+        with self._lock:
+            self.model_rest[model] = time.time() + secs
+
+    def note_model_win(self, model):
+        self.model_wins[model] = self.model_wins.get(model, 0) + 1
 
 
 class ImageFactory:
@@ -85,13 +140,35 @@ class ImageFactory:
         self._workers = []
         self.total_done = 0; self.total_fail = 0; self.started_ts = time.time()
         self._clock = threading.Lock()
+        self.recovery = am.RecoveryManager(log=self.log)   # chữa account lỗi ở NỀN (không chặn tiến độ)
+
+    def _startup_check(self):
+        """Đầu giờ: CHECK nhanh từng account (cookie -> validate 1 POST). Account nào lỗi -> đưa vào
+        RecoveryManager chữa NỀN (clear+login+warm+cookie). KHÔNG chặn: workers vẫn chạy account SỐNG ngay."""
+        healthy = []; broken = []
+        lock = threading.Lock()
+        def _check(a):
+            try:
+                auth = a.auth()
+                ok = bool(auth) and am.validate_auth(auth)
+            except Exception:
+                ok = False
+            with lock:
+                (healthy if ok else broken).append(a)
+            if not ok:
+                a.rest(1800)   # tạm nghỉ tới khi chữa xong (worker bỏ qua) — job vẫn chạy account sống
+                self.recovery.submit(a.email, lambda a=a: a.recover(self.log))
+        ths = [threading.Thread(target=_check, args=(a,), daemon=True) for a in self.accounts]
+        for t in ths: t.start()
+        for t in ths: t.join(timeout=60)
+        self.log(f"pool ẢNH: {len(self.accounts)} account -> {len(healthy)} SỐNG, {len(broken)} lỗi đang chữa nền "
+                 f"({', '.join(a.name for a in broken) if broken else 'không có'})")
 
     # ---------- khởi tạo ----------
     def start(self):
         pool = load_image_pool_accounts()   # TÁCH RIÊNG với video (mai đổi sang pro accounts ảnh)
-        self.accounts = [Account(a["name"], a["email"], a["chrome_path"], self.cache) for a in pool]
-        ready = sum(1 for a in self.accounts if a.auth())
-        self.log(f"pool ẢNH: {len(self.accounts)} account, {ready} sẵn sàng (cookie ok)")
+        self.accounts = [Account(a["name"], a["email"], a["chrome_path"], self.cache, a.get("bundle", "")) for a in pool]
+        self._startup_check()
 
         # mỗi account 1 IPv6 RIÊNG (như video) -> quota reCAPTCHA per-IP độc lập
         if os.environ.get("VEO3TOP_POOL_USE_IPV6", "1") == "1":
@@ -126,6 +203,9 @@ class ImageFactory:
     def stop(self):
         self._running = False
         try:
+            if self.recovery: self.recovery.stop()
+        except Exception: pass
+        try:
             if self.factory: self.factory.stop()
         except Exception: pass
         for a in self.accounts:
@@ -143,6 +223,14 @@ class ImageFactory:
         seed = job.get("seed") or (int(time.time() * 1000) % 900000)
         aspect = job.get("aspect") or "IMAGE_ASPECT_RATIO_LANDSCAPE"
         image_inputs = job.get("image_inputs") or None
+        auth_fails = 0
+        quota_streak = 0   # recaptcha_quota LIÊN TIẾP trên 1 MODEL -> coi model đó hết quota, chuyển model kế
+
+        # MODEL: chọn chất lượng cao nhất account này còn quota (Pro->Nano2->Lite). Hết mọi model -> nghỉ + requeue.
+        model = account.pick_model(IMG_MODELS)
+        if not model:
+            account.rest(300)   # mọi model đang nghỉ (hết quota tạm) -> account nghỉ ngắn, job sang account khác
+            return "retry_soft"
 
         for attempt in range(GEN_ATTEMPTS):
             tok = self.factory.get()
@@ -152,10 +240,10 @@ class ImageFactory:
             eproxy = account.ipv6.proxy_url() if account.ipv6 else None
             ename = "ipv6" if account.ipv6 else "ipmay"
             payload = fc.build_image_payload(job["prompt"], project, tok, seed,
-                                             aspect=aspect, image_inputs=image_inputs)
+                                             aspect=aspect, image_inputs=image_inputs, model=model)
             kind, data = fc.generate_image(bearer, project, payload, proxy=eproxy)
             if kind == "ok":
-                account.note_egress_win(ename)
+                account.note_egress_win(ename); account.note_model_win(model)
                 name, fife, b64, rseed = fc.image_result(data)
                 if not (fife or b64):
                     continue   # 200 nhưng chưa có ảnh -> token mới
@@ -171,25 +259,53 @@ class ImageFactory:
                             f.write(b)
                         n = len(b)
                     job["_result"] = (True, {"media_name": name, "bytes": n, "seed": rseed,
-                                             "account": account.email, "egress": ename}, "")
+                                             "account": account.email, "egress": ename, "model": model}, "")
                     return "success"
                 except Exception as e:
                     time.sleep(1); continue   # download lỗi -> thử lại
             elif kind == "auth":
-                a2 = account.auth(force=True)
-                if a2 and a2.get("bearer"):
-                    bearer = a2["bearer"]; project = a2.get("project") or project
-                continue
+                # 401 UNAUTHENTICATED. (1) thử refresh cookie NHANH (inline, không mở chrome); nếu vẫn 401
+                # -> KHÔNG grind: đưa account vào chữa NỀN (clear+login+warm+cookie qua RecoveryManager),
+                # PARK + requeue job sang account SỐNG. Worker KHÔNG mở chrome -> không chặn, tool không khựng.
+                auth_fails += 1
+                if auth_fails == 1:
+                    a2 = account.auth(force=True)
+                    if a2 and a2.get("bearer"):
+                        bearer = a2["bearer"]; project = a2.get("project") or project
+                        continue
+                account.last_kind = "auth_recovering"
+                self.log(f"ẢNH: {account.email} 401 -> chữa NỀN (login+warm+cookie), PARK + requeue (account khác chạy tiếp).")
+                account.rest(1800)
+                self.recovery.submit(account.email, lambda a=account: a.recover(self.log))
+                return "retry_soft"
             else:
                 account.last_kind = f"{kind}@{ename}"
                 if kind in ("ratelimit", "ip_block"):
+                    quota_streak = 0
                     # per-IP -> xoay IPv6 RIÊNG của account
                     if account.ipv6:
                         try: account.ipv6.rotate()
                         except Exception: pass
                     time.sleep(1.5 + random.uniform(0, 1.0))
+                elif kind == "recaptcha_quota":
+                    # RESOURCE_EXHAUSTED cho MODEL hiện tại. Đủ liên tiếp -> coi model này HẾT QUOTA (account) ->
+                    # cho model nghỉ 30' rồi CHUYỂN sang model kế (chất lượng thấp hơn) để KHAI THÁC tiếp quota.
+                    # Hết MỌI model -> account tạm cạn -> nghỉ ngắn + requeue sang account khác (không treo).
+                    quota_streak += 1
+                    try: self.factory.note_error()
+                    except Exception: pass
+                    if quota_streak >= IMG_QUOTA_GIVEUP:
+                        account.rest_model(model, MODEL_REST_SECS)
+                        nxt = account.pick_model(IMG_MODELS)
+                        if nxt and nxt != model:
+                            self.log(f"ẢNH: {account.email} model {model} hết quota -> chuyển {nxt} (khai thác tiếp).")
+                            model = nxt; quota_streak = 0
+                            continue
+                        account.rest(180)   # mọi model của account này tạm cạn -> nghỉ, job sang account khác
+                        return ("fail", f"tất cả model ({','.join(IMG_MODELS)}) hết quota - thử lại lượt sau")
+                    time.sleep(1.0 + random.uniform(0, 0.8))
                 else:
-                    # recaptcha_quota/unusual -> token mới, backoff ngắn; tích lỗi -> reset chrome (so le)
+                    quota_streak = 0
                     try: self.factory.note_error()
                     except Exception: pass
                     time.sleep(1.0 + random.uniform(0, 0.8))
@@ -246,8 +362,11 @@ class ImageFactory:
         iph = (self.total_done / up * 3600) if up > 5 else 0
         return {
             "accounts": [{"name": a.name, "email": a.email, "resting_in": round(a.rest_remaining(), 1),
-                          "busy": a.busy, "wins": a.wins, "fails": a.fails, "egress_wins": a.egress_wins}
+                          "busy": a.busy, "wins": a.wins, "fails": a.fails, "egress_wins": a.egress_wins,
+                          "model_wins": a.model_wins,
+                          "models_resting": [m for m in IMG_MODELS if time.time() < a.model_rest.get(m, 0)]}
                          for a in self.accounts],
+            "models": IMG_MODELS,
             "queue": self.q.qsize(), "done": self.total_done, "fail": self.total_fail,
             "image_per_hour": round(iph, 1), "uptime_s": round(up),
         }

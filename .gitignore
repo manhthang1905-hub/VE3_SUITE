@@ -108,3 +108,11 @@ veo3top_engine/.ipv6_override_*
 server/flowkit/.proxy_health_*
 **/__pycache__/
 *.pyc
+
+# --- secrets/creds/state (KHONG push - them boi session pool) ---
+tools/gmail_profile_manager/
+veo3top_engine/vid_accounts.txt
+.veo3top_imgpool_state.json
+.veo3top_imgpool_state.json.bak
+.veo3top_pool.log
+.veo3top_imgpool.log

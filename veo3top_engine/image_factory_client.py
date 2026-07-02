@@ -17,29 +17,116 @@ PORT = int(os.environ.get("VEO3TOP_IMG_POOL_PORT", "8789") or "8789")
 BASE = f"http://127.0.0.1:{PORT}"
 _LOCK = os.path.join(_SUITE, ".veo3top_imgpool_start.lock")
 _PIDF = os.path.join(_SUITE, ".veo3top_imgpool.pid")
-_TOKEN_CHROMES = int(os.environ.get("VEO3TOP_IMG_POOL_TOKEN_CHROMES", "10") or "10")
+_TOKEN_CHROMES = int(os.environ.get("VEO3TOP_IMG_POOL_TOKEN_CHROMES", "10") or "10")  # (cũ, không dùng cho browser pool)
+_POOL_ACCOUNTS = int(os.environ.get("VEO3TOP_IMG_POOL_ACCOUNTS", "10") or "10")
+
+def _cfg_accounts(default=10):
+    """So ma chay song song cua nha may ANH: uu tien settings.yaml (image_pool_accounts), roi env, roi default 10."""
+    try:
+        import yaml
+        cfgp = os.path.join(_SUITE, "tools", "ve3", "config", "settings.yaml")
+        cfg = yaml.safe_load(open(cfgp, encoding="utf-8")) or {}
+        n = int(cfg.get("image_pool_accounts", _POOL_ACCOUNTS))
+        return max(1, min(50, n))
+    except Exception:
+        return _POOL_ACCOUNTS
+# BROWSER-based image pool (in-page generate) = cách RA ẢNH THẬT. Đặt =0 để về image_factory.py cũ (curl_cffi).
+_USE_BROWSER_POOL = os.environ.get("VEO3TOP_IMG_BROWSER_POOL", "1") != "0"
+
+
+def _health(timeout=3):
+    if requests is None:
+        return None
+    try:
+        r = requests.get(f"{BASE}/health", timeout=timeout)
+        if r.status_code == 200:
+            return r.json()
+    except Exception:
+        return None
+    return None
 
 
 def is_up(timeout=3):
-    if requests is None:
+    h = _health(timeout)
+    if h is None:
         return False
+    if not _USE_BROWSER_POOL:
+        return True
+    # CHỈ coi là "up" khi ĐÚNG service browser pool (health có 'slots'); service ảnh CŨ (curl_cffi) có
+    # 'accounts'/'image_per_hour' -> KHÁC -> phải thay. Tránh dùng nhầm service cũ đang chiếm cổng.
+    return "slots" in h
+
+
+def _kill_wrong_service(log=print):
+    """Service KHÁC (ảnh cũ) đang chiếm cổng -> kill để nhường cho pool browser. Chạy trong tool (admin) kill được."""
     try:
-        return requests.get(f"{BASE}/health", timeout=timeout).status_code == 200
-    except Exception:
-        return False
+        # theo pid file
+        if os.path.exists(_PIDF):
+            pid = open(_PIDF).read().strip()
+            if pid.isdigit():
+                subprocess.run(["taskkill", "/PID", pid, "/T", "/F"], capture_output=True, creationflags=0x08000000)
+        # theo cổng (chắc chắn)
+        subprocess.run(["powershell", "-NoProfile", "-Command",
+                        f"$c=Get-NetTCPConnection -LocalPort {PORT} -State Listen -EA SilentlyContinue; "
+                        "if($c){$c.OwningProcess|Select-Object -Unique|ForEach-Object{taskkill /PID $_ /T /F}}"],
+                       capture_output=True, creationflags=0x08000000)
+        log(f"[img-pool-client] đã kill service ảnh CŨ chiếm cổng {PORT} (nhường pool browser)")
+    except Exception as e:
+        log(f"[img-pool-client] không kill được service cũ: {e}")
+
+
+_LOGF = os.path.join(_SUITE, ".veo3top_imgpool.log")
 
 
 def _spawn_service(log=print):
     exe = sys.executable
-    script = os.path.join(_HERE, "image_factory.py")
-    args = [exe, script, "--port", str(PORT), "--token-chromes", str(_TOKEN_CHROMES)]
-    p = subprocess.Popen(args, creationflags=0x08000000, cwd=_HERE)
+    if _USE_BROWSER_POOL:
+        # NHÀ MÁY ẢNH browser-based: account gmail + chrome warmed + IN-PAGE generate (ra ảnh thật)
+        script = os.path.join(_HERE, "image_pool_browser.py")
+        args = [exe, script, "--port", str(PORT), "--accounts", str(_cfg_accounts())]
+    else:
+        script = os.path.join(_HERE, "image_factory.py")
+        args = [exe, script, "--port", str(PORT), "--token-chromes", str(_TOKEN_CHROMES)]
+    # GHI log service ra FILE (trước đây CREATE_NO_WINDOW nuốt hết stdout -> không biết vì sao ảnh không ra).
+    # LOG ROTATION (chạy nhiều THÁNG -> log phình): nếu > 20MB, giữ ~2000 dòng cuối rồi ghi tiếp.
+    try:
+        if os.path.exists(_LOGF) and os.path.getsize(_LOGF) > 20 * 1024 * 1024:
+            with open(_LOGF, "r", encoding="utf-8", errors="replace") as _f:
+                _tail = _f.readlines()[-2000:]
+            with open(_LOGF, "w", encoding="utf-8", errors="replace") as _f:
+                _f.write(f"===== LOG ROTATED (giữ 2000 dòng cuối, {time.strftime('%Y-%m-%d %H:%M:%S')}) =====\n")
+                _f.writelines(_tail)
+    except Exception:
+        pass
+    try:
+        lf = open(_LOGF, "a", buffering=1, encoding="utf-8", errors="replace")
+        lf.write(f"\n===== image_factory START (port {PORT}, {time.strftime('%Y-%m-%d %H:%M:%S')}) =====\n"); lf.flush()
+        out = lf
+    except Exception:
+        out = subprocess.DEVNULL
+    # Truyền env cho service: ẨN/HIỆN chrome ảnh theo settings.yaml (image_hide_chrome, mặc định ẩn).
+    env = os.environ.copy()
+    try:
+        import yaml
+        cfgp = os.path.join(_SUITE, "tools", "ve3", "config", "settings.yaml")
+        cfg = yaml.safe_load(open(cfgp, encoding="utf-8")) or {}
+        env["VEO3TOP_IMG_HIDE"] = "1" if cfg.get("image_hide_chrome", True) else "0"
+        # núm tinh chỉnh còn dùng: cách ly account đốt sau N lượt reCAPTCHA lì
+        env["VEO3TOP_IMG_SWAP_GIVEUP"] = str(int(cfg.get("image_swap_giveup", 3)))
+        # EGRESS ẢNH: 'direct' = IP máy + Fake DNS Google (đúng veo3top: điểm reCAPTCHA cao, hết IPv6 403+treo);
+        # 'ipv6' = pool IPv6 (hợp VIDEO chống 429, nhưng ẢNH bị 403 flood). Mặc định direct. Đổi ở settings.yaml.
+        _egress = str(cfg.get("image_egress", "ipv6")).strip().lower()   # mặc định IPv6 (pool) — direct bị 429 khi 10 slot dồn 1 IP
+        env["VEO3TOP_IMG_NATIVE"] = "1" if _egress == "direct" else "0"
+        env["VEO3TOP_DOH"] = "1" if cfg.get("image_fake_dns_google", True) else "0"  # Fake DNS Google (bí quyết veo3top)
+    except Exception:
+        pass
+    p = subprocess.Popen(args, creationflags=0x08000000, cwd=_HERE, stdout=out, stderr=subprocess.STDOUT, env=env)
     try:
         with open(_PIDF, "w") as f:
             f.write(str(p.pid))
     except Exception:
         pass
-    log(f"[img-pool-client] đã bật image_factory service (PID {p.pid}, port {PORT})")
+    log(f"[img-pool-client] đã bật image_factory service (PID {p.pid}, port {PORT}) — log: {_LOGF}")
     return p
 
 
@@ -57,6 +144,13 @@ def ensure_service(log=print, wait_up=120):
         except Exception:
             pass
     if got_lock and not is_up():
+        # nếu có service KHÁC (ảnh cũ curl_cffi) đang chiếm cổng nhưng không phải browser pool -> kill rồi bật mới
+        if _USE_BROWSER_POOL and _health() is not None:
+            _kill_wrong_service(log)
+            for _ in range(8):
+                if _health() is None:
+                    break
+                time.sleep(1)
         _spawn_service(log)
     end = time.time() + wait_up
     while time.time() < end:
@@ -72,7 +166,7 @@ def ensure_service(log=print, wait_up=120):
     return is_up()
 
 
-def generate_image(prompt, out_path, aspect=None, seed=None, image_inputs=None, timeout=600, log=print):
+def generate_image(prompt, out_path, aspect=None, seed=None, image_inputs=None, timeout=900, log=print):
     """Gửi 1 job ảnh tới nhà máy. Trả (success, info, error)."""
     if requests is None:
         return False, {}, "img-pool-client: thiếu requests"

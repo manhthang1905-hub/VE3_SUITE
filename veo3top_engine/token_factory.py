@@ -54,13 +54,58 @@ def _cleanup_stale_temp(older_than_min=10):
 
 
 def _system_chrome():
-    for c in [r"C:\Program Files\Google\Chrome\Application\chrome.exe",
-              r"C:\Program Files (x86)\Google\Chrome\Application\chrome.exe"]:
-        if os.path.exists(c):
-            return c
+    """Tìm Chrome BỀN across máy (đừng hardcode 1 path — máy khác cài chỗ khác -> token chrome không mở,
+    thread minter chết im, không có chrome, không token, nhưng job vẫn submit nên log vẫn báo 'đang tạo video')."""
     import glob
-    for m in glob.glob(r"D:\VE3_SUITE\GoogleChromePortable - Copy (1)\App\Chrome-bin\*\chrome.exe"):
-        return m
+    cands = []
+    # 1) cài chuẩn: machine (Program Files / (x86)) + user (LOCALAPPDATA)
+    for env in ("ProgramFiles", "ProgramFiles(x86)", "LOCALAPPDATA", "ProgramW6432"):
+        base = os.environ.get(env)
+        if base:
+            cands.append(os.path.join(base, r"Google\Chrome\Application\chrome.exe"))
+    cands += [r"C:\Program Files\Google\Chrome\Application\chrome.exe",
+              r"C:\Program Files (x86)\Google\Chrome\Application\chrome.exe"]
+    # 2) registry App Paths (nơi cài thật, kể cả ổ khác)
+    try:
+        import winreg
+        for hive in (winreg.HKEY_LOCAL_MACHINE, winreg.HKEY_CURRENT_USER):
+            try:
+                k = winreg.OpenKey(hive, r"SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths\chrome.exe")
+                v, _ = winreg.QueryValueEx(k, None)
+                if v:
+                    cands.append(v)
+            except OSError:
+                pass
+    except Exception:
+        pass
+    for c in cands:
+        if c and os.path.exists(c):
+            return c
+    # 3) Chrome PORTABLE của các account — có trên MỌI máy chạy tool, không cố định path/drive/số Copy
+    suite_root = os.path.dirname(_HERE)              # ...\VE3_SUITE
+    roots, seen = [], set()
+    for r in (suite_root, os.path.dirname(suite_root), r"D:\VE3_SUITE", r"C:\VE3_SUITE",
+              r"E:\VE3_SUITE", r"D:\New folder\veo3top"):
+        if r and r not in seen:
+            seen.add(r); roots.append(r)
+    for r in roots:
+        for pat in (os.path.join(r, "GoogleChromePortable*", "App", "Chrome-bin", "*", "chrome.exe"),
+                    os.path.join(r, "GoogleChromePortable*", "App", "chrome-bin", "chrome.exe"),
+                    os.path.join(r, "*", "App", "Chrome-bin", "*", "chrome.exe")):
+            for m in glob.glob(pat):
+                if os.path.exists(m):
+                    return m
+    # 4) PATH
+    w = shutil.which("chrome") or shutil.which("chrome.exe")
+    if w:
+        return w
+    # 5) Edge (Chromium) — grecaptcha vẫn chạy được -> mint token OK, fallback cuối (còn hơn không có chrome)
+    for env in ("ProgramFiles(x86)", "ProgramFiles"):
+        base = os.environ.get(env)
+        if base:
+            e = os.path.join(base, r"Microsoft\Edge\Application\msedge.exe")
+            if os.path.exists(e):
+                return e
     return "chrome.exe"
 
 
@@ -95,18 +140,25 @@ class _Minter:
 
     def _open(self, fresh_profile=False):
         try:
-            if self.cdp: self.cdp.close(kill=True)
-        except Exception: pass
-        if self.blank and fresh_profile and not self.persistent and self.temp and os.path.isdir(self.temp):
-            _rmtree_hard(self.temp); self.temp = None
-        prof = self._profile() if (self.blank and (fresh_profile or not self.temp)) else (self.temp if self.blank else self.profile_dir)
-        self.cdp = ChromeCDP(self.chrome_exe, prof, self.port, offscreen=True, log=self.log)
-        if not (self.cdp.connect(launch_timeout=45) and self.cdp.wait_ready(35)):
-            return False
-        if not self.blank:
-            try: self.email = self.cdp.email()
+            try:
+                if self.cdp: self.cdp.close(kill=True)
             except Exception: pass
-        return True
+            if self.blank and fresh_profile and not self.persistent and self.temp and os.path.isdir(self.temp):
+                _rmtree_hard(self.temp); self.temp = None
+            prof = self._profile() if (self.blank and (fresh_profile or not self.temp)) else (self.temp if self.blank else self.profile_dir)
+            self.cdp = ChromeCDP(self.chrome_exe, prof, self.port, offscreen=True, log=self.log)
+            if not (self.cdp.connect(launch_timeout=45) and self.cdp.wait_ready(35)):
+                return False
+            if not self.blank:
+                try: self.email = self.cdp.email()
+                except Exception: pass
+            return True
+        except FileNotFoundError:
+            # chrome.exe không tồn tại ở path này -> KHÔNG nuốt im, để run() log rõ (thiếu Chrome)
+            return False
+        except Exception as e:
+            self.log(f"[tokenfactory:{self.port}] mở chrome lỗi: {e}")
+            return False
 
     def get_auth(self):
         import flow_client as fc
@@ -115,9 +167,19 @@ class _Minter:
                     "project": self.cdp.first_project_id(), "email": self.email, "ts": time.time()}
 
     def run(self):
-        if not self._open(fresh_profile=True):
-            self.log(f"[tokenfactory:{self.port}] chrome ({'trắng' if self.blank else 'account'}) khởi tạo lỗi"); return
-        self.log(f"[tokenfactory:{self.port}] chrome {'TRẮNG(no-login)' if self.blank else 'ACCOUNT('+str(self.email)+')'} sẵn sàng, đẻ token (paced {MINT_INTERVAL}s)")
+        # RETRY mở chrome thay vì chết im: nếu thiếu Chrome/path sai -> log RÕ + thử lại (để user thấy & sửa,
+        # và tự phục hồi nếu Chrome được cài sau). Trước đây _open raise -> thread chết lặng -> "không có chrome
+        # nhưng log vẫn báo tạo video" vì không token mà job vẫn submit.
+        tries = 0
+        while not self._stop and not self._open(fresh_profile=True):
+            tries += 1
+            self.log(f"[tokenfactory:{self.port}] KHÔNG mở được chrome token (lần {tries}): '{self.chrome_exe}' "
+                     f"— Chrome chưa cài đúng chỗ? Không có chrome = không token = video KHÔNG chạy dù log báo đang tạo. Thử lại 15s...")
+            for _ in range(15):
+                if self._stop: return
+                time.sleep(1)
+        if self._stop: return
+        self.log(f"[tokenfactory:{self.port}] chrome {'TRẮNG(no-login)' if self.blank else 'ACCOUNT('+str(self.email)+')'} sẵn sàng ({self.chrome_exe}), đẻ token (paced {MINT_INTERVAL}s)")
         t_recycle = time.time()
         while not self._stop:
             # RESET theo LỖI (giống veo3top numreset) — SO LE: mỗi lần chỉ chrome tới lượt reset (không blackout token)

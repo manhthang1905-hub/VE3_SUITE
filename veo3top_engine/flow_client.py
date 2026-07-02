@@ -242,24 +242,31 @@ def bearer_from_cookie(cookie, timeout=25):
 #   generate đi GEN_PROXY (IPv6, chỗ 429 TOO_MUCH_TRAFFIC); download fifeUrl DIRECT IPv4 (URL ký sẵn, không auth).
 #   Response: media[0].image.generatedImage.fifeUrl (JPEG ký), media[0].name = mediaId (dùng làm reference).
 # =========================================================================
-IMG_MODEL = "GEM_PIX_2"
+# Model ảnh: GEM_PIX_2 (Nano Banana Pro, default) | NARWHAL (Nano Banana 2) | IMAGEN_3_5 (Imagen 4).
+# LƯU Ý: 429 "reCAPTCHA evaluation failed" chặn Ở TẦNG reCAPTCHA (trước model) -> ĐỔI MODEL KHÔNG né
+# được 429 đó (đã kiểm chứng: GEM_PIX_2 & NARWHAL đều 429; IMAGEN_3_5 ra 500). Env chỉ để thử nghiệm.
+IMG_MODEL = os.environ.get("VEO3TOP_IMG_MODEL", "GEM_PIX_2") or "GEM_PIX_2"
 IMG_ASPECT_LANDSCAPE = "IMAGE_ASPECT_RATIO_LANDSCAPE"
 IMG_ASPECT_PORTRAIT  = "IMAGE_ASPECT_RATIO_PORTRAIT"
 IMG_ASPECT_SQUARE    = "IMAGE_ASPECT_RATIO_SQUARE"
 
 
 def image_gen_url(project_id):
-    return f"{BASE}/projects/{project_id}/flowMedia:batchGenerateImages?key={KEY}"
+    return f"{BASE}/projects/{project_id}/flowMedia:batchGenerateImages"   # format MỚI: KHÔNG ?key
 
 
 def build_image_payload(prompt, project_id, recaptcha_token, seed,
                         aspect=IMG_ASPECT_LANDSCAPE, model=IMG_MODEL, image_inputs=None):
-    """image_inputs: list dict {imageInputType, name}/{rawImageBytes,mimeType} — reference/style/subject."""
-    ctx = {"sessionId": f";{int(time.time()*1000)}", "projectId": project_id, "tool": "PINHOLE",
-           "recaptchaContext": {"applicationType": "RECAPTCHA_APPLICATION_TYPE_WEB", "token": recaptcha_token}}
-    req = {"clientContext": dict(ctx), "seed": seed, "imageModelName": model,
-           "imageAspectRatio": aspect, "prompt": prompt, "imageInputs": image_inputs or []}
-    return {"clientContext": ctx, "requests": [req]}
+    """FORMAT MỚI (đã soi request thật): structuredPrompt + mediaGenerationContext.batchId + useNewMedia.
+    image_inputs: list dict {imageInputType, name} (ref đã UPLOAD -> name; KHÔNG dùng rawImageBytes nữa)."""
+    import uuid as _uuid
+    ctx = {"recaptchaContext": {"token": recaptcha_token, "applicationType": "RECAPTCHA_APPLICATION_TYPE_WEB"},
+           "projectId": project_id, "tool": "PINHOLE", "sessionId": f";{int(time.time()*1000)}"}
+    req = {"clientContext": dict(ctx), "imageModelName": model, "imageAspectRatio": aspect,
+           "structuredPrompt": {"parts": [{"text": prompt}]}, "seed": seed, "imageInputs": image_inputs or []}
+    return {"clientContext": ctx,
+            "mediaGenerationContext": {"batchId": str(_uuid.uuid4())},
+            "useNewMedia": True, "requests": [req]}
 
 
 def generate_image(bearer, project_id, payload, timeout=120, proxy=None):

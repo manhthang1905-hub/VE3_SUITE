@@ -129,8 +129,16 @@ class VE3Worker:
         ar_str = config.get("flow_aspect_ratio", "landscape").upper()
         self.aspect_ratio = getattr(AspectRatio, ar_str, AspectRatio.LANDSCAPE)
 
-        # Concurrent prompts
-        self.max_concurrent = config.get("max_concurrent", 1)
+        # Concurrent prompts (số ảnh 1 mã gửi SONG SONG).
+        # AUTO (pool mode): = số chrome pool / số mã song song -> luôn làm ĐẦY pool (không chrome nào ngồi không),
+        # không over-thread. Tự tính theo thực tế, KHÔNG cần chỉnh tay ở GUI. Backend khác -> giữ config cũ.
+        if str(config.get("generation_backend", "") or "").strip() == "veo3top_b_pool":
+            _pool_n = int(config.get("image_pool_accounts", 10) or 10)
+            _codes = int(config.get("max_concurrent_codes", 0) or 0)
+            _codes = _codes if _codes > 0 else 3          # 0 = không giới hạn -> giả định ~3 mã để chia
+            self.max_concurrent = max(1, min(_pool_n, -(-_pool_n // _codes)))   # ceil(pool/codes), cận trên = pool
+        else:
+            self.max_concurrent = config.get("max_concurrent", 1)
         self.final_full_rerun = config.get("final_full_rerun", False)
         self.prompt_rewrite_enabled = config.get("prompt_policy_rewrite_enabled", True)
         self.prompt_rewrite_max_rounds = int(config.get("prompt_policy_rewrite_max_rounds", 1) or 1)
@@ -2574,7 +2582,7 @@ Generator/context error:
                 if media_id:
                     break
             if media_id:
-                refs.append(ImageInput(name=media_id, input_type=ImageInputType.REFERENCE))
+                refs.append(self._make_ref(ref_name, media_id))
             else:
                 missing_refs.append(ref_name)
 
@@ -2587,7 +2595,7 @@ Generator/context error:
                     expected_refs.append(cid)
                     media_id = media_ids.get(cid) or media_ids.get(f"{cid}.png")
                     if media_id:
-                        refs.append(ImageInput(name=media_id, input_type=ImageInputType.REFERENCE))
+                        refs.append(self._make_ref(cid, media_id))
                     else:
                         missing_refs.append(cid)
 
@@ -2604,7 +2612,7 @@ Generator/context error:
                 expected_refs.append(loc_id)
                 media_id = media_ids.get(loc_id) or media_ids.get(f"{loc_id}.png")
                 if media_id:
-                    refs.append(ImageInput(name=media_id, input_type=ImageInputType.REFERENCE))
+                    refs.append(self._make_ref(loc_id, media_id))
                 else:
                     missing_refs.append(loc_id)
 
@@ -2644,7 +2652,7 @@ Generator/context error:
                 if media_id:
                     break
             if media_id:
-                refs.append(ImageInput(name=media_id, input_type=ImageInputType.REFERENCE))
+                refs.append(self._make_ref(ref_name, media_id))
             else:
                 missing_refs.append(ref_name)
 
@@ -3524,27 +3532,35 @@ Generator/context error:
         out = []
         for r in refs:
             try:
-                b64 = getattr(r, "base64_data", "") or ""
+                b64 = getattr(r, "base64_data", "") or ""   # đã embed bởi _make_ref khi pool mode
                 mime = getattr(r, "mime_type", "image/png") or "image/png"
                 it = getattr(r, "input_type", None)
                 itype = getattr(it, "value", None) or "IMAGE_INPUT_TYPE_REFERENCE"
-                if not b64:
-                    fp = self._resolve_ref_image_file(r)
-                    if fp and os.path.exists(fp):
-                        with open(fp, "rb") as f:
-                            b64 = _b64.b64encode(f.read()).decode()
-                        mime = "image/jpeg" if str(fp).lower().endswith((".jpg", ".jpeg")) else "image/png"
                 if b64:
                     out.append({"imageInputType": itype, "rawImageBytes": b64, "mimeType": mime})
             except Exception:
                 pass
         return out or None
 
-    def _resolve_ref_image_file(self, ref):
-        """Tìm FILE ảnh reference để embed bytes (pool account khác -> cần bytes, không dùng mediaId).
-        HIỆN: ImageInput chỉ có mediaId, chưa map ngược ra file -> trả None (chạy text-to-image).
-        SẼ HOÀN THIỆN cùng kế hoạch account ảnh (map ref_name -> file nhân vật đã lưu)."""
-        return None
+    def _make_ref(self, ref_name, media_id):
+        """Tạo 1 ImageInput reference. Với POOL (account khác nhau -> mediaId account-scoped VÔ DỤNG),
+        EMBED base64 ảnh nhân vật/địa điểm từ file nv/{ref_name}.png -> ref đi kèm ảnh thật, giữ nhất quán."""
+        ii = ImageInput(name=media_id or "", input_type=ImageInputType.REFERENCE)
+        if self.veo3top_image_mode == "pool":
+            try:
+                import base64 as _b64
+                for ext in (".png", ".jpg", ".jpeg"):
+                    fp = self.nv_dir / f"{ref_name}{ext}"
+                    if fp.exists():
+                        with open(fp, "rb") as f:
+                            ii.base64_data = _b64.b64encode(f.read()).decode()
+                        ii.mime_type = "image/png" if ext == ".png" else "image/jpeg"
+                        break
+                if not ii.base64_data:
+                    self.log(f"  [img-pool] KHÔNG thấy file ảnh reference nv/{ref_name}.png -> ref bị bỏ (ảnh có thể lệch nhân vật)", "WARN")
+            except Exception as e:
+                self.log(f"  [img-pool] đọc ref {ref_name} lỗi: {e}", "WARN")
+        return ii
 
     def _submit_image_veo3top_b_pool(self, prompt, output_path, refs=None, aspect_ratio=None) -> tuple:
         """NHÀ MÁY ẢNH CHUNG: gửi tới image_factory service (pool 10 account, IPv6 riêng, 7 luồng/account).

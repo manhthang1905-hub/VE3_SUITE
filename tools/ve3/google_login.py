@@ -905,6 +905,42 @@ def get_account_info(machine_code: str, max_retries: int = 3) -> dict:
     return account
 
 
+import threading as _threading
+_CLIP_LOCK = _threading.Lock()   # clipboard CHUNG -> lock khi nhiều chrome login song song (tránh paste NHẦM OTP/pass)
+
+
+def _fill_field(driver, el, text, label, log):
+    """Điền field AN TOÀN cho song song: GÕ TRỰC TIẾP (.input) — KHÔNG clipboard (tránh đua paste nhầm).
+    Fallback clipboard+Ctrl+V CHỈ khi không có element, và có LOCK. Trả True nếu đã điền."""
+    try:
+        if el is not None:
+            try: el.clear()
+            except Exception: pass
+            el.input(text)
+            log(f"{label}: gõ trực tiếp (an toàn song song)")
+            return True
+    except Exception as e:
+        log(f"{label}: gõ trực tiếp lỗi ({e}) -> thử clipboard")
+    # fallback: clipboard dưới LOCK (serialize copy->paste->enter, tránh luồng khác chen)
+    try:
+        from DrissionPage.common import Actions
+        with _CLIP_LOCK:
+            try:
+                import pyperclip; pyperclip.copy(text)
+            except Exception:
+                import subprocess; subprocess.run(['clip'], input=text.encode(), check=True)
+            if el is not None:
+                try: el.click()
+                except Exception: pass
+            time.sleep(0.2)
+            a = Actions(driver); a.key_down('ctrl').key_down('v').key_up('v').key_up('ctrl')
+        log(f"{label}: clipboard-paste (có lock)")
+        return True
+    except Exception as e:
+        log(f"{label}: điền THẤT BẠI: {e}")
+        return False
+
+
 def login_google_chrome(account_info: dict, chrome_portable: str = None, profile_dir: str = None, worker_id: int = 0, proxy_arg: str = "") -> bool:
     """
     Mở Chrome và đăng nhập Google bằng JavaScript.
@@ -945,6 +981,15 @@ def login_google_chrome(account_info: dict, chrome_portable: str = None, profile
         base_port = 9222 + worker_id
         options.set_local_port(base_port)  # Dùng set_local_port như drission_flow_api.py
         log(f"Using port: {base_port} (worker_id={worker_id})")
+
+        # ẨN CHROME: VEO3TOP_HIDE_CHROME=1 -> đẩy cửa sổ ra ngoài màn hình (đỡ phiền khi chạy nhiều luồng).
+        # KHÔNG headless (Google chặn headless login) — chỉ offscreen, vẫn login/2FA bình thường.
+        if os.environ.get("VEO3TOP_HIDE_CHROME", "0") == "1":
+            try:
+                options.set_argument("--window-position=-32000,-32000")
+                options.set_argument("--window-size=500,400")
+            except Exception:
+                pass
 
         # Ưu tiên chrome_portable được truyền vào (cho Chrome 2 song song)
         chrome_exe = None
@@ -1177,35 +1222,14 @@ def login_google_chrome(account_info: dict, chrome_portable: str = None, profile
                     pass
                 time.sleep(2)
 
-            # Copy password vào clipboard
-            try:
-                import pyperclip
-                pyperclip.copy(password)
-                log("Password copied to clipboard")
-            except ImportError:
-                import subprocess
-                subprocess.run(['clip'], input=password.encode(), check=True)
-                log("Password copied to clipboard (via clip)")
-
-            # Click vào password input nếu tìm thấy qua DrissionPage
-            if pw_input and not pw_found_js:
-                try:
-                    pw_input.click()
-                    time.sleep(0.5)
-                except Exception:
-                    pass
-
-            # v1.0.645: Nếu JS đã focus, đợi thêm chút cho ổn định
-            if pw_found_js:
-                time.sleep(0.3)
-
-            # Gửi Ctrl+V để paste
+            # ĐIỀN PASSWORD an toàn song song: gõ trực tiếp (không clipboard đua). Tìm element nếu chỉ có JS.
+            if not pw_input:
+                try: pw_input = driver.ele('x://input[@type="password"]', timeout=3)
+                except Exception: pw_input = None
             from DrissionPage.common import Actions
             actions = Actions(driver)
-            actions.key_down('ctrl').key_down('v').key_up('v').key_up('ctrl')
-            log("Sent Ctrl+V")
+            _fill_field(driver, pw_input, password, "Password", log)
             time.sleep(0.5)
-
             # Nhấn Enter để submit
             actions.key_down('enter').key_up('enter')
             log("Pressed Enter")
@@ -1331,34 +1355,43 @@ def login_google_chrome(account_info: dict, chrome_portable: str = None, profile
                     log("Waiting 5s for 2FA page to fully render...")
                     time.sleep(5)
 
-                # B3: Generate OTP NGAY TRUOC KHI nhap (tranh het han)
+                # B3+B4: ĐIỀN OTP có RETRY — điền xong nếu CHƯA CHUYỂN TRANG (OTP sai/hết hạn) thì Ctrl+A XOÁ
+                # rồi sinh OTP MỚI điền lại (tối đa 3 lần). GUARD cửa sổ: OTP sắp hết (<8s) -> chờ cửa sổ mới.
                 clean_secret = totp_secret.replace(" ", "").replace("-", "").upper()
-                totp = pyotp.TOTP(clean_secret)
-                otp_code = totp.now()
-                log(f"Generated OTP: {otp_code}")
-
-                try:
-                    import pyperclip
-                    pyperclip.copy(otp_code)
-                    log("OTP copied to clipboard")
-                except ImportError:
-                    import subprocess
-                    subprocess.run(['clip'], input=otp_code.encode(), check=True)
-                    log("OTP copied to clipboard (via clip)")
-
-                # B4: Click input, paste, enter
-                if otp_input:
+                otp_ok = False
+                for otp_try in range(3):
+                    rem = 30 - int(time.time()) % 30
+                    if rem < 8:
+                        log(f"OTP còn {rem}s -> chờ cửa sổ mới ({rem+1}s)"); time.sleep(rem + 1)
+                    otp_code = pyotp.TOTP(clean_secret).now()
+                    log(f"OTP thử {otp_try+1}/3: {otp_code} (còn {30 - int(time.time()) % 30}s)")
+                    # tìm lại ô OTP (page có thể re-render sau lần fail)
+                    if not otp_input:
+                        try: otp_input = driver.ele('input[type="tel"]', timeout=2) or driver.ele('#totpPin', timeout=2)
+                        except Exception: otp_input = None
+                    # XOÁ ô (Ctrl+A + Delete) trước khi điền -> không dính OTP cũ
                     try:
-                        otp_input.click()
-                        time.sleep(0.3)
+                        if otp_input: otp_input.click(); time.sleep(0.2)
+                        actions.key_down('ctrl').key_down('a').key_up('a').key_up('ctrl')
+                        actions.key_down('delete').key_up('delete')
                     except Exception:
                         pass
-
-                actions.key_down('ctrl').key_down('v').key_up('v').key_up('ctrl')
-                log("Sent Ctrl+V")
-                time.sleep(0.5)
-                actions.key_down('enter').key_up('enter')
-                log("Sent Enter")
+                    _fill_field(driver, otp_input, otp_code, f"OTP#{otp_try+1}", log)
+                    time.sleep(0.4)
+                    actions.key_down('enter').key_up('enter')
+                    # chờ CHUYỂN TRANG (rời trang challenge/totp) tối đa 8s
+                    for _ in range(8):
+                        time.sleep(1)
+                        u = (driver.url or "").lower()
+                        if ("challenge" not in u and "totp" not in u and "/signin" not in u) \
+                           or "speedbump" in u or "myaccount" in u or "labs.google" in u:
+                            otp_ok = True; break
+                    if otp_ok:
+                        log(f"OTP OK (lần {otp_try+1}) -> đã chuyển trang"); break
+                    log(f"OTP lần {otp_try+1} CHƯA chuyển trang -> xoá + thử OTP mới", "WARN")
+                    otp_input = None
+                if not otp_ok:
+                    log("2FA THẤT BẠI sau 3 lần OTP", "WARN")
 
             except ImportError:
                 log("pyotp not installed! Run: pip install pyotp", "ERROR")
@@ -1383,10 +1416,28 @@ def login_google_chrome(account_info: dict, chrome_portable: str = None, profile
                 log(f"Login SUCCESS - redirected after {wait_i+1}s!", "OK")
                 break
 
+            # SPEEDBUMP passkey "Sign in faster" / các interstitial sau login -> BẤM "Not now" (nếu không
+            # sẽ kẹt ở đây mãi). CHỈ bấm Not now/Skip (KHÔNG bấm Continue -> tránh tạo passkey).
+            if ("speedbump" in current_url or "passkey" in current_url
+                    or "signinchooser" in current_url or "/challenge/dp" in current_url):
+                for sel in ('@@tag()=button@@text():Not now', '@@tag()=button@@text():Not Now',
+                            'text:Not now', 'text:Để sau', 'text:Bỏ qua', 'text:Skip', 'text:Cancel',
+                            'xpath://button[contains(., "Not now")]', 'xpath://button[contains(., "Để sau")]'):
+                    try:
+                        btn = driver.ele(sel, timeout=1)
+                        if btn:
+                            btn.click()
+                            log(f"Speedbump: clicked 'Not now' (skip passkey) [{sel}]")
+                            time.sleep(2)
+                            break
+                    except Exception:
+                        pass
+
             # Van o accounts.google.com nhung KHONG con o signin/challenge
             if "accounts.google.com" in current_url and \
                "/signin" not in current_url and \
-               "/challenge" not in current_url:
+               "/challenge" not in current_url and \
+               "speedbump" not in current_url:
                 login_success = True
                 log(f"Login SUCCESS - left login page after {wait_i+1}s!", "OK")
                 break

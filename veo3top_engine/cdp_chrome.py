@@ -61,12 +61,14 @@ def cleanup_dead_pidfiles():
 
 
 class ChromeCDP:
-    def __init__(self, chrome_exe, profile_dir, port, offscreen=True, log=lambda *_: None):
+    def __init__(self, chrome_exe, profile_dir, port, offscreen=True, log=lambda *_: None, proxy=None):
         self.chrome_exe = chrome_exe
         self.profile_dir = profile_dir
         self.port = port
         self.offscreen = offscreen
         self.log = log
+        # proxy socks5 (vd pool IPv6): chrome đi qua đây. socks5h -> socks5 (chrome SOCKS5 tự remote-DNS).
+        self.proxy = (proxy or "").replace("socks5h://", "socks5://") or None
         self.ws = None
         self._id = itertools.count(1)
         self._proc = None
@@ -85,29 +87,54 @@ class ChromeCDP:
         #  - --source-restrictions=no-ipv6: ÉP token chrome đi IPv4 residential (điểm cao). Máy giờ default IPv6,
         #    nếu mint qua IPv6 -> Google chấm thấp -> TOO_MUCH_TRAFFIC. veo3top ép IPv4.
         #  - tắt PrivacySandboxSettings4 + WebRTC MDNS + media... -> fingerprint sạch hơn (bớt lộ bot).
-        args = [self.chrome_exe, f"--remote-debugging-port={self.port}", "--remote-allow-origins=*",
-                f"--user-data-dir={self.profile_dir}",
-                "--no-sandbox", "--test-type", "--disable-dev-shm-usage", "--disable-extensions",
-                "--disable-browser-side-navigation",
-                "--js-flags=--max-old-space-size=512",
-                "--force-webrtc-ip-handling-policy=disable_non_proxied_udp",
-                "--disable-features=WebRtcHideLocalIpsWithMdns,WebRTC-MDNS-Responder,GlobalMediaControls,"
-                "ImageService,InternalMediaSession,PrivacySandboxSettings4,CalculateNativeWinOcclusion",
-                "--disable-background-timer-throttling", "--disable-backgrounding-occluded-windows",
-                "--disable-renderer-backgrounding",
-                "--disable-blink-features=AutomationControlled",
-                "--no-first-run", "--no-default-browser-check", "--mute-audio",
-                "--disable-background-networking", "--disable-sync",
-                "--net-log-capture-mode=None", "--source-restrictions=no-ipv6",
-                "--disable-gpu", "--disable-software-rasterizer", "--disable-gpu-rasterization",
-                "--window-size=320,480"]
-        # "FAKE DNS GOOGLE" (soi veo3top: chrome captcha nối 8.8.8.8/8.8.4.4) = ép chrome resolve DNS
-        # qua Google DoH (dns.google) -> reCAPTCHA/Google domain đi đường Google, token điểm tốt hơn.
-        if os.environ.get("VEO3TOP_FAKE_DNS", "1") != "0":
-            args += ["--dns-over-https-mode=secure",
-                     "--dns-over-https-templates=https://dns.google/dns-query"]
+        # CLEAN MODE (VEO3TOP_CLEAN_FLAGS=1): bỏ cờ lộ-bot (--test-type/--no-sandbox/--disable-gpu) + BẬT GPU thật
+        #  -> token reCAPTCHA điểm CAO hơn (giống Chrome người dùng). Dùng cho ẢNH (reCAPTCHA IMAGE khắt khe hơn video).
+        clean = os.environ.get("VEO3TOP_CLEAN_FLAGS", "0") == "1"
+        if clean:
+            # TỐI GIẢN như Chrome người dùng thật: CHỈ những cờ tối cần thiết để điều khiển CDP.
+            # KHÔNG cờ lộ-bot (không --test-type/--no-sandbox/--disable-gpu/AutomationControlled/disable-features...)
+            # -> reCAPTCHA IMAGE chấm điểm CAO (đã chứng minh ra ảnh 200). Cửa sổ HIỆN, GPU thật.
+            args = [self.chrome_exe, f"--remote-debugging-port={self.port}", "--remote-allow-origins=*",
+                    f"--user-data-dir={self.profile_dir}",
+                    "--no-first-run", "--no-default-browser-check",
+                    "--window-size=1280,860"]
+        else:
+            args = [self.chrome_exe, f"--remote-debugging-port={self.port}", "--remote-allow-origins=*",
+                    f"--user-data-dir={self.profile_dir}",
+                    "--no-sandbox", "--test-type", "--disable-dev-shm-usage", "--disable-extensions",
+                    "--disable-browser-side-navigation",
+                    "--js-flags=--max-old-space-size=512",
+                    "--force-webrtc-ip-handling-policy=disable_non_proxied_udp",
+                    "--disable-features=WebRtcHideLocalIpsWithMdns,WebRTC-MDNS-Responder,GlobalMediaControls,"
+                    "ImageService,InternalMediaSession,PrivacySandboxSettings4,CalculateNativeWinOcclusion",
+                    "--disable-background-timer-throttling", "--disable-backgrounding-occluded-windows",
+                    "--disable-renderer-backgrounding",
+                    "--disable-blink-features=AutomationControlled",
+                    "--no-first-run", "--no-default-browser-check", "--mute-audio",
+                    "--disable-background-networking", "--disable-sync",
+                    "--net-log-capture-mode=None",
+                    "--disable-gpu", "--disable-software-rasterizer", "--disable-gpu-rasterization",
+                    "--window-size=320,480"]
+        if self.proxy:
+            # EGRESS qua socks5 (pool IPv6): chrome gửi hostname cho proxy (SOCKS5 remote-DNS) -> proxy resolve
+            # AAAA + đi ra IPv6. KHÔNG ép no-ipv6, KHÔNG DoH (để proxy lo DNS, tránh resolve IPv4 rồi kẹt).
+            args.append(f"--proxy-server={self.proxy}")
+            args.append("--proxy-bypass-list=<-loopback>")
+            # THỬ NGHIỆM (VEO3TOP_DOH=1): Fake DNS Google chạy CÙNG proxy IPv6 — bí quyết veo3top "Fake DNS Google".
+            # reCAPTCHA có thể coi DoH->dns.google là tín hiệu trình duyệt thật -> nâng điểm. Mặc định TẮT.
+            if os.environ.get("VEO3TOP_DOH", "0") == "1":
+                args += ["--dns-over-https-mode=secure",
+                         "--dns-over-https-templates=https://dns.google/dns-query"]
+        else:
+            # direct: ép IPv4 residential + Fake DNS Google (điểm reCAPTCHA cao) — như token chrome blank.
+            args.append("--source-restrictions=no-ipv6")
+            if os.environ.get("VEO3TOP_FAKE_DNS", "1") != "0":
+                args += ["--dns-over-https-mode=secure",
+                         "--dns-over-https-templates=https://dns.google/dns-query"]
         if self.offscreen:
-            args.append("--window-position=-30000,0")
+            # ẨN = đẩy cửa sổ RA NGOÀI màn hình (vẫn render GPU) — ĐÃ TEST: clean mode + off-screen VẪN ra ảnh
+            # (off-screen KHÔNG phải tín hiệu bot; chỉ --disable-gpu/--test-type mới hại). -> nút ẩn dùng được cho ẢNH.
+            args.append("--window-position=-32000,0")
         args.append(FLOW_URL)
         self._proc = subprocess.Popen(args)
         _register_pid(self.port, self._proc.pid)   # để GUI dọn được khi tắt (kể cả orphan)
@@ -195,6 +222,26 @@ class ChromeCDP:
 
     def first_project_id(self):
         return self.ev(r"(async()=>{const u='/fx/api/trpc/project.searchUserProjects?input='+encodeURIComponent(JSON.stringify({json:{pageSize:5,toolName:'PINHOLE',cursor:null},meta:{values:{cursor:['undefined']}}}));const j=await (await fetch(u,{credentials:'include'})).json();try{return j.result.data.json.result.projects[0].projectId;}catch(e){return null;}})()")
+
+    def create_project(self, title="auto"):
+        """Tạo project PINHOLE qua trpc (chrome đã login). Trả projectId hoặc None. (Copy logic đã chứng minh ở chrome_factory)."""
+        js = (r"""(async()=>{try{
+          const r=await fetch('/fx/api/trpc/project.createProject',{method:'POST',credentials:'include',
+            headers:{'Content-Type':'application/json'},
+            body:JSON.stringify({json:{projectTitle:'%s',toolName:'PINHOLE'}})});
+          const j=await r.json();
+          const d=j.result&&j.result.data&&j.result.data.json;
+          return (d&&(d.projectId||(d.result&&d.result.projectId)))||null;
+        }catch(e){return null;}})()""" % title)
+        return self.ev(js)
+
+    def fresh_project(self):
+        """User: MỖI lần dùng chrome nên TẠO project MỚI (KHÔNG dùng project cũ — project cũ có thể dính hoạt động
+        bị đốt trước đó). Tạo mới in-page; nếu tạo lỗi -> fallback project sẵn (tránh account chết vô ích)."""
+        pid = self.create_project()
+        if pid and len(str(pid)) == 36 and "-" in str(pid):
+            return pid
+        return self.first_project_id()
 
     def mint_token(self, action=None):
         a = action or ACTION   # video='VIDEO_GENERATION' (default); ảnh truyền 'IMAGE_GENERATION'

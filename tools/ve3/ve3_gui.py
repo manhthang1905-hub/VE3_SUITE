@@ -553,6 +553,21 @@ class HomePage(ctk.CTkScrollableFrame):
         self.log_excel_box.grid(row=0, column=0, sticky="nsew", padx=0, pady=0)
         self.log_excel_box.configure(state="disabled")
 
+        # Tab LOG nhà máy ẢNH + VIDEO (tail file log service -> biết pool đang làm gì)
+        self._pool_log_files = {}
+        for _name, _fn in [("Pool ANH", ".veo3top_imgpool.log"), ("Pool VIDEO", ".veo3top_pool.log")]:
+            _tab = self.log_tabs.add(_name)
+            _tab.grid_columnconfigure(0, weight=1); _tab.grid_rowconfigure(0, weight=1)
+            _box = ctk.CTkTextbox(_tab, font=("Consolas",10), fg_color="#1A1A1A", text_color="#9F9", corner_radius=4, wrap="word")
+            _box.grid(row=0, column=0, sticky="nsew", padx=0, pady=0); _box.configure(state="disabled")
+            _p = os.path.join(SUITE_ROOT, _fn)
+            # BẮT ĐẦU TỪ CUỐI FILE: last_size = kích thước hiện tại -> panel CHỈ hiện log MỚI (ghi ra sau khi mở tool),
+            # KHÔNG kéo lại log cũ của lần chạy trước (user: "log mới khi mới chạy tool").
+            try: _sz0 = os.path.getsize(_p) if os.path.exists(_p) else 0
+            except Exception: _sz0 = 0
+            self._pool_log_files[_name] = [_p, _box, _sz0]  # [path, box, last_size]
+        self._tail_pool_logs()
+
         # Dictionary to store log boxes for each project code
         self.log_project_boxes = {}
 
@@ -562,6 +577,38 @@ class HomePage(ctk.CTkScrollableFrame):
         except Exception:
             pass
         self.log_tabs.grid_remove()
+
+    def _tail_pool_logs(self):
+        """Đọc thêm phần mới của file log pool ẢNH/VIDEO -> hiện live (biết pool đang làm gì). Chạy mỗi 2s."""
+        try:
+            for name, item in getattr(self, "_pool_log_files", {}).items():
+                path, box, last = item
+                try:
+                    if not os.path.exists(path):
+                        continue
+                    sz = os.path.getsize(path)
+                    if sz < last:      # file bị xoá/ghi đè -> đọc lại từ đầu
+                        last = 0
+                    if sz > last:
+                        with open(path, "r", encoding="utf-8", errors="replace") as f:
+                            f.seek(last); new = f.read()
+                        item[2] = sz
+                        if new.strip():
+                            box.configure(state="normal")
+                            box.insert("end", new)
+                            # cắt bớt giữ ~500 dòng cuối
+                            try:
+                                n = int(box.index("end-1c").split(".")[0])
+                                if n > 500:
+                                    box.delete("1.0", f"{n-500}.0")
+                            except Exception:
+                                pass
+                            box.see("end"); box.configure(state="disabled")
+                except Exception:
+                    pass
+        finally:
+            try: self.after(2000, self._tail_pool_logs)
+            except Exception: pass
 
     def _mk_process_monitor(self):
         c = self._card(3, "Process Monitor")
@@ -1537,9 +1584,10 @@ class SettingsPage(ctk.CTkScrollableFrame):
         gc.grid(row=1, column=0, sticky="ew", padx=10, pady=4)
         gc.grid_columnconfigure(1, weight=1)
         ctk.CTkLabel(gc, text="Runtime", font=("",13,"bold"), text_color=T1).grid(row=0, column=0, padx=10, pady=(8,6), sticky="w", columnspan=3)
+        # Parallel jobs = so anh 1 ma gui song song: TU DONG theo (so chrome pool / so ma song song) -> luon lam day pool.
+        # KHONG con chinh tay (tranh dat sai lam chrome ngoi khong hoac over-thread). Tool tu tinh theo thuc te.
         ctk.CTkLabel(gc, text="Parallel jobs:", font=("",11), text_color=T2).grid(row=1, column=0, padx=(10,6), sticky="e")
-        self.ent_conc = ctk.CTkEntry(gc, width=60, height=28, corner_radius=4, font=("",11), fg_color=EN, border_color=BD)
-        self.ent_conc.grid(row=1, column=1, sticky="w")
+        ctk.CTkLabel(gc, text="TU DONG (theo so chrome / so ma)", font=("",10,"italic"), text_color=T3).grid(row=1, column=1, sticky="w")
         ctk.CTkLabel(gc, text="Retry:", font=("",11), text_color=T2).grid(row=2, column=0, padx=(10,6), sticky="e")
         self.ent_retry = ctk.CTkEntry(gc, width=60, height=28, corner_radius=4, font=("",11), fg_color=EN, border_color=BD)
         self.ent_retry.grid(row=2, column=1, sticky="w")
@@ -1558,9 +1606,29 @@ class SettingsPage(ctk.CTkScrollableFrame):
         self.opt_image_backend.grid(row=5, column=1, columnspan=2, sticky="w", pady=(0,4))
         self.sw_music_workspace = ctk.CTkSwitch(gc, text="Music Chrome mo lech man hinh", progress_color=OK, button_color="#FFF", button_hover_color="#EEE")
         self.sw_music_workspace.grid(row=6, column=0, columnspan=3, padx=10, pady=(0,8), sticky="w")
-        ctk.CTkButton(gc, text="Save settings", width=120, height=30, fg_color=AC, hover_color=AC2, text_color="#FFF", font=("",11,"bold"), corner_radius=6, command=self._save).grid(row=7, column=0, columnspan=3, padx=10, pady=(4,10))
+        # AN chrome nha may ANH (mac dinh BAT = an, day cua so ra ngoai man hinh; van ra anh). Tat -> hien cua so.
+        self.sw_img_hide = ctk.CTkSwitch(gc, text="An chrome tao anh (mac dinh bat)", progress_color=OK, button_color="#FFF", button_hover_color="#EEE")
+        self.sw_img_hide.grid(row=7, column=0, columnspan=3, padx=10, pady=(0,8), sticky="w")
+        # NUM TINH CHINH NHA MAY ANH (toi uu toc do, chong 403). Tat ca so nguyen.
+        knob = ctk.CTkFrame(gc, fg_color="transparent")
+        knob.grid(row=8, column=0, columnspan=3, padx=10, pady=(0,6), sticky="w")
+        def _mk_knob(col, label, width=52):
+            ctk.CTkLabel(knob, text=label, font=("",10), text_color=T2).grid(row=0, column=col*2, padx=(0 if col==0 else 10, 4), sticky="e")
+            e = ctk.CTkEntry(knob, width=width, height=28, corner_radius=4, font=("",11), fg_color=EN, border_color=BD, justify="center")
+            e.grid(row=0, column=col*2+1, sticky="w")
+            return e
+        # So chrome = so chrome/slot pool anh chay song song; So ma = so MA (video) chay cung luc (0=khong gioi han);
+        # Cach ly = swap may lan (reCAPTCHA li) thi tam loai acc dot. (Da bo "So anh/acc" & "Nghi giay" - khai thac toi khi fail)
+        self.ent_img_accounts = _mk_knob(0, "So chrome:")
+        self.ent_codes       = _mk_knob(1, "So ma song song:", width=44)
+        self.ent_img_giveup  = _mk_knob(2, "Cach ly:")
+        ctk.CTkButton(gc, text="Save settings", width=120, height=30, fg_color=AC, hover_color=AC2, text_color="#FFF", font=("",11,"bold"), corner_radius=6, command=self._save).grid(row=9, column=0, columnspan=3, padx=10, pady=(4,4))
         self.lbl_saved = ctk.CTkLabel(gc, text="", font=("",9), text_color=OK)
-        self.lbl_saved.grid(row=7, column=0, columnspan=3, padx=10, pady=(0,6))
+        self.lbl_saved.grid(row=10, column=0, columnspan=3, padx=10, pady=(0,4))
+        # QUẢN LÝ account nhà máy ảnh/video (GUI riêng: trạng thái good/bad/dead + Prepare/Probe/Check/Reset)
+        ctk.CTkButton(gc, text="Quan ly account anh/video", width=200, height=30, fg_color=RN,
+                      hover_color="#1565C0", text_color="#FFF", font=("",11,"bold"), corner_radius=6,
+                      command=app._open_pool_manager).grid(row=11, column=0, columnspan=3, padx=10, pady=(0,10))
 
         # Excel AI
         ai = ctk.CTkFrame(self, fg_color=CD, corner_radius=8, border_width=1, border_color=BD)
@@ -2003,8 +2071,6 @@ class SettingsPage(ctk.CTkScrollableFrame):
 
     def load_config(self, cfg):
         self._render()
-        self.ent_conc.delete(0, "end")
-        self.ent_conc.insert(0, str(cfg.get("max_concurrent", 1)))
         self.ent_retry.delete(0, "end")
         self.ent_retry.insert(0, str(cfg.get("retry_count", 3)))
         self.opt_ar.set(cfg.get("flow_aspect_ratio", "landscape"))
@@ -2105,6 +2171,17 @@ class SettingsPage(ctk.CTkScrollableFrame):
             self.sw_use_local_token.select()
         else:
             self.sw_use_local_token.deselect()
+        if cfg.get("image_hide_chrome", True):   # mặc định ẩn
+            self.sw_img_hide.select()
+        else:
+            self.sw_img_hide.deselect()
+        try:
+            for _ent, _key, _def in ((self.ent_img_accounts, "image_pool_accounts", 10),
+                                     (self.ent_codes, "max_concurrent_codes", 0),
+                                     (self.ent_img_giveup, "image_swap_giveup", 3)):
+                _ent.delete(0, "end"); _ent.insert(0, str(cfg.get(_key, _def)))
+        except Exception:
+            pass
         img_mode = str(cfg.get("veo3top_image_mode") or "").strip().lower()
         if img_mode in ("ultra", "veo3top_b_ultra"):
             img_mode = "account"
@@ -2129,10 +2206,7 @@ class SettingsPage(ctk.CTkScrollableFrame):
 
     def _save(self):
         cfg = self.app.config_data
-        try:
-            cfg["max_concurrent"] = max(1, int(self.ent_conc.get().strip() or "1"))
-        except:
-            cfg["max_concurrent"] = 1
+        # max_concurrent (Parallel jobs) giờ TỰ ĐỘNG (worker tính theo pool/số mã) -> không lưu từ GUI nữa
         try:
             cfg["retry_count"] = max(1, int(self.ent_retry.get().strip() or "3"))
         except:
@@ -2147,6 +2221,15 @@ class SettingsPage(ctk.CTkScrollableFrame):
         cfg["flow_auth_mode"] = "extension" if self.opt_flow_auth_mode.get() == "Extension" else "chrome"
         cfg["music_workspace_mode_enabled"] = bool(self.sw_music_workspace.get())
         cfg["use_local_token_for_image"] = bool(self.sw_use_local_token.get())
+        cfg["image_hide_chrome"] = bool(self.sw_img_hide.get())
+        def _knob(ent, key, default, lo, hi):
+            try:
+                cfg[key] = max(lo, min(hi, int((ent.get() or str(default)).strip())))
+            except Exception:
+                cfg[key] = default
+        _knob(self.ent_img_accounts, "image_pool_accounts", 10, 1, 50)
+        _knob(self.ent_codes,       "max_concurrent_codes", 0, 0, 100)   # 0 = khong gioi han so ma
+        _knob(self.ent_img_giveup,  "image_swap_giveup", 3, 1, 20)
         cfg["veo3top_image_mode"] = self.image_backend_options.get(self.opt_image_backend.get().strip(), "")
         selected_provider_label = self.opt_excel_ai_provider.get().strip() or "DeepSeek"
         cfg["excel_ai_provider"] = self.excel_ai_provider_options.get(selected_provider_label, "deepseek")
@@ -2472,6 +2555,39 @@ foreach ($pid in $children) {{
                     (SUITE_ROOT / fn).unlink(missing_ok=True)
                 except Exception:
                     pass
+        # Kill chrome của nhà máy ảnh (profile pool_img_profiles) + tiến trình GUI quản lý (image_pool_gui)
+        # -> không để chrome/GUI orphan khi tắt tool.
+        try:
+            _sp.run(['powershell', '-NoProfile', '-Command',
+                     # TREE-KILL (/T) chrome nhà máy ảnh+video -> KHÔNG mồ côi children thành zombie (chrome rác).
+                     "Get-CimInstance Win32_Process -Filter \"Name='chrome.exe'\" | "
+                     "Where-Object { $_.CommandLine -match 'pool_img_profiles|pool_vid_profiles' } | "
+                     "ForEach-Object { taskkill /F /T /PID $_.ProcessId 2>$null }; "
+                     # kill LUÔN service pool còn sót theo cmdline (phòng khi PID file mất -> service orphan respawn chrome)
+                     "Get-CimInstance Win32_Process | Where-Object { $_.Name -match '^pythonw?\\.exe$' -and $_.CommandLine -and "
+                     "($_.CommandLine -match 'image_pool_browser|video_pool_browser') } | "
+                     "ForEach-Object { taskkill /F /T /PID $_.ProcessId 2>$null }; "
+                     # dọn chrome ZOMBIE (đã chết, không ExecutablePath)
+                     "Get-CimInstance Win32_Process -Filter \"Name='chrome.exe'\" | Where-Object { -not $_.ExecutablePath } | "
+                     "ForEach-Object { Stop-Process -Id $_.ProcessId -Force -EA SilentlyContinue }; "
+                     "Get-CimInstance Win32_Process | Where-Object { $_.Name -match '^pythonw?\\.exe$' -and "
+                     "$_.CommandLine -and $_.CommandLine.ToLowerInvariant().Contains('image_pool_gui') } | "
+                     "ForEach-Object { Stop-Process -Id $_.ProcessId -Force -EA SilentlyContinue }"],
+                    capture_output=True, timeout=25, creationflags=CF)
+        except Exception:
+            pass
+
+    def _open_pool_manager(self):
+        """Mở GUI quản lý account nhà máy ảnh/video (image_pool_gui) — cửa sổ riêng."""
+        import subprocess as _sp, sys as _sys
+        gui = SUITE_ROOT / "veo3top_engine" / "image_pool_gui.py"
+        try:
+            _sp.Popen([_sys.executable, str(gui)], cwd=str(SUITE_ROOT / "veo3top_engine"))
+        except Exception as e:
+            try:
+                from tkinter import messagebox as _mb; _mb.showerror("Lỗi", f"Không mở được quản lý account: {e}")
+            except Exception:
+                pass
 
     def _kill_veo3top_chromes(self):
         """Kill chrome token-factory cua veo3top (PID da dang ky trong .veo3top_pids\\*.pid).
@@ -2627,6 +2743,10 @@ Write-Output $kill.Count
                 with open(p,"r",encoding="utf-8") as f: self.config_data = yaml.safe_load(f) or {}
         except: self.config_data = {}
         self.config_data.setdefault("music_workspace_mode_enabled", True)
+        self.config_data.setdefault("image_hide_chrome", True)   # mặc định ẩn chrome tạo ảnh
+        self.config_data.setdefault("image_pool_accounts", 10)   # mặc định 10 mã chạy song song
+        self.config_data.setdefault("image_swap_giveup", 3)      # swap mấy lượt thì cách ly account đốt
+        self.config_data.setdefault("max_concurrent_codes", 0)   # số mã (video) chạy song song; 0 = không giới hạn
 
     def _save_config(self):
         try:
@@ -4507,7 +4627,9 @@ Get-CimInstance Win32_Process |
         status_map = {str(s.get("url", "")).rstrip("/"): s for s in (self.server_status_cache or [])}
         pairs = []
         _now = _time.time()
-        _should_log_pairs = getattr(self, "_server_pair_debug_enabled", False) and (_now - getattr(self, "_server_pair_debug_last_ts", 0)) >= 30
+        # POOL MODE: server không tạo ảnh/video -> ĐỪNG log "Server unavailable"/"Built pairs" (noise gây hiểu lầm đang rà server)
+        _pm = str(self.config_data.get("generation_backend", "") or "").strip() == "veo3top_b_pool"
+        _should_log_pairs = (not _pm) and getattr(self, "_server_pair_debug_enabled", False) and (_now - getattr(self, "_server_pair_debug_last_ts", 0)) >= 30
         for idx, row in enumerate(self.config_data.get("local_server_list", []) or []):
             if isinstance(row, str):
                 row = {"url": row, "name": f"Sv-{idx+1}", "enabled": True, "flow_account_name": ""}
@@ -5194,9 +5316,7 @@ Get-CimInstance Win32_Process |
         c["flow_project_url"] = c.get("flow_project_url", "") or ""
         if self.project_dir:
             c.update(self._project_topic_runtime_config(Path(self.project_dir), c))
-        # Load concurrent setting
-        try: c["max_concurrent"] = max(1, int(self.pages["cfg"].ent_conc.get().strip() or "1"))
-        except: c["max_concurrent"] = 1
+        # max_concurrent (Parallel jobs) TỰ ĐỘNG trong worker (theo pool/số mã) -> không set từ GUI nữa
         return c
 
     #  regen 
@@ -6194,6 +6314,12 @@ Get-CimInstance Win32_Process |
         except Exception:
             cache_sig = None
 
+        # FAST-SKIP: Excel đang bị GHI (Excel worker) -> ĐỪNG đọc chậm (openpyxl treo ~30s/lần × 3 = ~90s, CHẶN cả
+        # vòng lặp dispatcher). Trả cache cũ (nếu có) hoặc None -> dispatcher bỏ qua NHANH, đọc lại vòng sau khi ghi xong.
+        if self._excel_is_locked(ep):
+            cached = self._project_state_cache.get(cache_key)
+            return cached.get("data") if cached else None
+
         # Retry logic for Excel reading (handle file locking from Excel Worker)
         max_retries = 3
         retry_delay = 2
@@ -7121,9 +7247,16 @@ Get-CimInstance Win32_Process |
         try:
             while not self.queue_stop_requested:
                 did_work = False
-                if (_time.time() - float(getattr(self, "server_status_cache_ts", 0.0) or 0.0)) >= 10:
-                    self._refresh_server_status_sync()
-                pairs = self._get_server_pairs(only_available=True)
+                # POOL MODE (veo3top_b_pool): ảnh + video ĐỀU đi qua pool (image_factory 8789 + video pool), KHÔNG cần
+                # server sv# tạo gì. -> BỎ rà soát server cũ (ping accepting/chrome_ready, chờ bound server) để mã VÀO
+                # LÀM NGAY với account enabled. (Trước đây gate server làm treo tới 5 phút dù pool sẵn sàng.)
+                _pool_mode = str(cfg.get("generation_backend", "") or "").strip() == "veo3top_b_pool"
+                if _pool_mode:
+                    pairs = [p for p in self._get_server_pairs(only_available=False) if p.get("enabled")]
+                else:
+                    if (_time.time() - float(getattr(self, "server_status_cache_ts", 0.0) or 0.0)) >= 10:
+                        self._refresh_server_status_sync()
+                    pairs = self._get_server_pairs(only_available=True)
                 with self.queue_lock:
                     busy_pair_ids = set(self.queue_active_pairs.keys())
                 free_pairs = [p for p in pairs if p["pair_id"] not in busy_pair_ids]
@@ -7218,6 +7351,15 @@ Get-CimInstance Win32_Process |
                             detail = "no_pending_units" if not has_pending else "blocked_by_lock_or_hold"
                         self._queue_ve3_skip_log(pd.name, "not_ready", detail)
                         continue
+                    # GIỚI HẠN SỐ MÃ CHẠY SONG SONG (dồn tài nguyên cho ít mã -> xong nhanh trước).
+                    # max_concurrent_codes = 0 -> không giới hạn (cũ). >0 -> chỉ chạy tối đa N mã cùng lúc.
+                    _maxcodes = int(cfg.get("max_concurrent_codes", 0) or 0)
+                    if _maxcodes > 0:
+                        with self.queue_lock:
+                            _active = sum(1 for _t in self.queue_ve3_tasks.values() if _t.is_alive())
+                        if _active >= _maxcodes and pd.name not in self.queue_active_ve3:
+                            self._queue_ve3_skip_log(pd.name, "max_codes", f"{_active}/{_maxcodes} mã đang chạy")
+                            continue
                     if not free_pairs:
                         self._queue_ve3_skip_log(pd.name, "no_free_pair")
                         continue
