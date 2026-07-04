@@ -150,23 +150,35 @@ def warm_extract(email, chrome_exe, profile_dir, cache, port, log=lambda *_: Non
         if not c.connect():
             log(f"[warm {email}] FAIL=CDP_CONNECT (chrome không kết nối được -> chrome lỗi/CPU nghẽn)")
             return None
-        if not c.wait_ready(35):
-            log(f"[warm {email}] FAIL=FLOW_NOT_READY (Flow không load sau 35s -> account bị Flow chặn / mạng chậm / CPU nghẽn)")
-            return None
-        bearer = c.bearer()
-        if not bearer:
-            log(f"[warm {email}] FAIL=NO_BEARER (profile không có session auth -> cần login lại / login chưa ăn)")
-            return None
+        # wait_ready flaky khi CPU nghẽn -> KHÔNG fatal nữa: chỉ cần lấy được COOKIE là đủ (bearer+project lấy qua HTTP).
+        c.wait_ready(35)
         cookie = fc.labs_cookie_header(c.cookies())
+        if not cookie:
+            log(f"[warm {email}] FAIL=NO_COOKIE (chrome chưa có cookie labs.google -> login chưa ăn / Flow chưa load)")
+            return None
+        # bearer: thử chrome trước, FALLBACK HTTP (bearer_from_cookie) — HTTP tin cậy, không phụ thuộc chrome load.
+        bearer = c.bearer() or fc.bearer_from_cookie(cookie)[0]
+        if not bearer:
+            log(f"[warm {email}] FAIL=NO_BEARER (cả chrome lẫn HTTP-từ-cookie đều fail -> cookie THẬT SỰ chết)")
+            return None
+        # project: HTTP list_projects TRƯỚC (tin cậy, không flaky như chờ trong chrome) -> chrome -> create_project.
+        # ĐÂY là fix "chữa KHÔNG thành" oan: account khỏe (cookie sống, 20 project) nhưng chrome warm flaky -> tưởng bị chặn.
         project = None
-        for _ in range(10):                # chờ project xuất hiện (warm) — như tool chờ 'Du an moi'
-            project = c.first_project_id()
-            if project:
-                break
-            time.sleep(2)
+        try:
+            pl = fc.list_projects(cookie)
+            if pl: project = pl[0]
+        except Exception: pass
         if not project:
-            log(f"[warm {email}] FAIL=NO_PROJECT (không có project sau 20s -> account BỊ FLOW CHẶN hoặc chưa tạo project được)")
-            return None                    # chưa tạo được project -> chưa tạo được ảnh/video
+            for _ in range(5):
+                project = c.first_project_id()
+                if project: break
+                time.sleep(2)
+        if not project:
+            try: project = fc.create_project(cookie)   # tạo mới qua HTTP (self-heal)
+            except Exception: pass
+        if not project:
+            log(f"[warm {email}] FAIL=NO_PROJECT (HTTP list+create + chrome đều không ra -> account THẬT SỰ bị Flow hạn chế)")
+            return None
         d = {"bearer": bearer, "cookie": cookie, "project": project, "email": email, "ts": time.time()}
         try: cache._save(email, d)
         except Exception: pass
