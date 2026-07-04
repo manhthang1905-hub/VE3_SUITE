@@ -161,10 +161,13 @@ def _prepare_one(idx, email, password, totp, probe=False, visible=False, log=pri
     # dải cổng RIÊNG cho manager prepare (40+) -> không trùng image service (0-7) / video (20-27)
     a = P.Account(40 + idx, email, password, totp, profile_base=profile_base)
     login = P._load_login()
-    ok = a.prepare(login, __import__("threading").Semaphore(1), log)
+    # 'Chuẩn bị' thủ công = GIEO cookie -> CHO login account thiếu cookie (allow_login=True). Pool service vẫn NO_LOGIN.
+    ok = a.prepare(login, __import__("threading").Semaphore(1), log, allow_login=True)
     if not ok:
-        _mark(email, sf=sf, state="dead", reason="login/warm fail")
-        a.close(); return "dead"
+        # phân biệt: 'resting' (đã login nhưng project lỗi egress) -> thử lại; else login/warm fail thật -> dead
+        st = a.state if a.state in ("resting", "nologin") else "dead"
+        _mark(email, sf=sf, state=st, reason="da login, project loi egress" if st == "resting" else "login/warm fail")
+        a.close(); return st
     # ready = login+warm OK -> session/cookie SỐNG (đã _save_cookie ra auth_cache) -> đánh dấu cookie=alive
     _mark(email, sf=sf, state="ready", reason="", project=a.project, cookie="alive")
     if probe:
@@ -186,15 +189,16 @@ def _prepare_one(idx, email, password, totp, probe=False, visible=False, log=pri
     a.close(); return "ready"
 
 
-def select_todo(n, sf=None, acct_loader=None):
-    """Chọn n account chưa sẵn (bỏ ready/good + đang cooldown) để chuẩn bị."""
+def select_todo(n=None, sf=None, acct_loader=None):
+    """Chọn account chưa sẵn (bỏ ready/good + đang cooldown) để chuẩn bị.
+    n=None (mặc định) -> LẤY HẾT: chuẩn bị MỌI account còn thiếu cookie/session. n=số -> giới hạn (cũ)."""
     accts = (acct_loader or P.load_gmail_accounts)(); st = _load_state(sf); todo = []
     for a in accts:
         d = st.get(a["email"], {})
         if d.get("state") in ("ready", "good"): continue
         if d.get("state") in ("bad", "dead") and d.get("until", 0) > time.time(): continue
         todo.append(a)
-        if len(todo) >= n: break
+        if n is not None and len(todo) >= n: break
     return todo
 
 
@@ -232,9 +236,9 @@ def prepare_parallel(todo, probe=False, concurrency=None, log=print, on_done=Non
     for t in ths: t.join()
 
 
-def cmd_prepare(n, probe=False):
+def cmd_prepare(n=None, probe=False):
     todo = select_todo(n)
-    print(f"Chuẩn bị {len(todo)} account SONG SONG {min(PREP_CONCURRENCY, len(todo) or 1)} chrome (probe={probe})...", flush=True)
+    print(f"Chuẩn bị {len(todo)} account (thiếu cookie) SONG SONG {min(PREP_CONCURRENCY, len(todo) or 1)} chrome (probe={probe})...", flush=True)
     prepare_parallel(todo, probe=probe, log=lambda m: print(m, flush=True))
     print("Xong. Chạy 'status' để xem tổng quan.", flush=True)
 
@@ -317,7 +321,7 @@ def main():
     ap.add_argument("--probe", action="store_true")
     a = ap.parse_args()
     if a.cmd == "status": cmd_status()
-    elif a.cmd == "prepare": cmd_prepare(int(a.arg or 10), probe=a.probe)
+    elif a.cmd == "prepare": cmd_prepare(int(a.arg) if a.arg else None, probe=a.probe)
     elif a.cmd == "check": cmd_check(a.arg)
     elif a.cmd == "reset": cmd_reset(a.arg or "all")
     elif a.cmd == "probe": cmd_probe(a.arg)

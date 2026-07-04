@@ -32,7 +32,7 @@ except Exception:
 
 SUITE = os.path.dirname(_HERE)
 GPM = os.path.join(SUITE, "tools", "gmail_profile_manager")
-GPM_DB = os.path.join(GPM, "config", "accounts.db")
+GPM_DB = os.path.join(SUITE, "accounts", "accounts.db")   # DB account GOM VỀ 1 CHỖ: D:\VE3_SUITE\accounts\ (dễ quản lý)
 POOL_PROFILES = os.path.join(GPM, "config", "pool_img_profiles")       # profile ẢNH
 POOL_VID_PROFILES = os.path.join(GPM, "config", "pool_vid_profiles")   # profile VIDEO (tách riêng - account có thể trùng email)
 STATE_FILE = os.path.join(SUITE, ".veo3top_imgpool_state.json")
@@ -45,10 +45,14 @@ LOGIN_CONCURRENCY = int(os.environ.get("VEO3TOP_IMG_LOGIN_CONCURRENCY", "3") or 
 # -> gãy hết -> DEAD). User login riêng ở GUI (rải chậm) để profile có cookie; pool chỉ MỞ profile đã login sẵn +
 # generate. Account chưa có cookie -> đánh dấu 'nologin' (bỏ qua nhẹ, KHÔNG dead, thử lại sau khi user login).
 IMG_NO_LOGIN = os.environ.get("VEO3TOP_IMG_NO_LOGIN", "1") == "1"
+# POOL TỰ LOGIN+WARM account thiếu cookie (TỰ PHỤC HỒI account bị out sau thời gian). Login đi qua IPv6 (mỗi account
+# 1 IP khác) + giới hạn LOGIN_CONCURRENCY -> giảm 'cùng 1 IP nhiều login' -> đỡ reCAPTCHA challenge. 0 = tắt (chỉ reuse
+# cookie như cũ, nếu thấy login bị challenge hàng loạt thì tắt). User (2026-07-03): muốn pool chạy HẾT account, tự hồi.
+POOL_LOGIN = os.environ.get("VEO3TOP_IMG_POOL_LOGIN", "1") == "1"
 NOLOGIN_COOLDOWN = int(os.environ.get("VEO3TOP_IMG_NOLOGIN_COOLDOWN", "1800") or "1800")  # 30': account cookie-cũ/session-chết (qua được filter nhưng prepare fail) -> nghỉ lâu, đỡ phí slot churn. User re-login GUI + restart để nạp lại
 # ẢNH có NHIỀU account -> retry reCAPTCHA VỪA PHẢI rồi ĐỔI account (tận dụng số đông), khác video (ít acc -> retry nhiều).
 GEN_ATTEMPTS = int(os.environ.get("VEO3TOP_IMG_GEN_ATTEMPTS", "2") or "2")   # retry token/1 account/1 job: 403 là PER-ACCOUNT (retry cùng account 403 y hệt) -> chỉ 2 lần rồi ĐỔI account tươi (nhanh hơn nhiều so 5)
-GEN_TIMEOUT_MS = int(os.environ.get("VEO3TOP_IMG_GEN_TIMEOUT_MS", "180000") or "180000")  # 3 PHÚT: request tạo ảnh ĐỒNG BỘ (chờ Google tạo XONG ảnh mới trả về). Tạo ảnh lâu -> để rộng cho AN TOÀN, khỏi cắt oan. 403 vẫn trả nhanh (~3s) nên không chậm phát hiện account đốt.
+GEN_TIMEOUT_MS = int(os.environ.get("VEO3TOP_IMG_GEN_TIMEOUT_MS", "120000") or "120000")  # 2 PHÚT: ảnh THẬT tạo xong 30-90s (đo thực tế). >120s = IPv6 POST TREO CHẾT (đo: ~38% request hang, mỗi cái ngốn trọn slot). Cắt ở 120s (còn đệm >90s cho ảnh chậm) -> nhả slot sớm hơn 60s/lần hang, hồi ~15% công suất. Hạ tiếp nếu ảnh thật luôn <90s.
 # GIÃN NHỊP (như FlowKit/server có delay giữa request): bắn dồn -> reCAPTCHA UNUSUAL_ACTIVITY nhanh. Giãn ~4s giữa
 # các lần tạo trên CÙNG account -> account "sống" lâu hơn, 403 ít hơn (đã học từ 2 tool + test sustained).
 IMG_PACING = float(os.environ.get("VEO3TOP_IMG_PACING", "4.0") or "4.0")
@@ -68,7 +72,12 @@ DEAD_COOLDOWN = int(os.environ.get("VEO3TOP_IMG_DEAD_COOLDOWN", "10800") or "108
 RECAPTCHA_REST = int(os.environ.get("VEO3TOP_IMG_RECAPTCHA_REST", "600") or "600")   # 10' nghỉ hồi điểm reCAPTCHA (account CHƯA từng ra ảnh)
 # reCAPTCHA bimodal: account ĐÃ ra ảnh -> "ấm", tiếp tục ra được. Nên account tốt (đã win) chỉ nghỉ NGẮN rồi quay lại
 # khai thác tiếp (giữ winner chạy liên tục); account lạnh (chưa win) mới nghỉ dài RECAPTCHA_REST.
-GOOD_REST = int(os.environ.get("VEO3TOP_IMG_GOOD_REST", "120") or "120")              # 2' cho account đã ra ảnh
+GOOD_REST = int(os.environ.get("VEO3TOP_IMG_GOOD_REST", "600") or "600")              # winner bị reCAPTCHA lì = ĐÃ bị flag -> nghỉ THẬT (10') mới hồi, KHÔNG lôi lại sau 2' (2' -> quay lại vẫn flag -> đốt sâu)
+# TRẦN ẢNH/ACCOUNT (tái lập, có kiểm soát): fresh account ~15 ảnh RỒI đâm vách 403. Đặt trần DƯỚI vách (12) -> account
+# dừng khi còn "nông" (chưa đốt sâu) -> hồi NHANH. Đủ trần -> xoay account TƯƠI vào slot + account cũ nghỉ CAP_REST.
+# => 6-10 browser (máy nhẹ) nhưng LUÂN PHIÊN qua cả ~100 account, mỗi cái làm nhẹ. 0 = TẮT trần (khai thác tới lì như cũ).
+MAX_PER_ACCT = int(os.environ.get("VEO3TOP_IMG_MAX_PER_ACCT", "12") or "12")
+CAP_REST = int(os.environ.get("VEO3TOP_IMG_CAP_REST", "1800") or "1800")   # 30': account đủ trần nghỉ dài hồi reputation (nông nên hồi nhanh); 119 acc / 6-10 slot đủ nuôi, không cạn pool
 # HÂM NÓNG PHIÊN (như veo3top phiên WebView2 ấm): pool mở chrome LẠNH rồi mint ngay -> điểm reCAPTCHA thấp -> cold-403.
 # Warm-up: di chuột (CDP trusted) + cuộn + prime grecaptcha + đợi vài giây -> phiên trông 'người thật/đã dùng' -> điểm CAO hơn.
 IMG_WARMUP = os.environ.get("VEO3TOP_IMG_WARMUP", "1") == "1"
@@ -179,6 +188,7 @@ class Account:
         self.model_wins = {}; self.model_rest = {}
         self.last_swap = 0.0   # lần gần nhất bị đổi lượt (reCAPTCHA lì) -> xoay về cuối ưu tiên, KHÔNG nghỉ cứng
         self.swaps = 0         # số lượt swap LIÊN TIẾP (reCAPTCHA lì); >= SWAP_GIVEUP -> cách ly; ra ảnh -> reset 0
+        self.stint = 0         # số ảnh RA trong LƯỢT active hiện tại (reset mỗi lần account được bốc lại); >= MAX_PER_ACCT -> xoay + nghỉ dài
         self.ref_cache = {}    # hash(rawImageBytes) -> media name (đã upload cho account NÀY) -> khỏi upload lại
         self._port = None
 
@@ -208,7 +218,11 @@ class Account:
             self._start_ipv6()
             proxy = self.ipv6.proxy_url() if self.ipv6 else None
         port = 9500 + self.idx
-        c = ChromeCDP(_CHROME, self.profile, port, offscreen=IMG_HIDE, log=lambda *_: None, proxy=proxy)
+        # ẨN/HIỆN đọc ĐỘNG theo nút "An Chrome" của GUI (env VEO3TOP_HIDE_CHROME: "1"=ẩn/"0"=hiện); chưa set -> IMG_HIDE.
+        # (Trước đây kẹt ở hằng IMG_HIDE lúc import -> bấm nút vô tác dụng.)
+        _he = os.environ.get("VEO3TOP_HIDE_CHROME")
+        _offscreen = IMG_HIDE if _he is None else (_he == "1")
+        c = ChromeCDP(_CHROME, self.profile, port, offscreen=_offscreen, log=lambda *_: None, proxy=proxy)
         try:
             if not (c.connect(launch_timeout=45) and c.wait_ready(35, verify_token=False)):
                 try: c.close(kill=True)
@@ -276,8 +290,11 @@ class Account:
         except Exception:
             pass
 
-    def prepare(self, login_fn, login_sem, log):
+    def prepare(self, login_fn, login_sem, log, allow_login=False):
         """CHUẨN BỊ account: reuse session sẵn (như cookie video) -> ready; chưa có -> login+warm+tạo project.
+        allow_login=True: CHO login+warm account thiếu cookie (gieo/hồi session). Dùng ở 'Chuẩn bị' manager VÀ pool
+        service (POOL_LOGIN=1) để TỰ PHỤC HỒI account bị out. Login đi qua IPv6 + LOGIN_CONCURRENCY -> đỡ challenge.
+        allow_login=False (POOL_LOGIN=0): chỉ reuse cookie (như cũ), account thiếu cookie -> nologin (bỏ qua nhẹ).
         Trả True nếu ready (có project). login nặng nên đi qua semaphore (giới hạn đồng thời)."""
         os.makedirs(self.profile, exist_ok=True)
         # 1) thử dùng session SẴN trong profile (nhanh, không login) — giống video reuse cookie
@@ -312,7 +329,7 @@ class Account:
             except Exception: pass
         # CHỈ-REUSE-COOKIE: chưa có session sẵn -> KHÔNG tự login (tránh Google reCAPTCHA-challenge khi login hàng
         # loạt cùng 1 IP). Đánh dấu 'nologin' để bỏ qua nhẹ + thử lại sau (user login ở GUI xong sẽ reuse được).
-        if IMG_NO_LOGIN:
+        if IMG_NO_LOGIN and not allow_login:
             self.state = "nologin"
             log(f"⏭️ {self.email}: chưa có cookie đăng nhập -> bỏ qua (hãy login ở GUI để pool reuse)")
             return False
@@ -321,9 +338,19 @@ class Account:
             self.state = "dead"; return False
         with login_sem:
             self._kill_profile_chrome(); time.sleep(2)
+            # LOGIN QUA IPv6 (mỗi account 1 IP khác -> giảm 'cùng 1 IP nhiều login' -> đỡ reCAPTCHA challenge khi hồi
+            # hàng loạt). IMG_NATIVE=1 -> IP máy. login_google_chrome cần scheme socks5:// (đổi từ socks5h).
+            _pxy = ""
+            if not IMG_NATIVE:
+                try:
+                    self._start_ipv6()
+                    if self.ipv6:
+                        _pxy = self.ipv6.proxy_url().replace("socks5h://", "socks5://")
+                except Exception:
+                    _pxy = ""
             try:
                 ok = login_fn({"id": self.email, "password": self.password, "totp_secret": self.totp},
-                              chrome_portable=_CHROME, profile_dir=self.profile, worker_id=200 + self.idx, proxy_arg="")
+                              chrome_portable=_CHROME, profile_dir=self.profile, worker_id=200 + self.idx, proxy_arg=_pxy)
             except Exception as e:
                 log(f"{self.email}: login lỗi {e}"); ok = False
             if not ok:
@@ -332,14 +359,26 @@ class Account:
         c = self._open_cdp()
         if not c:
             self.state = "dead"; return False
+        # ĐỢI session load THẬT (như nhánh reuse: email() OK) TRƯỚC khi tạo project — chrome mới mở sau login chưa có
+        # bearer ngay -> fresh_project() gọi sớm sẽ FAIL (đó là lý do 'không tạo được project' hàng loạt).
+        for _t in range(6):
+            try:
+                if c.email(): break
+            except Exception: pass
+            time.sleep(2)
+        # WARM VÀO TOOL: account vừa login còn kẹt ở landing 'Create with Google Flow' -> click vào + đợi thấy nút
+        # 'Dự án mới' (chỉ cần THẤY, không click). Chưa vào tool thì createProject API luôn FAIL -> DEAD oan. (Bước
+        # warm này login_google_chrome có nhưng ở chrome RIÊNG đã đóng; chrome mới của prepare phải warm lại.)
+        try: c.warm_flow()
+        except Exception: pass
         try:
-            self.project = c.first_project_id()
-        except Exception:
+            self.project = c.fresh_project()   # TẠO project mới (như nhánh reuse) — account vừa login thường CHƯA có
+        except Exception:                       # project -> first_project_id() trả None -> DEAD oan. fresh_project tạo qua API.
             self.project = None
         if not self.project:
             try: c.close(kill=True)
             except Exception: pass
-            self.state = "dead"; log(f"✗ {self.email}: không project sau warm -> DEAD"); return False
+            self.state = "dead"; log(f"✗ {self.email}: không tạo được project sau login (egress?) -> DEAD"); return False
         self.cdp = c; self.state = "ready"
         self._save_cookie()   # lưu cookie+bearer ra auth_cache (như veo3top) -> tái dùng
         log(f"✅ {self.email}: login+warm xong (project {self.project[:8]}, egress {'ipv6' if self.ipv6 else 'ipmay'}) -> ready")
@@ -397,7 +436,7 @@ class Account:
         js = r'''(async()=>{
           try{
             const proj=%s, SITE=%s, MODEL=%s, ASPECT=%s, SEED=%d, PROMPT=%s, INPUTS=%s;
-            const _sac=new AbortController(); const _sto=setTimeout(()=>_sac.abort(),12000);  // session fetch timeout 12s
+            const _sac=new AbortController(); const _sto=setTimeout(()=>_sac.abort('ABORT_SESSION_12s'),12000);  // session fetch timeout 12s
             let sess; try{ sess=await (await fetch('/fx/api/auth/session',{credentials:'include',signal:_sac.signal})).json(); } finally{ clearTimeout(_sto); }
             if(!sess||!sess.access_token) return {k:'auth'};
             const tok=await grecaptcha.enterprise.execute(SITE,{action:'IMAGE_GENERATION'});
@@ -408,16 +447,17 @@ class Account:
             const body={clientContext:ctx,
               mediaGenerationContext:{batchId:(crypto.randomUUID?crypto.randomUUID():'b-'+Date.now())},
               useNewMedia:true,requests:[req]};
-            const ac=new AbortController(); const _to=setTimeout(()=>ac.abort(),%d);  // TIMEOUT: IPv6 treo -> huy nhanh, nha slot (mac dinh 18s)
+            const ac=new AbortController(); const _to=setTimeout(()=>ac.abort('ABORT_GEN_'+(%d/1000)+'s'),%d);  // TIMEOUT tao anh (GEN_TIMEOUT_MS): IPv6 treo that -> huy, nha slot
+            const _t0=Date.now();
             let r; try{ r=await fetch('https://aisandbox-pa.googleapis.com/v1/projects/'+proj+'/flowMedia:batchGenerateImages',
               {method:'POST',headers:{'Content-Type':'text/plain;charset=UTF-8','Authorization':'Bearer '+sess.access_token},body:JSON.stringify(body),signal:ac.signal}); }
             finally{ clearTimeout(_to); }
             const status=r.status; const txt=await r.text(); let j=null; try{j=JSON.parse(txt);}catch(e){}
-            return {status:status, body:txt.slice(0,300), json:j};
+            return {status:status, body:txt.slice(0,300), json:j, ms:Date.now()-_t0};
           }catch(e){return {k:'jserr', body:String(e)};}
         })()''' % (json.dumps(proj), json.dumps(SITE_KEY), json.dumps(model),
                    json.dumps(aspect), int(seed), json.dumps(prompt), json.dumps(image_inputs or []),
-                   GEN_TIMEOUT_MS)
+                   GEN_TIMEOUT_MS, GEN_TIMEOUT_MS)
         try:
             res = self.cdp.ev(js, to=GEN_TIMEOUT_MS + 15000)   # CDP eval phải chờ LÂU HƠN fetch (2') + đệm, kẻo cắt oan ảnh đang tạo
         except Exception as e:
@@ -434,7 +474,7 @@ class Account:
                 gi = (m.get("image") or {}).get("generatedImage") or {}
                 fife = gi.get("fifeUrl"); name = m.get("name") or gi.get("mediaId")
                 if fife or gi.get("encodedImage"):
-                    return "ok", {"name": name, "fife": fife, "b64": gi.get("encodedImage"), "seed": gi.get("seed")}
+                    return "ok", {"name": name, "fife": fife, "b64": gi.get("encodedImage"), "seed": gi.get("seed"), "ms": res.get("ms")}
             return "retry", {"err": "200 no image"}
         if status == 401:
             return "auth", {}
@@ -641,13 +681,15 @@ class ImagePoolBrowser:
                 time.sleep(5); continue
             try:
                 a.idx = slot                      # port/IPv6 theo slot (cố định số lượng)
-                ok = a.prepare(self._login, self.login_sem, self.log)
+                # POOL_LOGIN: account thiếu cookie -> TỰ login+warm (qua IPv6) để tự phục hồi; tắt -> chỉ reuse cookie.
+                ok = a.prepare(self._login, self.login_sem, self.log, allow_login=POOL_LOGIN)
                 if not ok:
                     reason = "chưa login (reuse cookie)" if a.state == "nologin" else "login/warm fail"
                     self._mark(a.email, state=a.state, reason=reason)
                     a.close(); continue
                 self._mark(a.email, state="ready", project=a.project, cookie="alive")
-                # SẢN XUẤT tới khi account BẮT ĐẦU FAIL (reCAPTCHA lì) — KHAI THÁC TỐI ĐA, KHÔNG xoay theo số lượng
+                a.stint = 0                       # lượt active mới -> đếm lại số ảnh cho trần MAX_PER_ACCT
+                # SẢN XUẤT tới khi account đủ trần (MAX_PER_ACCT) hoặc BẮT ĐẦU FAIL (reCAPTCHA lì) -> xoay account khác
                 while self._running and a.state == "ready":
                     try:
                         job = self.q.get(timeout=3)
@@ -665,19 +707,25 @@ class ImagePoolBrowser:
                         outcome = ("fail", f"exception: {e}")
                     a.busy = False
                     if outcome == "success":
-                        a.wins += 1; a.swaps = 0   # ra ảnh -> reset swap counter (khai thác tiếp, không đếm để nghỉ)
+                        a.wins += 1; a.swaps = 0; a.stint += 1   # ra ảnh -> reset swap counter + đếm ảnh lượt này (trần)
                         if not a.good:
                             # LƯU wins vào state -> NHỚ account từng ra ảnh (qua cả restart) để ưu tiên bốc trước (winner roster)
                             a.good = True; self._mark(a.email, state="good", project=a.project, cookie="alive", wins=a.wins)
                         with self._clock: self.total_done += 1
                         _r = job.get("_result") or (None, {}, "")
                         _info = _r[1] if len(_r) > 1 else {}
+                        _pms = _info.get('ms'); _psec = f"{_pms/1000:.0f}s" if isinstance(_pms, (int, float)) else "?"
                         self.log(f"🖼️ RA ẢNH: {a.email} [{os.path.basename(job.get('out_path','?'))}] "
-                                 f"{_info.get('bytes','?')} bytes model={_info.get('model','?')} "
-                                 f"(tổng {self.total_done} ảnh)")
+                                 f"{_info.get('bytes','?')} bytes model={_info.get('model','?')} POST={_psec} "
+                                 f"(tổng {self.total_done} ảnh, lượt {a.stint})")
                         job["_event"].set()
-                        # KHAI THÁC TỐI ĐA: account tốt ra ảnh LIÊN TỤC, KHÔNG đổi/nghỉ theo số lượng. Chỉ khi account
-                        # BẮT ĐẦU FAIL (reCAPTCHA lì -> swap) và lì đủ SWAP_GIVEUP lượt mới cách ly -> xoay account khác.
+                        # TRẦN: đủ MAX_PER_ACCT ảnh trong lượt -> DỪNG khi còn "nông" (chưa đốt sâu) -> xoay account TƯƠI vào
+                        # slot, account này nghỉ CAP_REST hồi reputation. (0 = tắt trần: khai thác tới reCAPTCHA lì như cũ.)
+                        if MAX_PER_ACCT > 0 and a.stint >= MAX_PER_ACCT:
+                            a.state = "resting"       # break produce-loop -> slot bốc account khác
+                            self._mark(a.email, state="resting", until=int(time.time()) + CAP_REST,
+                                       reason=f"đủ trần {a.stint} ảnh - nghỉ {CAP_REST}s hồi (xoay account tươi)")
+                            self.log(f"🔄 {a.email}: đủ trần {a.stint} ảnh -> nghỉ {CAP_REST}s hồi, slot bốc account tươi")
                     elif outcome == "retry_soft":
                         a.fails += 1; self.q.put(job)          # trả job về hàng đợi (account/slot khác lo)
                     elif isinstance(outcome, tuple) and outcome[0] == "reauth":
@@ -762,7 +810,7 @@ class ImagePoolBrowser:
                         else:
                             import base64; b = base64.b64decode(data["b64"]); open(op, "wb").write(b); n = len(b)
                         job["_result"] = (True, {"media_name": data.get("name"), "bytes": n, "seed": data.get("seed"),
-                                                 "account": a.email, "model": model,
+                                                 "account": a.email, "model": model, "ms": data.get("ms"),
                                                  "egress": "ipv6" if a.ipv6 else "ipmay"}, "")
                         self._note_gen(True)        # ra ảnh -> reset circuit-breaker (quota đã mở/còn)
                         return "success"

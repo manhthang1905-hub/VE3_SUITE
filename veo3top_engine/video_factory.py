@@ -192,9 +192,14 @@ class VideoFactory:
 
     def _start_rest(self):
         self.log(f"EGRESS: {[e[0] for e in self.egress]}")
-        # 3) token factory chung (chrome trắng, account-agnostic) — Fake DNS Google bật sẵn (cdp_chrome)
+        # 3) token factory chung (chrome trắng, account-agnostic).
+        #    CÔNG THỨC THẮNG VIDEO (đã ra 200 — xem memory video-token-winning-recipe):
+        #    ipv6=True  -> mỗi chrome mint đi ra IPv6 pool tươi (budget reCAPTCHA riêng, né TOO_MUCH_TRAFFIC IP máy)
+        #    clean=True -> cờ CLEAN (bỏ --test-type/--disable-gpu -> né UNUSUAL_ACTIVITY, GPU thật)
+        #    visible=True -> cửa sổ hiện (khớp lần test ra 200). Chrome tươi + IP tươi xoay liên tục = kiểu veo3top.
         self.factory = tf.get_factory(mode="blank", n_chromes=self.token_chromes,
-                                      base_port=self.token_port, log=self.log)
+                                      base_port=self.token_port, log=self.log,
+                                      ipv6=True, clean=True, visible=True)
         if not (self.factory and self.factory._started):
             self.log("CẢNH BÁO: token factory chưa sẵn sàng")
         # 4) account workers — NHIỀU LUỒNG/ACCOUNT (như veo3top-b 7-20 luồng/tk, KHÔNG phải 1!)
@@ -270,7 +275,7 @@ class VideoFactory:
                                        aspect=aspect, reference_media_id=media_id)
             # KHÔNG rate_coordinator machine-wide ở đây: mỗi account có IPv6 RIÊNG -> giới hạn per-IP độc lập,
             # ghìm chung sẽ bóp cổ chai 70 luồng. 429 per-IP (nếu có) đã xử lý ở nhánh ratelimit (xoay IP).
-            kind, data = fc.generate(bearer, payload, url=fc.GEN_I2V, proxy=eproxy)
+            kind, data = fc.generate(bearer, payload, url=fc.GEN_I2V, proxy=eproxy, cookie=cookie)
             if kind == "ok":
                 account.note_egress_win(ename)
                 op = (fc.operation_names(data) or [None])[0]

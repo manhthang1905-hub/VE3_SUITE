@@ -116,3 +116,8 @@ veo3top_engine/vid_accounts.txt
 .veo3top_imgpool_state.json.bak
 .veo3top_pool.log
 .veo3top_imgpool.log
+
+# --- them boi session video-fix 2026-07-04: KHONG push credentials/state ---
+accounts/
+.veo3top_vidpool_state.json
+.veo3top_imgpool_state.json.bak

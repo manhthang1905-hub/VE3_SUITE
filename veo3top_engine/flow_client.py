@@ -7,6 +7,7 @@ QUAN TRỌNG: dùng curl_cffi impersonate="chrome" để có TLS/HTTP fingerprin
 curl_cffi-chrome thì qua (đã kiểm chứng trên IP .205.239). Đây là điều tool làm bằng native Schannel.
 """
 import os, json, time
+import uuid as _uuid
 from curl_cffi import requests as _cffi
 
 IMPERSONATE = "chrome"   # fingerprint Chrome mới nhất curl_cffi hỗ trợ
@@ -28,8 +29,9 @@ def _get(url, headers=None, timeout=60, proxy=None):
 
 KEY = "AIzaSyBtrm0o5ab1c-Ec8ZuLcGt3oJAA5VWt3pY"
 BASE = "https://aisandbox-pa.googleapis.com/v1"
-GEN_T2V = f"{BASE}/video:batchAsyncGenerateVideoText?key={KEY}"
-GEN_I2V = f"{BASE}/video:batchAsyncGenerateVideoReferenceImages?key={KEY}"
+# FORMAT THẮNG (đã ra 200): submit KHÔNG ?key (auth bằng bearer+Cookie). ?key + thiếu Cookie -> reCAPTCHA UNUSUAL.
+GEN_T2V = f"{BASE}/video:batchAsyncGenerateVideoText"
+GEN_I2V = f"{BASE}/video:batchAsyncGenerateVideoReferenceImages"
 CHECK   = f"{BASE}/video:batchCheckAsyncVideoGenerationStatus?key={KEY}"
 PROXY = None                  # upload/poll/download/khác: DIRECT = IP máy (nhanh, không WARP)
 DIRECT_IFACE = "0.0.0.0"      # ép IPv4 máy (máy ưu tiên IPv6 -> POST lớn upload bị MTU reset)
@@ -50,9 +52,20 @@ MODEL_T2V_QUALITY = "veo_3_1_t2v"
 MODEL_I2V_LITE = "veo_3_1_r2v_lite_low_priority"
 
 
-def _headers(bearer):
-    return {"Authorization": f"Bearer {bearer}", "Content-Type": "text/plain;charset=UTF-8",
-            "Origin": "https://labs.google", "Referer": "https://labs.google/", "User-Agent": UA}
+def _headers(bearer, cookie=None):
+    # Khớp CHÍNH XÁC request Chrome đã ra 200. QUAN TRỌNG: KHÔNG ép User-Agent — để curl_cffi impersonate='chrome'
+    # tự set UA + Sec-Ch-Ua + TLS NHẤT QUÁN cùng 1 phiên bản. Ép UA=148 trong khi TLS/hints=149 -> LỆCH -> reCAPTCHA
+    # chấm UNUSUAL (đã đo: có UA ép -> 0%; bỏ UA ép + thêm client-hints -> qua). Cookie buộc request vào session thật.
+    h = {"Authorization": f"Bearer {bearer}", "Content-Type": "text/plain;charset=UTF-8",
+         "Accept": "*/*", "Accept-Language": "en-US,vi;q=0.9",
+         "Origin": "https://labs.google", "Referer": "https://labs.google/",
+         "Priority": "u=1, i", "X-Client-Data": "CLuQywE=",
+         "Sec-Ch-Ua": '"Chromium";v="149", "Google Chrome";v="149", "Not_A Brand";v="24"',
+         "Sec-Ch-Ua-Mobile": "?0", "Sec-Ch-Ua-Platform": '"Windows"',
+         "Sec-Fetch-Dest": "empty", "Sec-Fetch-Mode": "cors", "Sec-Fetch-Site": "cross-site"}
+    if cookie:
+        h["Cookie"] = cookie
+    return h
 
 
 def upload_image(bearer, project_id, session_id, image_path, aspect=None, timeout=120):
@@ -77,16 +90,21 @@ def build_payload(prompt, project_id, recaptcha_token, seed, aspect="VIDEO_ASPEC
                   model=None, reference_media_id=None):
     if model is None:
         model = MODEL_I2V_LITE if reference_media_id else MODEL_T2V_LITE
-    req = {"aspectRatio": aspect, "seed": seed, "textInput": {"prompt": prompt}, "videoModelKey": model}
+    # FORMAT MỚI (đã soi request thật + ra 200): structuredPrompt + mediaGenerationContext + useV2ModelConfig.
+    req = {"aspectRatio": aspect, "seed": seed,
+           "textInput": {"structuredPrompt": {"parts": [{"text": prompt}]}},
+           "videoModelKey": model, "metadata": {}}
     if reference_media_id:
         req["referenceImages"] = [{"imageUsageType": "IMAGE_USAGE_TYPE_ASSET", "mediaId": reference_media_id}]
     return {
+        "mediaGenerationContext": {"batchId": str(_uuid.uuid4()), "audioFailurePreference": "BLOCK_SILENCED_VIDEOS"},
         "clientContext": {
             "sessionId": f";{int(time.time()*1000)}", "projectId": project_id,
             "tool": "PINHOLE", "userPaygateTier": "PAYGATE_TIER_TWO",
             "recaptchaContext": {"applicationType": "RECAPTCHA_APPLICATION_TYPE_WEB", "token": recaptcha_token},
         },
         "requests": [req],
+        "useV2ModelConfig": True,
     }
 
 
@@ -125,12 +143,13 @@ def classify(resp):
 
 _USE_GEN_PROXY = object()   # sentinel: caller không truyền proxy -> dùng GEN_PROXY (hành vi cũ)
 
-def generate(bearer, payload, url=GEN_T2V, timeout=120, proxy=_USE_GEN_PROXY):
+def generate(bearer, payload, url=GEN_T2V, timeout=120, proxy=_USE_GEN_PROXY, cookie=None):
     # generate = gửi recaptcha token -> chỗ bị 429.
     # proxy: bỏ trống -> GEN_PROXY (mặc định IPv6). Truyền None -> DIRECT IPv4 máy. Truyền url -> WARP/khác.
     # -> cho phép EGRESS LADDER: thử ip máy(None) -> WARP(socks5://127.0.0.1:40000) -> IPv6 pool.
+    # cookie: BẮT BUỘC để reCAPTCHA điểm cao (đã đo: thiếu Cookie -> UNUSUAL dù token tốt).
     p = GEN_PROXY if proxy is _USE_GEN_PROXY else proxy
-    r = _post(url, _headers(bearer), json.dumps(payload), timeout=timeout, proxy=p)
+    r = _post(url, _headers(bearer, cookie), json.dumps(payload), timeout=timeout, proxy=p)
     return classify(r)
 
 

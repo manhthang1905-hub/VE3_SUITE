@@ -4,7 +4,38 @@
 > sang FlowKit (Python, `D:\VE3_SUITE`) để đạt ~1000 video/h.
 > File này là log phát hiện để session sau có dữ liệu. Cập nhật ngày 2026-06-30.
 
-## TL;DR — Công thức 1000 video/h
+---
+# ⭐ UPDATE 2026-07-04 — ĐÃ RA VIDEO THẬT (T2V 8/8=100%, I2V 5/6=83%). ĐỌC MỤC NÀY TRƯỚC.
+
+> Sau 250+ lần 403, đã tìm ĐÚNG cơ chế + tạo video thật từ VE3_SUITE. Đây là **bản khôi phục**: nếu ai sửa
+> nhầm làm video 403/UNUSUAL trở lại, làm đúng 6 điều dưới là chạy lại. Mỗi điều đã **A/B kiểm chứng**.
+
+## Công thức thắng VIDEO (bắt buộc ĐỦ 6, thiếu 1 là dính 403)
+1. **Chrome MINT token: cờ CLEAN** (`VEO3TOP_CLEAN_FLAGS=1`). Cờ bot (`--test-type/--disable-gpu/AutomationControlled/--no-sandbox`) → `PUBLIC_ERROR_UNUSUAL_ACTIVITY`. → `cdp_chrome.py` block `if clean:` (dòng ~92).
+2. **IPv6 pool tươi cho chrome mint** (ChromeCDP proxy=IPv6 socks). IP máy bị vắt → `..._TOO_MUCH_TRAFFIC`. → mỗi `_Minter` tự dựng `IPv6Transport` (`token_factory._ensure_ipv6`).
+3. **Chrome tươi + warm-up**: chrome mint chai sau vài token (persistent 1 chrome = 0/30). Phải recycle chrome + **đốt 1 token đầu bỏ đi** (mint đầu hay UNUSUAL, mint sau mới điểm cao). → `_Minter._open` warm-up throwaway + rotate IPv6 mỗi recycle.
+4. **User-Agent: KHÔNG ép thủ công.** Ép UA=Chrome/148 trong khi curl_cffi impersonate + Sec-Ch-Ua=149 → LỆCH → UNUSUAL. **A/B: có ép UA = 0/10; bỏ ép + thêm Sec-Ch-Ua/Accept-Language/Priority = qua.** → `flow_client._headers` (KHÔNG set `User-Agent`, để curl_cffi tự lo).
+5. **Submit qua IPv6 (account.ipv6), KHÔNG ép IPv4 máy.** `fc.generate(proxy=None)` ép `interface=0.0.0.0` (IPv4 máy vắt) → UNUSUAL. **A/B N=8: IPv6-submit=8/8 (100%), IPv4-ép=2/8 (25%).** → `video_factory` truyền `proxy=account.ipv6.proxy_url()`. ⚠️ account KHÔNG có IPv6 → ép IPv4 → luôn UNUSUAL.
+6. **Format submit (KHÔNG `?key`, có Cookie)**: URL bỏ `?key` (auth bằng bearer+Cookie); body `structuredPrompt` + `mediaGenerationContext{batchId,audioFailurePreference}` + `useV2ModelConfig:true`; header có `Cookie` labs.google. → `flow_client.GEN_T2V/GEN_I2V` (no key), `build_payload`, `generate(cookie=...)`.
+
+## ⚠️ Về "Ẩn Chrome" (cửa sổ) — điểm dễ hiểu nhầm
+- **ẨN bằng CỜ bot = SAI** (dính UNUSUAL). Cái hại là CỜ, không phải vị trí cửa sổ.
+- **Đẩy cửa sổ RA NGOÀI khung màn hình (`--window-position=-32000,0`) khi ĐANG dùng cờ CLEAN thì CÓ KHẢ NĂNG KHÔNG SAO** — off-screen bản thân nó không phải tín hiệu bot (xem cmt `cdp_chrome.py:135` "clean mode + off-screen VẪN ra ảnh"). Các test ra 200 ở trên dùng `offscreen=False` (hiện) cho AN TOÀN; muốn ẩn khỏi màn hình thì thử `offscreen=True` **NHƯNG GIỮ CLEAN_FLAGS** rồi đo lại tỉ lệ — nếu vẫn ~cao thì dùng được (đỡ vướng cửa sổ). CHỈ đừng quay lại cờ bot.
+- Hiện tại `video_factory` gọi `get_factory(..., visible=True)` (hiện). Muốn thử ẩn-offscreen: đổi thành `visible=False` (minter sẽ `offscreen=True` nhưng vẫn CLEAN) và đo lại.
+
+## Đo tỉ lệ (qua ĐÚNG hàm pool `fc.generate`)
+- T2V mint-IPv6 + submit-IPv6 = **8/8 (100%)**; submit ép-IPv4 = 2/8 (25%).
+- I2V (upload ảnh→media_id→GEN_I2V, path production thật) = **5/6 (83%)**.
+- Phân biệt lỗi: `UNUSUAL_ACTIVITY`=token/mint xấu (cờ/UA/offscreen-flag/submit-IPv4); `..._TOO_MUCH_TRAFFIC`=identity OK nhưng IP mint bị vắt (đổi IPv6 tươi).
+
+## File đã sửa (nếu revert nhầm, khôi phục 3 chỗ này)
+- `veo3top_engine/token_factory.py`: `_Minter` params `ipv6/clean/visible` + `_ensure_ipv6`/`_rotate_ipv6` + warm-up throwaway trong `_open`; `get_factory(ipv6,clean,visible)`.
+- `veo3top_engine/flow_client.py`: `GEN_T2V/GEN_I2V` bỏ `?key`; `_headers` bỏ ép UA + thêm Cookie/Sec-Ch-Ua/client-hints; `build_payload` format mới; `generate(cookie=...)`.
+- `veo3top_engine/video_factory.py:~196`: `get_factory(mode="blank", ipv6=True, clean=True, visible=True)`; `:~278` `fc.generate(..., cookie=cookie)`.
+
+---
+
+## TL;DR — Công thức 1000 video/h (LOG CŨ 06-30, một số chi tiết đã bị mục UPDATE ở trên thay: format bỏ ?key, textInput dùng structuredPrompt)
 Không generate qua UI. Bắn **thẳng API backend Google Flow** + đa luồng + đổi IP liên tục + farm recaptcha token liên tục:
 1. **WARP làm SOCKS5 local** (`socks5://127.0.0.1:40000`) = "Fake DNS Google free" → IP exit Cloudflare, đổi liên tục.
 2. **Mint recaptcha token** trong Chrome trắng (đã login labs.google) **đi qua chính WARP đó**.

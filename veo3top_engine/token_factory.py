@@ -111,7 +111,8 @@ def _system_chrome():
 
 class _Minter:
     """1 chrome đẻ token. blank=True -> chrome trắng (temp profile). blank=False -> account login."""
-    def __init__(self, chrome_exe, profile_dir, port, pool, log, blank=True, action=None, persistent=False, factory=None, index=0, total=1):
+    def __init__(self, chrome_exe, profile_dir, port, pool, log, blank=True, action=None, persistent=False, factory=None, index=0, total=1,
+                 ipv6=False, clean=False, visible=False, ipv6_port=1100):
         self.factory = factory       # ref TokenFactory để nhận tín hiệu RESET (lỗi tích nhiều -> chrome fresh)
         self._seen_reset_gen = 0
         self._idx = index; self._total = max(1, total)   # reset SO LE: mỗi lần chỉ 1 chrome reset (tránh blackout token)
@@ -120,6 +121,17 @@ class _Minter:
         # persistent=True: blank dùng profile CỐ ĐỊNH warm (tích luỹ trust reCAPTCHA giống veo3top),
         # KHÔNG temp mới tinh + recycle = reload page (giữ profile). Dùng cho nhà máy pool.
         self.persistent = bool(persistent)
+        # CÔNG THỨC THẮNG VIDEO (đã ra 200): mint token qua IPv6 tươi + cờ CLEAN + cửa sổ hiện.
+        #  ipv6=True  -> con chrome mint bind IPv6 pool (budget reCAPTCHA riêng, né TOO_MUCH_TRAFFIC IP máy)
+        #  clean=True -> VEO3TOP_CLEAN_FLAGS (bỏ cờ lộ-bot --test-type/--disable-gpu -> né UNUSUAL_ACTIVITY)
+        #  visible=True -> offscreen=False (GPU thật, không đẩy cửa sổ ra ngoài = tín hiệu bot nhẹ)
+        self.want_ipv6 = bool(ipv6)
+        self.want_clean = bool(clean)
+        self.want_visible = bool(visible)
+        self._ipv6_port = ipv6_port + port  # port RIÊNG cho socks IPv6 của minter này (tránh đụng account/img)
+        self.ipv6_tr = None
+        if self.want_clean:
+            os.environ["VEO3TOP_CLEAN_FLAGS"] = "1"
         self.chrome_exe = _system_chrome() if blank else chrome_exe
         self.profile_dir = profile_dir      # blank: bỏ qua (dùng temp/persistent); account: profile login
         self.port = port; self.pool = pool; self.log = log
@@ -138,6 +150,28 @@ class _Minter:
             return self.temp
         return self.profile_dir
 
+    def _ensure_ipv6(self):
+        """Lazily dựng 1 IPv6Transport riêng cho minter này -> con chrome mint đi ra IPv6 pool tươi.
+        Trả proxy_url (socks5) hoặc None nếu pool lỗi (rơi về IP máy — vẫn chạy, chỉ dễ TOO_MUCH_TRAFFIC)."""
+        if self.ipv6_tr is not None:
+            try: return self.ipv6_tr.proxy_url()
+            except Exception: return None
+        try:
+            import ipv6_transport as ip6t
+            tr = ip6t.IPv6Transport(f"tok_{self.port}", port=self._ipv6_port, log=lambda *_: None)
+            if tr.start():
+                self.ipv6_tr = tr
+                return tr.proxy_url()
+        except Exception as e:
+            self.log(f"[tokenfactory:{self.port}] IPv6 start lỗi: {e} — mint tạm IP máy")
+        return None
+
+    def _rotate_ipv6(self):
+        """Xoay source IPv6 (khi RESET do lỗi reCAPTCHA tích nhiều) -> budget mint mới, né TOO_MUCH_TRAFFIC."""
+        if self.ipv6_tr is not None:
+            try: self.ipv6_tr.rotate()
+            except Exception: pass
+
     def _open(self, fresh_profile=False):
         try:
             try:
@@ -146,11 +180,21 @@ class _Minter:
             if self.blank and fresh_profile and not self.persistent and self.temp and os.path.isdir(self.temp):
                 _rmtree_hard(self.temp); self.temp = None
             prof = self._profile() if (self.blank and (fresh_profile or not self.temp)) else (self.temp if self.blank else self.profile_dir)
-            self.cdp = ChromeCDP(self.chrome_exe, prof, self.port, offscreen=True, log=self.log)
+            # IPv6 tươi cho con chrome mint (chỉ blank): lazily start 1 transport/minter, reset=xoay IP
+            proxy = None
+            if self.want_ipv6 and self.blank:
+                proxy = self._ensure_ipv6()
+            offscreen = not self.want_visible if self.blank else True
+            self.cdp = ChromeCDP(self.chrome_exe, prof, self.port, offscreen=offscreen, log=self.log, proxy=proxy)
             if not (self.cdp.connect(launch_timeout=45) and self.cdp.wait_ready(35)):
                 return False
             if not self.blank:
                 try: self.email = self.cdp.email()
+                except Exception: pass
+            elif self.want_clean:
+                # WARM-UP reCAPTCHA: chrome tươi -> mint ĐẦU thường UNUSUAL, mint SAU mới điểm cao (đo được ~50%->~85%).
+                # Đốt 1 token bỏ đi để "khởi động" session trước khi bơm token thật vào pool.
+                try: self.cdp.mint_token(self.action)
                 except Exception: pass
             return True
         except FileNotFoundError:
@@ -188,6 +232,7 @@ class _Minter:
                 self._seen_reset_gen = gen
                 if (gen % self._total) == self._idx:
                     self.log(f"[tokenfactory:{self.port}] RESET chrome (so le, reCAPTCHA context mới)")
+                    self._rotate_ipv6()   # IP mint mới -> né TOO_MUCH_TRAFFIC (budget reCAPTCHA riêng)
                     with self.lock:
                         self._open(fresh_profile=True)
                     t_recycle = time.time()
@@ -209,6 +254,7 @@ class _Minter:
                     self.log(f"[tokenfactory:{self.port}] recycle sau {self._minted} token ({'reload-warm' if warm else 'trắng-mới'})")
                     with self.lock:
                         if not warm:
+                            self._rotate_ipv6()                  # chrome tươi + IP tươi (budget reCAPTCHA mới) = công thức thắng
                             self._open(fresh_profile=True)       # blank thường: profile MỚI TINH
                         else:
                             try:
@@ -225,16 +271,21 @@ class _Minter:
         try:
             if self.cdp: self.cdp.close(kill=True)
         except Exception: pass
+        try:
+            if self.ipv6_tr: self.ipv6_tr.stop()
+        except Exception: pass
         # GIỮ profile warm (persistent) — chỉ xoá temp thường
         if self.temp and os.path.isdir(self.temp) and not self.persistent:
             _rmtree_hard(self.temp)
 
 
 class TokenFactory:
-    def __init__(self, mode="blank", chrome_exe=None, profile_dir=None, n_chromes=1, buffer=24, base_port=9840, log=print, action=None, persistent=False):
+    def __init__(self, mode="blank", chrome_exe=None, profile_dir=None, n_chromes=1, buffer=24, base_port=9840, log=print, action=None, persistent=False,
+                 ipv6=False, clean=False, visible=False):
         self.mode = mode
         self.action = action     # None=VIDEO_GENERATION; ảnh='IMAGE_GENERATION' (đẻ token đúng action cho endpoint ảnh)
         self.persistent = bool(persistent)   # blank: profile CỐ ĐỊNH warm (trust reCAPTCHA) — giống veo3top
+        self.ipv6 = bool(ipv6); self.clean = bool(clean); self.visible = bool(visible)  # công thức thắng VIDEO token
         self.chrome_exe = chrome_exe
         self.profile_dir = profile_dir
         self.n_chromes = max(1, int(n_chromes))
@@ -283,7 +334,8 @@ class TokenFactory:
             # account mode: 1 minter (profile login không mở 2 lần được). blank: có thể nhiều.
             n = 1 if not blank else self.n_chromes
             for i in range(n):
-                m = _Minter(self.chrome_exe, self.profile_dir, self.base_port + i, self.pool, self.log, blank=blank, action=self.action, persistent=self.persistent, factory=self, index=i, total=n)
+                m = _Minter(self.chrome_exe, self.profile_dir, self.base_port + i, self.pool, self.log, blank=blank, action=self.action, persistent=self.persistent, factory=self, index=i, total=n,
+                            ipv6=self.ipv6, clean=self.clean, visible=self.visible)
                 self.minters.append(m)
                 threading.Thread(target=m.run, daemon=True).start()
             self._started = True
@@ -319,12 +371,14 @@ class TokenFactory:
 _FACTORY = None
 _FLOCK = threading.Lock()
 
-def get_factory(mode="blank", chrome_exe=None, profile_dir=None, n_chromes=1, base_port=9840, log=print, persistent=False, **_ignore):
+def get_factory(mode="blank", chrome_exe=None, profile_dir=None, n_chromes=1, base_port=9840, log=print, persistent=False,
+                ipv6=False, clean=False, visible=False, **_ignore):
     global _FACTORY
     with _FLOCK:
         if _FACTORY is None:
             _FACTORY = TokenFactory(mode=mode, chrome_exe=chrome_exe, profile_dir=profile_dir,
-                                    n_chromes=n_chromes, base_port=base_port, log=log, persistent=persistent)
+                                    n_chromes=n_chromes, base_port=base_port, log=log, persistent=persistent,
+                                    ipv6=ipv6, clean=clean, visible=visible)
             _FACTORY.start()
         return _FACTORY
 

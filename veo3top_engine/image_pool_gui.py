@@ -56,9 +56,7 @@ class PoolTab(tk.Frame):
         tk.Button(r1, text="Sua TK (chon)", command=self.do_edit).pack(side="left", padx=2)
 
         r2 = tk.Frame(self); r2.pack(fill="x", padx=8, pady=2)
-        tk.Label(r2, text="Chuan bi SL:").pack(side="left")
-        self.prep_n = tk.Entry(r2, width=5); self.prep_n.insert(0, "20"); self.prep_n.pack(side="left")
-        tk.Label(r2, text="Luong:").pack(side="left")
+        tk.Label(r2, text="Chuan bi = login HET account thieu cookie  |  Luong:").pack(side="left")
         self.conc = tk.Entry(r2, width=4); self.conc.insert(0, str(M.PREP_CONCURRENCY)); self.conc.pack(side="left")
         self.hide_var = tk.IntVar(value=1)
         tk.Checkbutton(r2, text="An Chrome", variable=self.hide_var, command=self._apply_hide).pack(side="left", padx=6)
@@ -187,19 +185,17 @@ class PoolTab(tk.Frame):
                      acct_loader=self.acct_loader), "Check cookie")
 
     def do_prepare(self, probe=False):
-        try: n = int(self.prep_n.get())
-        except Exception: n = 20
         try: conc = max(1, int(self.conc.get()))
         except Exception: conc = M.PREP_CONCURRENCY
         self._apply_hide()
         def _f():
-            todo = M.select_todo(n, self.sf, self.acct_loader)
-            self.log(f"chuan bi {len(todo)} account, {min(conc, len(todo) or 1)} luong "
+            todo = M.select_todo(None, self.sf, self.acct_loader)   # None = HET account thieu cookie (khong gioi han)
+            self.log(f"chuan bi {len(todo)} account thieu cookie, {min(conc, len(todo) or 1)} luong "
                      f"(probe={probe}, an={'co' if self.hide_var.get() else 'khong'})")
             M.prepare_parallel(todo, probe=probe, concurrency=conc, log=lambda m: None, sf=self.sf,
                                profile_base=self.profile_base,
                                on_done=lambda e, r: (self.log(f"  {e} -> {r}"), self.after(0, self.refresh)))
-        self._run_bg(_f, f"Chuan bi {n} (//{conc})" + ("+Probe" if probe else ""))
+        self._run_bg(_f, f"Chuan bi ALL (//{conc})" + ("+Probe" if probe else ""))
 
     def do_probe(self):
         emails = self._sel()

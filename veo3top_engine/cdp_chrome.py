@@ -135,6 +135,10 @@ class ChromeCDP:
             # ẨN = đẩy cửa sổ RA NGOÀI màn hình (vẫn render GPU) — ĐÃ TEST: clean mode + off-screen VẪN ra ảnh
             # (off-screen KHÔNG phải tín hiệu bot; chỉ --disable-gpu/--test-type mới hại). -> nút ẩn dùng được cho ẢNH.
             args.append("--window-position=-32000,0")
+        else:
+            # HIỆN (tắt ẩn) = đưa cửa sổ ra GIỮA-TRÊN màn hình, KHÔNG lệch/off-screen -> theo dõi được chrome khi debug
+            args.append("--window-position=340,110")
+            args.append("--window-size=1200,860")
         args.append(FLOW_URL)
         self._proc = subprocess.Popen(args)
         _register_pid(self.port, self._proc.pid)   # để GUI dọn được khi tắt (kể cả orphan)
@@ -234,6 +238,32 @@ class ChromeCDP:
           return (d&&(d.projectId||(d.result&&d.result.projectId)))||null;
         }catch(e){return null;}})()""" % title)
         return self.ev(js)
+
+    def warm_flow(self, attempts=20):
+        """WARM VÀO TOOL Flow (port từ login_google_chrome): nếu đang ở landing thì CLICK 'Create with Google Flow';
+        ĐỢI tới khi THẤY nút 'Dự án mới'/add_2 (= đã VÀO tool). KHÔNG click 'Dự án mới' — chỉ cần THẤY là OK.
+        Reload mỗi 5 lần, retry `attempts`. Trả True nếu vào tool. Account vừa login còn ở landing -> createProject API
+        FAIL cho tới khi vào tool qua bước này (đây là bước warm bị thiếu -> 'không tạo được project' -> DEAD oan)."""
+        js = (r"""(()=>{const bs=[...document.querySelectorAll('button')];"""
+              r"""const has=(a)=>bs.find(b=>{const t=(b.textContent||'');return a.some(x=>t.includes(x));});"""
+              r"""if(has(['add_2','Dự án mới','án mới','New project']))return 'ready';"""
+              r"""const c=has(['Create with Google Flow','Create with Flow','Tạo với Flow','Create']);"""
+              r"""if(c){try{c.click();}catch(e){}return 'clicked';}return 'none';})()""")
+        for i in range(attempts):
+            try:
+                r = self.ev(js, to=4000)
+            except Exception:
+                r = None
+            if r == "ready":
+                return True
+            if r == "clicked":
+                time.sleep(1.5); continue
+            if i > 0 and i % 5 == 0:
+                try: self.cmd("Page.navigate", url=FLOW_URL)
+                except Exception: pass
+                time.sleep(2)
+            time.sleep(0.6)
+        return False
 
     def fresh_project(self):
         """User: MỖI lần dùng chrome nên TẠO project MỚI (KHÔNG dùng project cũ — project cũ có thể dính hoạt động

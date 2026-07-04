@@ -50,8 +50,15 @@ flow_project_id: ''
 flow_project_url: ''
 flow_timeout: 120
 gemini_api_keys: []
-generation_backend: veo3top_b_pool
-generation_mode: veo3top_b_pool
+generation_backend: veo3top_b_ultra
+generation_mode: veo3top_b_ultra
+image_account_rest: 180
+image_egress: ipv6
+image_fake_dns_google: true
+image_hide_chrome: true
+image_max_per_account: 5
+image_pool_accounts: 6
+image_swap_giveup: 2
 local_server_enabled: true
 local_server_list:
 - allowed_topics: ''
@@ -177,7 +184,8 @@ local_server_list:
   url: http://192.168.88.63:5100
 local_server_url: http://192.168.88.63:5100
 log_level: INFO
-max_concurrent: 3
+max_concurrent: 4
+max_concurrent_codes: 2
 max_parallel_api: 11
 music_workspace_mode_enabled: true
 nanopic_access_token: ''
@@ -199,7 +207,7 @@ prompt_policy_rewrite_enabled: true
 prompt_policy_rewrite_max_rounds: 2
 retry_count: 3
 topic: story
-use_local_token_for_image: true
+use_local_token_for_image: false
 veo3top_image_mode: pool
 vov_direct_api_key: sk-6m5lfOmA6GdmbkZfWKXNYLtB6ouLfyfvf06obd7g3kZKdljB
 vov_direct_base_url: https://routerapi.vovantin.online/v1

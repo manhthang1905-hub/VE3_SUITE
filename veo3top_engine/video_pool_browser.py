@@ -31,7 +31,7 @@ JOB_MAX_CYCLES = 30
 VID_MODEL = os.environ.get("VEO3TOP_VID_MODEL", fc.MODEL_I2V_LITE)
 
 
-VID_ACCOUNTS_FILE = os.path.join(_HERE, "vid_accounts.txt")
+VID_ACCOUNTS_FILE = os.path.join(os.path.dirname(_HERE), "accounts", "vid_accounts.txt")   # GOM VỀ 1 CHỖ: D:\VE3_SUITE\accounts\
 
 
 def load_video_accounts():
