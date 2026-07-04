@@ -254,6 +254,12 @@ class VideoFactory:
                     a.rest(1800)
                     self.recovery.submit(a.email, lambda a=a: a.recover(self.log))
             _log(f"keep-warm VIDEO: {fresh} tươi, {healed} ngả -> chữa NỀN chủ động (trước khi phase video cần)")
+            # DỌN RÁC log định kỳ (không phình vô tận) — mỗi vòng keep-warm (~10p) cắt log nếu quá lớn, giữ phần mới.
+            try:
+                import diag_report as _dr
+                _dr.rotate_all()
+            except Exception:
+                pass
             # ngủ WARM_SECS, chia nhỏ để stop() thoát nhanh
             slept = 0
             while self._running and slept < WARM_SECS:
