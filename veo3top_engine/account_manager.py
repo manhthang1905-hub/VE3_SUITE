@@ -146,10 +146,16 @@ def warm_extract(email, chrome_exe, profile_dir, cache, port, log=lambda *_: Non
     _clear_singleton(profile_dir)
     c = ChromeCDP(chrome_exe, profile_dir, port, offscreen=True, log=lambda *_: None)
     try:
-        if not c.connect() or not c.wait_ready(35):
+        # NHẬN-BIẾT-LỖI: log LÝ DO cụ thể ở mỗi điểm fail (thay vì im lặng -> "chữa KHÔNG thành" mù mờ).
+        if not c.connect():
+            log(f"[warm {email}] FAIL=CDP_CONNECT (chrome không kết nối được -> chrome lỗi/CPU nghẽn)")
+            return None
+        if not c.wait_ready(35):
+            log(f"[warm {email}] FAIL=FLOW_NOT_READY (Flow không load sau 35s -> account bị Flow chặn / mạng chậm / CPU nghẽn)")
             return None
         bearer = c.bearer()
         if not bearer:
+            log(f"[warm {email}] FAIL=NO_BEARER (profile không có session auth -> cần login lại / login chưa ăn)")
             return None
         cookie = fc.labs_cookie_header(c.cookies())
         project = None
@@ -159,12 +165,14 @@ def warm_extract(email, chrome_exe, profile_dir, cache, port, log=lambda *_: Non
                 break
             time.sleep(2)
         if not project:
+            log(f"[warm {email}] FAIL=NO_PROJECT (không có project sau 20s -> account BỊ FLOW CHẶN hoặc chưa tạo project được)")
             return None                    # chưa tạo được project -> chưa tạo được ảnh/video
         d = {"bearer": bearer, "cookie": cookie, "project": project, "email": email, "ts": time.time()}
         try: cache._save(email, d)
         except Exception: pass
         return d
-    except Exception:
+    except Exception as e:
+        log(f"[warm {email}] FAIL=EXCEPTION {type(e).__name__}: {str(e)[:80]}")
         return None
     finally:
         try: c.close(kill=True)
