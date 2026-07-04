@@ -2578,12 +2578,15 @@ foreach ($pid in $children) {{
         try:
             _sp.run(['powershell', '-NoProfile', '-Command',
                      # TREE-KILL (/T) chrome nhà máy ảnh+video -> KHÔNG mồ côi children thành zombie (chrome rác).
+                     # Match CẢ profile account (pool_img/vid_profiles) LẪN token chrome (veo3tok_97x = 970 video/974 ảnh)
+                     # + warm profile -> chrome reparent (tách python) vẫn bị dọn theo cmdline (fix 5 zombie token).
                      "Get-CimInstance Win32_Process -Filter \"Name='chrome.exe'\" | "
-                     "Where-Object { $_.CommandLine -match 'pool_img_profiles|pool_vid_profiles' } | "
+                     "Where-Object { $_.CommandLine -match 'pool_img_profiles|pool_vid_profiles|veo3tok_97|veo3top_warm_profiles' } | "
                      "ForEach-Object { taskkill /F /T /PID $_.ProcessId 2>$null }; "
-                     # kill LUÔN service pool còn sót theo cmdline (phòng khi PID file mất -> service orphan respawn chrome)
+                     # kill LUÔN service pool còn sót theo cmdline (phòng khi PID file mất -> service orphan respawn chrome).
+                     # THÊM video_factory.py/image_factory.py = service MẶC ĐỊNH (không phải *_pool_browser) -> fix python zombie.
                      "Get-CimInstance Win32_Process | Where-Object { $_.Name -match '^pythonw?\\.exe$' -and $_.CommandLine -and "
-                     "($_.CommandLine -match 'image_pool_browser|video_pool_browser') } | "
+                     "($_.CommandLine -match 'image_pool_browser|video_pool_browser|video_factory\\.py|image_factory\\.py') } | "
                      "ForEach-Object { taskkill /F /T /PID $_.ProcessId 2>$null }; "
                      # dọn chrome ZOMBIE (đã chết, không ExecutablePath)
                      "Get-CimInstance Win32_Process -Filter \"Name='chrome.exe'\" | Where-Object { -not $_.ExecutablePath } | "
