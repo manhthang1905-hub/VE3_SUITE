@@ -23,6 +23,7 @@ import flow_client as fc
 import token_factory as tf
 import ipv6_transport as ip6t
 import account_manager as am
+import project_pool as pp
 from auth_cache import AuthCache
 from pool_accounts import load_image_pool_accounts
 
@@ -54,6 +55,7 @@ class Account:
         self.egress_wins = {}; self.last_kind = ""
         self.model_wins = {}           # model -> số ảnh ra (thống kê khai thác quota)
         self.model_rest = {}           # model -> ts hết nghỉ (model đó hết quota tạm -> bỏ qua tới ts)
+        self._proj = pp.ProjectRotator()   # XOAY + TỰ CHỮA project (dùng chung ảnh/video) — chống gãy 24/7
         self._lock = threading.Lock()
         self._recovering = False       # đang được RecoveryManager chữa (nền) -> worker không submit trùng
         import re as _re
@@ -93,6 +95,13 @@ class Account:
     def clear_rest(self):
         with self._lock:
             self.rest_streak = 0; self.resume_at = 0.0
+
+    def next_project(self, cookie, fallback=None):
+        """XOAY VÒNG + TỰ CHỮA project (ProjectRotator). Tránh dùng mãi 1 project bị đốt (chống gãy 24/7)."""
+        return self._proj.next(cookie, fallback=fallback, log=lambda m: _log(f"{self.email}: {m}"))
+
+    def mark_project_bad(self, pid):
+        self._proj.mark_bad(pid, log=lambda m: _log(f"{self.email}: {m}"))
 
     def auth(self, force=False):
         """Auth NHẸ (không mở chrome -> KHÔNG chặn worker): cache còn hạn -> refresh TỪ COOKIE.
@@ -184,9 +193,12 @@ class ImageFactory:
         else:
             self.log("egress ảnh = DIRECT IP máy")
 
-        # token factory ẢNH (action IMAGE_GENERATION) — RIÊNG factory video
+        # token factory ẢNH (action IMAGE_GENERATION) — RIÊNG factory video.
+        # CÔNG THỨC THẮNG (mang từ video, đã đo ảnh ~75-80%): chrome mint IPv6 tươi + cờ CLEAN + cửa sổ hiện
+        # + warm-up 1 token + rotate IPv6 mỗi recycle. Submit đã qua account.ipv6 (external, KHÔNG in-page/IPv4 máy).
         self.factory = tf.get_image_factory(mode="blank", n_chromes=self.token_chromes,
-                                            base_port=self.token_port, log=self.log)
+                                            base_port=self.token_port, log=self.log,
+                                            ipv6=True, clean=True, visible=True)
         if not (self.factory and self.factory._started):
             self.log("CẢNH BÁO: token factory ảnh chưa sẵn sàng")
 
@@ -219,7 +231,8 @@ class ImageFactory:
         auth = account.auth()
         if not auth or not auth.get("bearer") or not auth.get("project"):
             return "retry_soft"
-        bearer = auth["bearer"]; project = auth["project"]
+        bearer = auth["bearer"]; cookie = auth.get("cookie")
+        project = self.next_project(cookie, fallback=auth["project"])   # XOAY project mỗi job (tránh đốt 1 cái)
         seed = job.get("seed") or (int(time.time() * 1000) % 900000)
         aspect = job.get("aspect") or "IMAGE_ASPECT_RATIO_LANDSCAPE"
         image_inputs = job.get("image_inputs") or None
@@ -241,7 +254,7 @@ class ImageFactory:
             ename = "ipv6" if account.ipv6 else "ipmay"
             payload = fc.build_image_payload(job["prompt"], project, tok, seed,
                                              aspect=aspect, image_inputs=image_inputs, model=model)
-            kind, data = fc.generate_image(bearer, project, payload, proxy=eproxy)
+            kind, data = fc.generate_image(bearer, project, payload, proxy=eproxy, cookie=cookie)
             if kind == "ok":
                 account.note_egress_win(ename); account.note_model_win(model)
                 name, fife, b64, rseed = fc.image_result(data)
@@ -306,8 +319,14 @@ class ImageFactory:
                     time.sleep(1.0 + random.uniform(0, 0.8))
                 else:
                     quota_streak = 0
-                    try: self.factory.note_error()
-                    except Exception: pass
+                    if pp.is_project_error(kind, data):
+                        # LỖI CẤP-PROJECT (PERMISSION_DENIED/NOT_FOUND) -> loại project + ĐỔI project ngay (self-heal 24/7)
+                        account.mark_project_bad(project)
+                        project = account.next_project(cookie, fallback=project)
+                    else:
+                        # 'unusual' = token reCAPTCHA xấu -> reset chrome chai (adaptive), KHÔNG đụng project
+                        try: self.factory.note_error()
+                        except Exception: pass
                     time.sleep(1.0 + random.uniform(0, 0.8))
                 if attempt and attempt % 10 == 0:
                     self.log(f"account {account.email} [{account.last_kind}] retry token ảnh {attempt}/{GEN_ATTEMPTS}")

@@ -17,7 +17,7 @@ MINT_INTERVAL = 1.2      # GHÌM: giây giữa 2 lần mint (tránh flood recapt
 RECYCLE_TOKENS = 150     # account: recycle = reload (giữ login), ít cần fresh
 # blank: chrome TRẮNG MỚI TINH thường xuyên -> mỗi profile chỉ đẻ ít token khi session còn "sạch" (điểm cao),
 # giống veo3top mở rất nhiều chrome trắng. Tunable qua env VEO3TOP_TOKEN_RECYCLE.
-RECYCLE_TOKENS_BLANK = int(os.environ.get("VEO3TOP_TOKEN_RECYCLE", "50") or "50")
+RECYCLE_TOKENS_BLANK = int(os.environ.get("VEO3TOP_TOKEN_RECYCLE", "3") or "3")  # chrome tươi mỗi ~3 token (đo: recycle thấp=rate cao); adaptive (RESET_ON_ERRORS) reset thêm khi chai giữa chừng
 RECYCLE_SECS = 300
 
 
@@ -301,7 +301,9 @@ class TokenFactory:
         # RESET theo lỗi (giống veo3top): lỗi recaptcha tích > RESET_ON_ERRORS -> reset chrome fresh
         self._reset_gen = 0
         self._err_count = 0
-        self.RESET_ON_ERRORS = int(os.environ.get("VEO3TOP_RESET_ON_ERRORS", "30") or "30")
+        # ADAPTIVE: reset chrome theo LẦN BỊ CHAI (lỗi reCAPTCHA tích) thay vì đợi RECYCLE cố định.
+        # Hạ 30->6: chrome chai chỉ sau vài token (đã đo), phí 30 token xấu là quá nhiều -> reset sớm = rate cao hơn.
+        self.RESET_ON_ERRORS = int(os.environ.get("VEO3TOP_RESET_ON_ERRORS", "6") or "6")
 
     def note_error(self):
         """Provider gọi khi 1 generate trượt reCAPTCHA. Tích đủ -> báo minters reset chrome (context mới)."""
@@ -387,13 +389,16 @@ def get_factory(mode="blank", chrome_exe=None, profile_dir=None, n_chromes=1, ba
 _IMG_FACTORY = None
 _IMG_FLOCK = threading.Lock()
 
-def get_image_factory(mode="blank", chrome_exe=None, profile_dir=None, n_chromes=1, base_port=9740, log=print, **_ignore):
-    """Nhà máy token cho ẢNH — đẻ recaptcha action IMAGE_GENERATION. Singleton riêng (không đụng video)."""
+def get_image_factory(mode="blank", chrome_exe=None, profile_dir=None, n_chromes=1, base_port=9740, log=print,
+                      ipv6=False, clean=False, visible=False, **_ignore):
+    """Nhà máy token cho ẢNH — đẻ recaptcha action IMAGE_GENERATION. Singleton riêng (không đụng video).
+    ipv6/clean/visible: CÔNG THỨC THẮNG (mang từ video sang — đã đo ảnh ~75-80% với chrome trắng tươi + IPv6 + CLEAN)."""
     global _IMG_FACTORY
     with _IMG_FLOCK:
         if _IMG_FACTORY is None:
             _IMG_FACTORY = TokenFactory(mode=mode, chrome_exe=chrome_exe, profile_dir=profile_dir,
                                         n_chromes=n_chromes, base_port=base_port, log=log,
-                                        action="IMAGE_GENERATION")
+                                        action="IMAGE_GENERATION",
+                                        ipv6=ipv6, clean=clean, visible=visible)
             _IMG_FACTORY.start()
         return _IMG_FACTORY

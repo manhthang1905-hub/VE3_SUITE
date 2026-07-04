@@ -253,6 +253,45 @@ def bearer_from_cookie(cookie, timeout=25):
         pass
     return None, None
 
+
+def _labs_kw(timeout):
+    kw = {"impersonate": IMPERSONATE, "timeout": timeout}
+    if DIRECT_IFACE:
+        kw["interface"] = DIRECT_IFACE
+    return kw
+
+def list_projects(cookie, timeout=25):
+    """Danh sách projectId (PINHOLE) của account qua COOKIE labs.google — KHÔNG mở chrome.
+    Dùng để ĐỔI/ROTATE project (1 account nhiều project -> tránh dùng mãi 1 project bị đốt)."""
+    if not cookie:
+        return []
+    import urllib.parse as _upa
+    inp = _upa.quote(json.dumps({"json": {"pageSize": 20, "toolName": "PINHOLE", "cursor": None},
+                                 "meta": {"values": {"cursor": ["undefined"]}}}))
+    url = "https://labs.google/fx/api/trpc/project.searchUserProjects?input=" + inp
+    H = {"Cookie": cookie, "User-Agent": UA, "Referer": "https://labs.google/", "Accept": "application/json"}
+    try:
+        r = _cffi.get(url, headers=H, **_labs_kw(timeout))
+        projs = (((r.json() or {}).get("result") or {}).get("data") or {}).get("json", {}).get("result", {}).get("projects", [])
+        return [p["projectId"] for p in projs if p.get("projectId")]
+    except Exception:
+        return []
+
+def create_project(cookie, title="auto", timeout=25):
+    """Tạo project PINHOLE MỚI qua COOKIE labs.google — KHÔNG mở chrome. Trả projectId hoặc None."""
+    if not cookie:
+        return None
+    url = "https://labs.google/fx/api/trpc/project.createProject"
+    H = {"Cookie": cookie, "User-Agent": UA, "Referer": "https://labs.google/",
+         "Content-Type": "application/json", "Accept": "application/json"}
+    body = json.dumps({"json": {"projectTitle": title, "toolName": "PINHOLE"}})
+    try:
+        r = _cffi.post(url, headers=H, data=body, **_labs_kw(timeout))
+        d = (((r.json() or {}).get("result") or {}).get("data") or {}).get("json") or {}
+        return d.get("projectId") or (d.get("result") or {}).get("projectId")
+    except Exception:
+        return None
+
 # =========================================================================
 # ẢNH (flowMedia:batchGenerateImages) — bắn thẳng như video, SYNCHRONOUS (200 = có ảnh luôn).
 # Contract đã kiểm chứng chạy thật 200 OK (2026-07-01):
@@ -288,14 +327,15 @@ def build_image_payload(prompt, project_id, recaptcha_token, seed,
             "useNewMedia": True, "requests": [req]}
 
 
-def generate_image(bearer, project_id, payload, timeout=120, proxy=None):
+def generate_image(bearer, project_id, payload, timeout=120, proxy=None, cookie=None):
     """POST batchGenerateImages qua IPv6 pool. Trả classify() giống video:
     ('ok',json)|('ratelimit',None)|('recaptcha_quota',None)|('unusual',None)|('ip_block',None)|('auth',None)|('other',txt).
     proxy=None -> dùng GEN_PROXY toàn cục (như video). Truyền proxy riêng để KHÔNG phụ thuộc/đụng
-    GEN_PROXY của video khi chạy cùng process (image provider truyền transport riêng của nó)."""
+    GEN_PROXY của video khi chạy cùng process (image provider truyền transport riêng của nó).
+    cookie: như video — buộc request vào session -> reCAPTCHA điểm cao hơn (thử nghiệm mang logic video sang ảnh)."""
     p = GEN_PROXY if proxy is None else proxy
     try:
-        r = _post(image_gen_url(project_id), _headers(bearer), json.dumps(payload), timeout=timeout, proxy=p)
+        r = _post(image_gen_url(project_id), _headers(bearer, cookie), json.dumps(payload), timeout=timeout, proxy=p)
     except Exception as e:
         # Lỗi mạng (proxy IPv6 rớt/abort, timeout...) -> báo retryable, KHÔNG cho crash scene.
         # Coi như per-IP hỏng để provider đổi IPv6 + thử token mới (giống ratelimit).

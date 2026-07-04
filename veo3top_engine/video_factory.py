@@ -26,6 +26,7 @@ import token_factory as tf
 import ipv6_transport as ip6t
 import rate_coordinator
 import account_manager as am
+import project_pool as pp
 from auth_cache import AuthCache
 from pool_accounts import load_pool_accounts
 
@@ -63,6 +64,7 @@ class Account:
         self.last_kind = ""       # loại lỗi gần nhất (ratelimit/recaptcha_quota/unusual...)
         self._lock = threading.Lock()
         self._recovering = False       # đang được RecoveryManager chữa (nền)
+        self._proj = pp.ProjectRotator()   # XOAY + TỰ CHỮA project — chống gãy 24/7 (dùng chung với ảnh)
         import re as _re
         m = _re.search(r"Copy \((\d+)\)", str(chrome_path or ""))
         self._copyn = int(m.group(1)) if m else (abs(hash(email or "")) % 80)
@@ -99,6 +101,13 @@ class Account:
     def clear_rest(self):
         with self._lock:
             self.rest_streak = 0; self.resume_at = 0.0
+
+    def next_project(self, cookie, fallback=None):
+        """XOAY VÒNG + TỰ CHỮA project (chống gãy 24/7). LƯU Ý video I2V: media_id gắn project -> cache media kèm project."""
+        return self._proj.next(cookie, fallback=fallback, log=lambda m: _log(f"{self.email}: {m}"))
+
+    def mark_project_bad(self, pid):
+        self._proj.mark_bad(pid, log=lambda m: _log(f"{self.email}: {m}"))
 
     def auth(self, force=False):
         """Auth NHẸ (không mở chrome -> KHÔNG chặn worker): cache còn hạn -> refresh TỪ COOKIE.
@@ -157,13 +166,14 @@ class VideoFactory:
         self.log(f"pool VIDEO: {len(self.accounts)} account -> {len(healthy)} SỐNG, {len(broken)} lỗi đang chữa nền "
                  f"({', '.join(a.name for a in broken) if broken else 'không có'})")
 
-    def _cached_media(self, email, image_path):
+    def _cached_media(self, email, image_path, project=None):
+        # KÈM project: media_id gắn với project -> đổi project phải upload lại (tránh dùng media_id sai project)
         with self._media_lock:
-            return self._media_cache.get((email, image_path))
+            return self._media_cache.get((email, image_path, project))
 
-    def _put_media(self, email, image_path, media_id):
+    def _put_media(self, email, image_path, media_id, project=None):
         with self._media_lock:
-            self._media_cache[(email, image_path)] = media_id
+            self._media_cache[(email, image_path, project)] = media_id
 
     # ---------- khởi tạo ----------
     def start(self):
@@ -232,13 +242,14 @@ class VideoFactory:
         auth = account.auth()
         if not auth or not auth.get("bearer") or not auth.get("project"):
             return "ratelimit"   # account chưa có auth -> coi như nghỉ, để account khác làm
-        bearer = auth["bearer"]; cookie = auth.get("cookie"); project = auth["project"]
+        bearer = auth["bearer"]; cookie = auth.get("cookie")
+        project = account.next_project(cookie, fallback=auth["project"])   # XOAY project (chống gãy 24/7)
         seed = job.get("seed") or (int(time.time() * 1000) % 2_000_000)
         aspect = job.get("aspect") or "VIDEO_ASPECT_RATIO_LANDSCAPE"
 
-        # 1) upload ảnh reference bằng CHÍNH account này -> media_id (project của nó).
-        #    Cache theo (account, ảnh) -> retry/chuyền account không upload lại (giống veo3top).
-        media_id = self._cached_media(account.email, job["image_path"])
+        # 1) upload ảnh reference bằng CHÍNH account này -> media_id (GẮN project vừa xoay).
+        #    Cache theo (account, ảnh, PROJECT) -> đổi project thì upload lại đúng project (không dùng media_id sai).
+        media_id = self._cached_media(account.email, job["image_path"], project)
         if not media_id:
             sess = f";{int(time.time()*1000)}"
             media_id, err = fc.upload_image(bearer, project, sess, job["image_path"], aspect=aspect)
@@ -256,7 +267,7 @@ class VideoFactory:
                         return "retry_soft"
                 if not media_id:
                     return ("fail", f"upload ref fail: {err}")
-            self._put_media(account.email, job["image_path"], media_id)
+            self._put_media(account.email, job["image_path"], media_id, project)
 
         # 2) generate I2V — RETRY TOKEN MỚI KIÊN NHẪN (như veo3top). Lỗi chính = reCAPTCHA đánh giá trượt
         #    -> cứ bắn token mới, backoff NGẮN, KHÔNG nghỉ account. Xoay egress phòng lỗi per-IP.
@@ -326,6 +337,11 @@ class VideoFactory:
                         try: account.ipv6.rotate()
                         except Exception: pass
                     time.sleep(1.5 + random.uniform(0, 1.0))
+                elif pp.is_project_error(kind, data):
+                    # LỖI CẤP-PROJECT (PERMISSION_DENIED/NOT_FOUND) -> loại project + REQUEUE (lần sau xoay project
+                    # TỐT + upload reference lại đúng project). KHÔNG grind token (không phải lỗi token). Self-heal 24/7.
+                    account.mark_project_bad(project)
+                    return "retry_soft"
                 else:
                     # recaptcha_quota/unusual = token trượt reCAPTCHA -> bắn TOKEN MỚI nhanh (kiên nhẫn như veo3top)
                     try: self.factory.note_error()   # tích lỗi -> reset chrome fresh (giống veo3top numreset)
