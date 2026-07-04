@@ -50,8 +50,8 @@ flow_project_id: ''
 flow_project_url: ''
 flow_timeout: 120
 gemini_api_keys: []
-generation_backend: veo3top_b_ultra
-generation_mode: veo3top_b_ultra
+generation_backend: veo3top_b_pool
+generation_mode: veo3top_b_pool
 image_account_rest: 180
 image_egress: ipv6
 image_fake_dns_google: true

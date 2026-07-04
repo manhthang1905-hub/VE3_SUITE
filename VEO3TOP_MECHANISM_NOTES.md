@@ -33,6 +33,28 @@
 - `veo3top_engine/flow_client.py`: `GEN_T2V/GEN_I2V` bỏ `?key`; `_headers` bỏ ép UA + thêm Cookie/Sec-Ch-Ua/client-hints; `build_payload` format mới; `generate(cookie=...)`.
 - `veo3top_engine/video_factory.py:~196`: `get_factory(mode="blank", ipv6=True, clean=True, visible=True)`; `:~278` `fc.generate(..., cookie=cookie)`.
 
+## ⛔ ĐỪNG LÀM LẠI (đã test HỎNG — đừng để session sau mắc lại)
+- **KHÔNG submit qua IPv4 máy / ép `interface=0.0.0.0`** cho generate → `UNUSUAL_ACTIVITY`. Submit PHẢI qua IPv6 (account.ipv6). (A/B: IPv6=8/8, IPv4=2/8.)
+- **KHÔNG mint token trên IP máy bị vắt** → `TOO_MUCH_TRAFFIC`. Mint qua IPv6 pool tươi.
+- **KHÔNG dùng cờ bot** (`--test-type/--disable-gpu/--no-sandbox/AutomationControlled/--disable-blink-features`) → `UNUSUAL`. Dùng `VEO3TOP_CLEAN_FLAGS=1` (GPU thật).
+- **KHÔNG headless** → reCAPTCHA "Invalid client id". Off-screen (`--window-position=-32000`) thì OK (không phải cờ bot).
+- **KHÔNG ép User-Agent thủ công** (148 lệch TLS 149) → `UNUSUAL`. Để curl_cffi impersonate tự set + thêm Sec-Ch-Ua/client-hints.
+- **KHÔNG dùng cloakbrowser / vân tay giả** → Google phạt (0/17). Dùng Chrome THẬT CLEAN.
+- **KHÔNG mint in-page trong chrome ACCOUNT persistent** → chai → 403 (~0%). Mint từ token factory chrome-TRẮNG-tươi dùng chung.
+- **KHÔNG `?key=` + thiếu Cookie** cho generate → reCAPTCHA xấu. Bỏ `?key`, gửi Cookie.
+- **KHÔNG recycle token chrome quá gắt (=3)** → relaunch nhiều = nặng + throughput thấp. Recycle ~10 + adaptive (RESET_ON_ERRORS).
+
+## Nhà máy ẢNH (image_pool_browser) — kiến trúc CUỐI (nhẹ + nhanh + bất tử)
+- **Mint**: token IMAGE_GENERATION từ token factory chrome-trắng-CLEAN-tươi dùng chung (IPv6, recycle~10, adaptive), offscreen. `generate_external`.
+- **Submit**: NGOÀI (curl_cffi) qua IPv6 riêng account + Cookie. Format `build_image_payload` (structuredPrompt, useNewMedia, no ?key).
+- **Auth COOKIE-BASED**: KHÔNG giữ chrome account mở. prepare lấy cookie (reuse session/login password) → lưu auth_cache → ĐÓNG chrome. generate_external + upload ref dùng cookie cache (bearer refresh HTTP). `fast-prepare`: cookie cache sống → ready NGAY, 0 chrome.
+- **BẤT TỬ (self-heal)**: 401 → `_force_login=True` → prepare bỏ fast-path → login chrome → reuse session HOẶC login_fn(password+totp) → cookie tươi → clear flag. Project lỗi → ProjectRotator loại + tạo mới. Chrome chai → adaptive reset.
+- Account cookie-based KHÔNG mở chrome → dồn tài nguyên cho NHIỀU token chrome (IMG_TOKEN_CHROMES=5) = nhiều ảnh hơn. Env: `VEO3TOP_IMG_TOKEN_CHROMES`, `VEO3TOP_TOKEN_RECYCLE`, `VEO3TOP_IMG_POOL_ACCOUNTS`.
+- **Nút thắt tốc độ theo thứ tự**: (1) auth tươi (account phải login — cookie chết thì token bị phí ở 401); (2) nguồn token (token chrome); (3) pass rate ~50-62%.
+
+## Nhà máy VIDEO (video_factory) — bất tử
+- 401 → `account.auth(force=True)` (refresh bearer từ cookie) → vẫn lỗi → `recovery.submit` → `full_recover` (login password+totp+warm). Project rotate + media cache kèm project.
+
 ---
 
 ## TL;DR — Công thức 1000 video/h (LOG CŨ 06-30, một số chi tiết đã bị mục UPDATE ở trên thay: format bỏ ?key, textInput dùng structuredPrompt)

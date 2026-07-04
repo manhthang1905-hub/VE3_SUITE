@@ -30,7 +30,8 @@ def _cfg_accounts(default=10):
         return max(1, min(50, n))
     except Exception:
         return _POOL_ACCOUNTS
-# BROWSER-based image pool (in-page generate) = cách RA ẢNH THẬT. Đặt =0 để về image_factory.py cũ (curl_cffi).
+# NHÀ MÁY ẢNH: image_pool_browser.py (96 account login + WINNING external mint: token từ chrome-trắng-CLEAN-tươi
+# dùng chung + submit ngoài IPv6 = đã đo 75-77%). image_factory.py = bản 10-ultra (chung với video, dùng khi cần).
 _USE_BROWSER_POOL = os.environ.get("VEO3TOP_IMG_BROWSER_POOL", "1") != "0"
 
 

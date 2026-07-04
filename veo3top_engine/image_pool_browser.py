@@ -23,6 +23,8 @@ if _HERE not in sys.path:
     sys.path.insert(0, _HERE)
 import flow_client as fc
 import ipv6_transport as ip6t
+import token_factory as tf
+import project_pool as pp
 from cdp_chrome import ChromeCDP, SITE_KEY, FLOW_URL
 try:
     from auth_cache import AuthCache
@@ -176,6 +178,26 @@ def _profile_logged_in(email):
         except Exception: pass
 
 
+# --- WINNING APPROACH (đã đo 75-77%): mint token IMAGE_GENERATION từ CHROME TRẮNG CLEAN TƯƠI dùng chung
+#     (IPv6 + recycle + adaptive, KHÔNG chai như chrome account persistent) + submit NGOÀI curl_cffi. ---
+IMG_EXTERNAL_GEN = os.environ.get("VEO3TOP_IMG_EXTERNAL_GEN", "1") != "0"   # 1=winning external (mặc định); 0=in-page cũ (chai)
+# Account cookie-based KHÔNG mở chrome -> dồn tài nguyên cho NHIỀU token chrome hơn = nhiều token = nhiều ảnh.
+IMG_TOKEN_CHROMES = int(os.environ.get("VEO3TOP_IMG_TOKEN_CHROMES", "5") or "5")
+_IMG_TOKFAC = None
+_IMG_TOKFAC_LOCK = threading.Lock()
+
+def _img_token_factory():
+    """Token factory CLEAN dùng chung cho POOL ẢNH (action IMAGE_GENERATION). Chrome trắng tươi recycle -> token điểm cao."""
+    global _IMG_TOKFAC
+    with _IMG_TOKFAC_LOCK:
+        if _IMG_TOKFAC is None:
+            # visible=False -> đẩy cửa sổ RA NGOÀI màn hình (--window-position=-32000) NHƯNG giữ CLEAN + GPU thật
+            # (off-screen KHÔNG phải tín hiệu bot; chỉ cờ --disable-gpu/--test-type mới hại) -> vẫn ra ảnh, đỡ vướng.
+            _IMG_TOKFAC = tf.get_image_factory(mode="blank", n_chromes=IMG_TOKEN_CHROMES, base_port=9740,
+                                               log=_log, ipv6=True, clean=True, visible=False)
+        return _IMG_TOKFAC
+
+
 class Account:
     def __init__(self, idx, email, password, totp, profile_base=None):
         self.idx = idx; self.email = email; self.password = password; self.totp = totp
@@ -191,6 +213,9 @@ class Account:
         self.stint = 0         # số ảnh RA trong LƯỢT active hiện tại (reset mỗi lần account được bốc lại); >= MAX_PER_ACCT -> xoay + nghỉ dài
         self.ref_cache = {}    # hash(rawImageBytes) -> media name (đã upload cho account NÀY) -> khỏi upload lại
         self._port = None
+        self._proj = pp.ProjectRotator()   # XOAY + TỰ CHỮA project (chống gãy 24/7)
+        self.last_gen_ts = 0.0
+        self._force_login = False   # 401 -> ép prepare LOGIN CHROME (bỏ fast-path cookie cũ) -> lấy cookie tươi (chống vòng lặp 401)
 
     def pick_model(self):
         now = time.time()
@@ -297,6 +322,24 @@ class Account:
         allow_login=False (POOL_LOGIN=0): chỉ reuse cookie (như cũ), account thiếu cookie -> nologin (bỏ qua nhẹ).
         Trả True nếu ready (có project). login nặng nên đi qua semaphore (giới hạn đồng thời)."""
         os.makedirs(self.profile, exist_ok=True)
+        # ⚡ FAST PATH (external + cookie cache còn sống): ready NGAY qua COOKIE, project tạo/lấy qua HTTP
+        #    -> KHÔNG mở chrome account -> onboard 96 account TỨC THÌ + nhẹ + concurrency cao (chỉ token factory có chrome).
+        #    BỎ QUA fast-path nếu _force_login (vừa 401 -> cookie chết -> phải login chrome/password lấy cookie tươi).
+        if IMG_EXTERNAL_GEN and _AUTHCACHE is not None and not self._force_login:
+            d = _AUTHCACHE._load(self.email)
+            if d and d.get("cookie"):
+                try: bearer, _ = fc.bearer_from_cookie(d["cookie"])
+                except Exception: bearer = None
+                if bearer:
+                    projs = fc.list_projects(d["cookie"])
+                    proj = (projs[0] if projs else None) or d.get("project") or fc.create_project(d["cookie"])
+                    if proj:
+                        self._start_ipv6()
+                        self.project = proj; self.cdp = None; self.state = "ready"
+                        try: _AUTHCACHE._save(self.email, {**d, "project": proj, "bearer": bearer, "ts": time.time()})
+                        except Exception: pass
+                        log(f"⚡ {self.email}: ready qua COOKIE (KHÔNG mở chrome) project {proj[:8]}")
+                        return True
         # 1) thử dùng session SẴN trong profile (nhanh, không login) — giống video reuse cookie
         c = self._open_cdp()
         if c:
@@ -313,9 +356,17 @@ class Account:
                     pid = c.fresh_project()    # TẠO project MỚI mỗi lần (user: không dùng project cũ); lỗi -> fallback project sẵn
                     if pid:
                         self.cdp = c; self.project = pid; self.state = "ready"
-                        self._save_cookie()   # lưu cookie tái dùng (như veo3top)
-                        self._warmup()        # đợi vài giây cho phiên 'già' -> điểm reCAPTCHA cao hơn (non-service)
-                        log(f"♻️ {self.email}: reuse session sẵn (project {self.project[:8]}) -> ready")
+                        self._save_cookie()   # lưu cookie tái dùng (như veo3top) -> generate_external dùng cookie này
+                        self._force_login = False   # login/reuse OK -> cookie tươi -> cho fast-path lại
+                        if IMG_EXTERNAL_GEN:
+                            # WINNING external: mint từ token factory + auth từ cookie cache -> KHÔNG cần giữ chrome
+                            # account mở (nặng). Đóng NGAY -> nhẹ. Chrome chỉ mở lúc prepare (login/lấy cookie) rồi đóng.
+                            try: c.close(kill=True)
+                            except Exception: pass
+                            self.cdp = None
+                        else:
+                            self._warmup()    # (in-page cũ) đợi phiên 'già' -> điểm reCAPTCHA cao hơn
+                        log(f"♻️ {self.email}: reuse session (project {self.project[:8]}) -> ready ({'external/đóng chrome' if IMG_EXTERNAL_GEN else 'in-page'})")
                         return True
                     # đã login (có email) nhưng tạo project lỗi (API/egress thoáng) -> nghỉ ngắn thử lại, KHÔNG coi là chưa login
                     self.state = "resting"
@@ -381,23 +432,30 @@ class Account:
             self.state = "dead"; log(f"✗ {self.email}: không tạo được project sau login (egress?) -> DEAD"); return False
         self.cdp = c; self.state = "ready"
         self._save_cookie()   # lưu cookie+bearer ra auth_cache (như veo3top) -> tái dùng
-        log(f"✅ {self.email}: login+warm xong (project {self.project[:8]}, egress {'ipv6' if self.ipv6 else 'ipmay'}) -> ready")
+        self._force_login = False   # login OK -> cookie tươi -> cho fast-path lại
+        if IMG_EXTERNAL_GEN:
+            # WINNING external: đóng chrome account NGAY sau khi cache cookie -> nhẹ (mint từ token factory, auth từ cookie)
+            try: c.close(kill=True)
+            except Exception: pass
+            self.cdp = None
+        log(f"✅ {self.email}: login+warm xong (project {self.project[:8]}) -> ready ({'external/đóng chrome' if IMG_EXTERNAL_GEN else 'in-page'})")
         return True
 
-    def _upload_ref(self, b64, mime="image/png"):
-        """Upload 1 ảnh reference (b64) -> media name (để dùng trong imageInputs {imageInputType,name}).
-        QUAN TRỌNG: upload qua PYTHON CURL DIRECT (bearer từ page), KHÔNG qua page-IPv6 (socks5 IPv6 KHÔNG upload
-        được body lớn -> 'Failed to fetch'). Upload không cần reCAPTCHA nên direct OK. Cache theo hash."""
+    def _upload_ref(self, b64, mime="image/png", bearer=None, project=None):
+        """Upload 1 ảnh reference (b64) -> media name. Upload qua PYTHON CURL DIRECT (không cần reCAPTCHA).
+        bearer/project truyền vào (từ cookie cache) -> KHÔNG cần chrome mở; nếu None -> lấy từ self.cdp (fallback)."""
         key = str(hash(b64))
         if key in self.ref_cache:
             return self.ref_cache[key]
         name = None
+        proj = project or self.project
         try:
-            bearer = self.cdp.bearer()
+            if bearer is None and self.cdp:
+                bearer = self.cdp.bearer()
             if bearer:
                 url = f"{fc.BASE}/flow/uploadImage?key={fc.KEY}"
                 payload = {"clientContext": {"sessionId": f";{int(time.time()*1000)}",
-                                             "projectId": self.project, "tool": "PINHOLE"},
+                                             "projectId": proj, "tool": "PINHOLE"},
                            "imageBytes": b64}
                 r = fc._post(url, fc._headers(bearer), json.dumps(payload), timeout=120, proxy=None)  # DIRECT
                 if r.status_code in (200, 201):
@@ -409,19 +467,77 @@ class Account:
             self.ref_cache[key] = name
         return name
 
-    def _resolve_inputs(self, image_inputs):
-        """ve3 gửi imageInputs=[{imageInputType,rawImageBytes,mimeType}] -> upload -> [{imageInputType,name}] (format API mới)."""
+    def _resolve_inputs(self, image_inputs, bearer=None, project=None):
+        """ve3 gửi imageInputs=[{imageInputType,rawImageBytes,mimeType}] -> upload -> [{imageInputType,name}] (format API mới).
+        bearer/project (từ cookie cache) -> upload không cần chrome; None -> fallback self.cdp."""
         out = []
         for inp in (image_inputs or []):
             if inp.get("name"):
                 out.append({"imageInputType": inp.get("imageInputType", "IMAGE_INPUT_TYPE_REFERENCE"), "name": inp["name"]})
             elif inp.get("rawImageBytes"):
-                nm = self._upload_ref(inp["rawImageBytes"], inp.get("mimeType", "image/png"))
+                nm = self._upload_ref(inp["rawImageBytes"], inp.get("mimeType", "image/png"), bearer=bearer, project=project)
                 if nm:
                     out.append({"imageInputType": inp.get("imageInputType", "IMAGE_INPUT_TYPE_REFERENCE"), "name": nm})
                 else:
                     return None   # upload lỗi -> báo để retry
         return out
+
+    def generate_external(self, prompt, model, aspect, seed, image_inputs):
+        """WINNING (đo 75-77%): token IMAGE từ FACTORY chrome-trắng-CLEAN-tươi dùng chung (không chai) + submit NGOÀI
+        (curl_cffi + IPv6 account + cookie). AUTH TỪ COOKIE CACHE (KHÔNG cần giữ chrome account mở -> NHẸ).
+        Trả (kind,data) CÙNG contract generate_inpage."""
+        # 1) auth từ COOKIE CACHE (bearer refresh từ cookie, TTL 30' — không mở chrome). Fallback chrome nếu chưa cache.
+        cookie = bearer = None
+        d = _AUTHCACHE._load(self.email) if _AUTHCACHE is not None else None
+        if d and d.get("cookie"):
+            cookie = d["cookie"]
+            if _AUTHCACHE._fresh(d):
+                bearer = d.get("bearer")
+            else:
+                nd = _AUTHCACHE._refresh_from_cookie(self.email, d)
+                bearer = nd.get("bearer") if nd else None
+        if (not cookie or not bearer) and self.cdp:   # chưa cache -> lấy từ chrome 1 lần (rồi _save_cookie đã lưu)
+            try:
+                bearer = self.cdp.bearer(); cookie = fc.labs_cookie_header(self.cdp.cookies())
+            except Exception:
+                pass
+        if not bearer or not cookie:
+            return "auth", {}
+        # 2) rotate project (self-heal 24/7)
+        proj = self._proj.next(cookie, fallback=(d or {}).get("project") or self.project, log=lambda m: _log(f"{self.email}: {m}"))
+        # 3) refs: upload external (curl direct) bằng bearer từ cookie -> name
+        if image_inputs:
+            resolved = self._resolve_inputs(image_inputs, bearer, proj)
+            if resolved is None:
+                return "retry", {"err": "upload reference lỗi"}
+            image_inputs = resolved
+        # 4) token từ factory CLEAN dùng chung (chrome trắng tươi recycle -> điểm cao)
+        tok = _img_token_factory().get(timeout=40)
+        if not tok:
+            return "retry", {"err": "no token"}
+        # 5) submit NGOÀI qua IPv6 riêng của account
+        payload = fc.build_image_payload(prompt, proj, tok, seed, aspect=aspect, model=model, image_inputs=image_inputs)
+        eproxy = self.ipv6.proxy_url() if self.ipv6 else None
+        kind, data = fc.generate_image(bearer, proj, payload, proxy=eproxy, cookie=cookie)
+        # 6) map -> contract generate_inpage (ok/auth/quota/recaptcha/retry)
+        if kind == "ok":
+            name, fife, b64, rseed = fc.image_result(data)
+            if fife or b64:
+                return "ok", {"name": name, "fife": fife, "b64": b64, "seed": rseed}
+            return "retry", {"err": "200 no image"}
+        if kind == "auth":
+            return "auth", {}
+        if kind == "ratelimit":
+            try:
+                if self.ipv6: self.ipv6.rotate()
+            except Exception: pass
+            return "recaptcha", {"body": "ratelimit->rotate ipv6"}
+        if kind in ("unusual", "recaptcha_quota"):
+            return "recaptcha", {"body": (str(data)[:70] if data else "")}
+        if pp.is_project_error(kind, data):
+            self._proj.mark_bad(proj, log=lambda m: _log(f"{self.email}: {m}"))
+            return "recaptcha", {"body": "project bad -> rotated"}
+        return "retry", {"err": str(data)[:100], "status": kind}
 
     def generate_inpage(self, prompt, model, aspect, seed, image_inputs):
         proj = self.project
@@ -730,6 +846,7 @@ class ImagePoolBrowser:
                         a.fails += 1; self.q.put(job)          # trả job về hàng đợi (account/slot khác lo)
                     elif isinstance(outcome, tuple) and outcome[0] == "reauth":
                         self.q.put(job)                         # cần login lại -> break để prepare lại
+                        a._force_login = True                   # 401 -> ép LOGIN CHROME/PASSWORD lần sau (bỏ cookie chết) -> BẤT TỬ
                         a.state = "new"
                     elif isinstance(outcome, tuple) and outcome[0] == "swap":
                         # reCAPTCHA lì -> ĐỔI ACCOUNT. Account bị đốt (swap NHIỀU lần liên tiếp) -> CÁCH LY (bad+cooldown)
@@ -799,7 +916,10 @@ class ImagePoolBrowser:
             retry_seen = 0
             for attempt in range(attempts):
                 a.last_gen_ts = time.time()
-                kind, data = a.generate_inpage(job["prompt"], model, aspect, seed, image_inputs)
+                if IMG_EXTERNAL_GEN:
+                    kind, data = a.generate_external(job["prompt"], model, aspect, seed, image_inputs)
+                else:
+                    kind, data = a.generate_inpage(job["prompt"], model, aspect, seed, image_inputs)
                 if kind == "ok":
                     a.model_wins[model] = a.model_wins.get(model, 0) + 1
                     op = job["out_path"]
@@ -841,7 +961,9 @@ class ImagePoolBrowser:
                         return ("reauth", "hang/loi page")
                     time.sleep(0.8)
             # hết attempts mà reCAPTCHA vẫn lì -> CLEAR-ON-403 (xóa state + reload -> gieo lại điểm) rồi thử tiếp
-            if CLEAR_ON_403 and a.last_kind == "recaptcha" and clear_rounds < CLEAR_RETRIES and not self.quota_blocked():
+            # external mint: token đến từ token factory (chrome trắng), KHÔNG phải chrome account -> clear-reload account VÔ ÍCH
+            # (và self.cdp đã đóng=None). Chỉ retry token factory mới. -> bỏ qua CLEAR_ON_403 khi external.
+            if CLEAR_ON_403 and not IMG_EXTERNAL_GEN and a.last_kind == "recaptcha" and clear_rounds < CLEAR_RETRIES and not self.quota_blocked():
                 clear_rounds += 1
                 self.log(f"🧹 {a.email} [{tag}]: 403 -> xóa data+reload gieo lại điểm (vòng {clear_rounds}/{CLEAR_RETRIES})")
                 if not a._clear_captcha_data():
