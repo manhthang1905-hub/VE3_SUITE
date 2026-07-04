@@ -358,42 +358,44 @@ class Account:
                         except Exception: pass
                         log(f"⚡ {self.email}: ready qua COOKIE (KHÔNG mở chrome) project {proj[:8]}")
                         return True
-        # 1) thử dùng session SẴN trong profile (nhanh, không login) — giống video reuse cookie
-        c = self._open_cdp()
-        if c:
-            try:
-                # THỬ email() NHIỀU LẦN: page/egress (IPv6) chậm dễ trả None thoáng qua -> account ĐÃ login bị gán
-                # 'nologin' OAN. Chờ session load thật sự trước khi kết luận chưa login.
-                em = None
-                for _try in range(4):
-                    try: em = c.email()
-                    except Exception: em = None
-                    if em: break
-                    time.sleep(2)
-                if em:
-                    pid = c.fresh_project()    # TẠO project MỚI mỗi lần (user: không dùng project cũ); lỗi -> fallback project sẵn
-                    if pid:
-                        self.cdp = c; self.project = pid; self.state = "ready"
-                        self._save_cookie()   # lưu cookie tái dùng (như veo3top) -> generate_external dùng cookie này
-                        self._force_login = False   # login/reuse OK -> cookie tươi -> cho fast-path lại
-                        if IMG_EXTERNAL_GEN:
-                            # WINNING external: mint từ token factory + auth từ cookie cache -> KHÔNG cần giữ chrome
-                            # account mở (nặng). Đóng NGAY -> nhẹ. Chrome chỉ mở lúc prepare (login/lấy cookie) rồi đóng.
-                            try: c.close(kill=True)
-                            except Exception: pass
-                            self.cdp = None
-                        else:
-                            self._warmup()    # (in-page cũ) đợi phiên 'già' -> điểm reCAPTCHA cao hơn
-                        log(f"♻️ {self.email}: reuse session (project {self.project[:8]}) -> ready ({'external/đóng chrome' if IMG_EXTERNAL_GEN else 'in-page'})")
-                        return True
-                    # đã login (có email) nhưng tạo project lỗi (API/egress thoáng) -> nghỉ ngắn thử lại, KHÔNG coi là chưa login
-                    self.state = "resting"
-                    log(f"😴 {self.email}: đã login nhưng tạo project lỗi (egress?) -> nghỉ ngắn thử lại")
-                    try: c.close(kill=True)
-                    except Exception: pass
-                    return False
-            except Exception:
-                pass
+        # 1) reuse session SẴN trong profile — GIỚI HẠN mở chrome ĐỒNG THỜI (login_sem = LOGIN_CONCURRENCY) ->
+        #    tránh 24 slot mở 24 chrome cùng lúc = CPU 99%. Sau khi lấy cookie -> đóng chrome (external) -> nhẹ.
+        with login_sem:
+            c = self._open_cdp()
+            if c:
+                try:
+                    # THỬ email() NHIỀU LẦN: page/egress (IPv6) chậm dễ trả None thoáng qua -> account ĐÃ login bị gán
+                    # 'nologin' OAN. Chờ session load thật sự trước khi kết luận chưa login.
+                    em = None
+                    for _try in range(4):
+                        try: em = c.email()
+                        except Exception: em = None
+                        if em: break
+                        time.sleep(2)
+                    if em:
+                        pid = c.fresh_project()    # TẠO project MỚI mỗi lần (user: không dùng project cũ); lỗi -> fallback project sẵn
+                        if pid:
+                            self.cdp = c; self.project = pid; self.state = "ready"
+                            self._save_cookie()   # lưu cookie tái dùng (như veo3top) -> generate_external dùng cookie này
+                            self._force_login = False   # login/reuse OK -> cookie tươi -> cho fast-path lại
+                            if IMG_EXTERNAL_GEN:
+                                # WINNING external: mint từ token factory + auth từ cookie cache -> KHÔNG cần giữ chrome
+                                # account mở (nặng). Đóng NGAY -> nhẹ. Chrome chỉ mở lúc prepare (login/lấy cookie) rồi đóng.
+                                try: c.close(kill=True)
+                                except Exception: pass
+                                self.cdp = None
+                            else:
+                                self._warmup()    # (in-page cũ) đợi phiên 'già' -> điểm reCAPTCHA cao hơn
+                            log(f"♻️ {self.email}: reuse session (project {self.project[:8]}) -> ready ({'external/đóng chrome' if IMG_EXTERNAL_GEN else 'in-page'})")
+                            return True
+                        # đã login (có email) nhưng tạo project lỗi (API/egress thoáng) -> nghỉ ngắn thử lại, KHÔNG coi là chưa login
+                        self.state = "resting"
+                        log(f"😴 {self.email}: đã login nhưng tạo project lỗi (egress?) -> nghỉ ngắn thử lại")
+                        try: c.close(kill=True)
+                        except Exception: pass
+                        return False
+                except Exception:
+                    pass
             try: c.close(kill=True)
             except Exception: pass
         # CHỈ-REUSE-COOKIE: chưa có session sẵn -> KHÔNG tự login (tránh Google reCAPTCHA-challenge khi login hàng
