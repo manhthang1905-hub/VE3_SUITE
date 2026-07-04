@@ -7002,9 +7002,9 @@ Get-CimInstance Win32_Process |
                         (vid_dir / f"{sid}.mp4").exists()
                         or (img_dir / f"{sid}.mp4").exists()
                     )
-                    # video "error" = LỖI (thường transient: recaptcha_quota/CPU/token) -> COI LÀ PENDING để RE-RUN retry
-                    # (KHÔNG bỏ qua như trước -> tránh project done mà thiếu video). Chỉ "skip" mới bỏ.
-                    if (not has_vid) and st_vid != "skip":
+                    # video GIỐNG HỆT ảnh: chưa có file + status không "skip"/"error" -> pending (re-run redo scene CHƯA LÀM).
+                    # "error" (đã retry hết trong lượt) -> KHÔNG pending -> project VẪN hoàn tất được (không kẹt mãi ở lỗi).
+                    if (not has_vid) and st_vid not in ("skip", "error"):
                         pending_vid = True
 
                 if pending_img or pending_vid:
