@@ -185,8 +185,9 @@ def _profile_logged_in(email):
 IMG_EXTERNAL_GEN = os.environ.get("VEO3TOP_IMG_EXTERNAL_GEN", "1") != "0"   # 1=winning external (mặc định); 0=in-page cũ (chai)
 # Account cookie-based KHÔNG mở chrome -> dồn tài nguyên cho NHIỀU token chrome hơn = nhiều token = nhiều ảnh.
 # ẢNH token-limited (synchronous, nhanh) -> nhiều token chrome nhất trong ngân sách máy (i9/64GB gánh khoẻ).
-# 8 chrome (recycle=10) ~4 token/s -> ~100+ ảnh/phút (mục tiêu 1000/10phút). Trần THẬT = quota reCAPTCHA.
-IMG_TOKEN_CHROMES = int(os.environ.get("VEO3TOP_IMG_TOKEN_CHROMES", "8") or "8")
+# CPU (i9 8 nhân) là trần thật, KHÔNG phải RAM: mỗi CLEAN chrome render GPU thật -> ~6 chrome ảnh + 3 video = ~9
+# token chrome giữ CPU ~70-85% (không thrash). 8+ chrome = CPU 100% = mint chậm = throughput THẤP hơn. Chrome đói CPU hại.
+IMG_TOKEN_CHROMES = int(os.environ.get("VEO3TOP_IMG_TOKEN_CHROMES", "6") or "6")
 _IMG_TOKFAC = None
 _IMG_TOKFAC_LOCK = threading.Lock()
 
