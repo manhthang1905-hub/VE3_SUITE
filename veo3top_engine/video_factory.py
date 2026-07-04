@@ -221,7 +221,43 @@ class VideoFactory:
                 t = threading.Thread(target=self._worker, args=(a,), daemon=True)
                 t.start(); self._workers.append(t)
         self.log(f"đã khởi động {len(self._workers)} worker ({len(self.accounts)} account x {wpa} luồng)")
+        # KEEP-WARM: giữ account video LUÔN TƯƠI (tự chữa 24/7). Video chạy BURST -> account nằm không
+        # giữa các burst -> bearer(~30p)/cookie hết hạn -> lúc phase video chạy mới phát hiện 0 SỐNG (chữa chậm+fail).
+        # Thread này refresh+validate mỗi ~10p, ngả -> chữa NỀN TRƯỚC -> khi video cần, account đã SỐNG sẵn.
+        self._warm_thread = threading.Thread(target=self._keep_warm_loop, daemon=True)
+        self._warm_thread.start()
         return True
+
+    def _keep_warm_loop(self):
+        """Chủ động làm tươi account (không đợi tới lúc video chạy mới biết chết). refresh bearer từ cookie
+        (giữ session ấm như ảnh chạy liên tục) + validate; chết -> chữa NỀN. Mỗi ~10 phút (bearer chết ~30p)."""
+        WARM_SECS = int(os.environ.get("VEO3TOP_POOL_KEEPWARM_SECS", "600") or "600")
+        # lượt đầu đợi 90s cho startup ổn định
+        for _ in range(9):
+            if not self._running: return
+            time.sleep(10)
+        while self._running:
+            fresh = 0; healed = 0
+            for a in self.accounts:
+                if not self._running: return
+                if getattr(a, "_recovering", False):
+                    continue
+                try:
+                    auth = a.auth(force=True)            # ép refresh từ cookie -> bearer mới + cookie được "chạm" (ấm)
+                    ok = bool(auth) and am.validate_auth(auth)
+                except Exception:
+                    ok = False
+                if ok:
+                    fresh += 1
+                else:
+                    healed += 1
+                    a.rest(1800)
+                    self.recovery.submit(a.email, lambda a=a: a.recover(self.log))
+            _log(f"keep-warm VIDEO: {fresh} tươi, {healed} ngả -> chữa NỀN chủ động (trước khi phase video cần)")
+            # ngủ WARM_SECS, chia nhỏ để stop() thoát nhanh
+            slept = 0
+            while self._running and slept < WARM_SECS:
+                time.sleep(5); slept += 5
 
     def stop(self):
         self._running = False

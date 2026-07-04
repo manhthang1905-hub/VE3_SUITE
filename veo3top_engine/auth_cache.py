@@ -13,7 +13,8 @@ if _HERE not in sys.path:
 import flow_client as fc
 from cdp_chrome import ChromeCDP
 
-BEARER_TTL = 2400          # 40 phút (token Google ~1h, refresh sớm cho chắc)
+BEARER_TTL = 1200          # 20 phút. ĐO THỰC (2026-07-05): bearer Google CHẾT ~30 phút (35m=401, 5m=OK), KHÔNG phải ~1h.
+                           # TTL 40 phút cũ -> trả bearer đã chết mà không refresh -> 0 SỐNG lúc video chạy. 20 phút = refresh sớm, an toàn.
 _AUTH_DIR_DEFAULT = os.path.join(_HERE, "_auth_cache")
 
 
@@ -88,6 +89,11 @@ class AuthCache:
             return None
         bearer, email = fc.bearer_from_cookie(d["cookie"])
         if not bearer:
+            return None
+        # CONTAMINATION GUARD (2026-07-05): cache có thể bị nhét NHẦM cookie account khác (đã thấy antonioundadi
+        # -> session trả lua789001). Cookie sai danh tính -> bearer sai project -> 401. Email session ≠ account -> BỎ, ép re-login.
+        if email and account and "@" in str(account) and str(email).lower() != str(account).lower():
+            self.log(f"[authcache] {account}: COOKIE LẪN LỘN (session trả {email}) -> bỏ cache, ép re-login")
             return None
         d = dict(d)
         d["bearer"] = bearer

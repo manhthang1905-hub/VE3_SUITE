@@ -248,6 +248,17 @@ def bearer_from_cookie(cookie, timeout=25):
         r = _cffi.get("https://labs.google/fx/api/auth/session", headers=H, **kw)
         if r.status_code == 200:
             j = r.json() or {}
+            # BUG FIX (2026-07-05): endpoint trả 200 + access_token CẢ KHI cookie ĐÃ HẾT HẠN (field "expires"
+            # ở quá khứ) -> token đó CHẾT (401 khi submit). Trước bỏ qua "expires" -> tưởng refresh thành công nhưng
+            # bearer chết -> account coi là sống rồi 401 hàng loạt. Giờ: expires quá khứ/sắp hết -> coi COOKIE CHẾT.
+            exp = j.get("expires")
+            if exp:
+                try:
+                    from datetime import datetime
+                    if datetime.fromisoformat(str(exp).replace("Z", "+00:00")).timestamp() < time.time() + 120:
+                        return None, None
+                except Exception:
+                    pass
             return j.get("access_token"), (j.get("user") or {}).get("email")
     except Exception:
         pass
