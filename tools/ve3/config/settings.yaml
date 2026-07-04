@@ -59,7 +59,7 @@ image_hide_chrome: true
 image_max_per_account: 5
 image_pool_accounts: 24
 image_swap_giveup: 2
-image_token_chromes: 6
+image_token_chromes: 4
 image_token_recycle: 10
 local_server_enabled: true
 local_server_list:

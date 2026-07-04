@@ -209,7 +209,7 @@ class VideoFactory:
         #    visible=True -> cửa sổ hiện (khớp lần test ra 200). Chrome tươi + IP tươi xoay liên tục = kiểu veo3top.
         self.factory = tf.get_factory(mode="blank", n_chromes=self.token_chromes,
                                       base_port=self.token_port, log=self.log,
-                                      ipv6=True, clean=True, visible=True)
+                                      ipv6=True, clean=True, visible=False)   # offscreen (đẩy ra ngoài) + CLEAN -> vẫn ra video, đỡ vướng cửa sổ
         if not (self.factory and self.factory._started):
             self.log("CẢNH BÁO: token factory chưa sẵn sàng")
         # 4) account workers — NHIỀU LUỒNG/ACCOUNT (như veo3top-b 7-20 luồng/tk, KHÔNG phải 1!)
