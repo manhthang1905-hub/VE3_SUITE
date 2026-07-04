@@ -454,22 +454,30 @@ class Account:
             return self.ref_cache[key]
         name = None
         proj = project or self.project
-        try:
-            if bearer is None and self.cdp:
-                bearer = self.cdp.bearer()
-            if bearer:
-                url = f"{fc.BASE}/flow/uploadImage?key={fc.KEY}"
-                payload = {"clientContext": {"sessionId": f";{int(time.time()*1000)}",
-                                             "projectId": proj, "tool": "PINHOLE"},
-                           "imageBytes": b64}
+        if bearer is None and self.cdp:
+            try: bearer = self.cdp.bearer()
+            except Exception: bearer = None
+        if not bearer:
+            return None
+        url = f"{fc.BASE}/flow/uploadImage?key={fc.KEY}"
+        payload = {"clientContext": {"sessionId": f";{int(time.time()*1000)}",
+                                     "projectId": proj, "tool": "PINHOLE"},
+                   "imageBytes": b64}
+        # RETRY upload (ảnh ref lớn qua IPv4 DIRECT hay flaky/MTU -> lỗi thoáng qua) -> 3 lần rồi mới báo lỗi.
+        for _att in range(3):
+            try:
                 r = fc._post(url, fc._headers(bearer), json.dumps(payload), timeout=120, proxy=None)  # DIRECT
                 if r.status_code in (200, 201):
                     media = (r.json() or {}).get("media") or {}
                     name = media.get("name") if isinstance(media, dict) else None
-        except Exception:
-            name = None
-        if name:
-            self.ref_cache[key] = name
+                    if name:
+                        self.ref_cache[key] = name
+                        return name
+                elif r.status_code == 401:
+                    return None   # bearer chết -> để generate_external xử lý auth (đừng retry vô ích)
+            except Exception:
+                pass
+            time.sleep(0.8 + _att)   # backoff nhẹ
         return name
 
     def _resolve_inputs(self, image_inputs, bearer=None, project=None):
