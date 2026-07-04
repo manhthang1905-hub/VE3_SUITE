@@ -191,6 +191,19 @@ IMG_TOKEN_CHROMES = int(os.environ.get("VEO3TOP_IMG_TOKEN_CHROMES", "6") or "6")
 _IMG_TOKFAC = None
 _IMG_TOKFAC_LOCK = threading.Lock()
 
+def _kill_pool_chromes():
+    """Tree-kill chrome của pool ẢNH: account (pool_img_profiles) + token factory (veo3tok_974x — PORT ảnh, base 9740).
+    KHÔNG đụng token chrome VIDEO (veo3tok_970x) hay tool khác. Dùng ở START (clean slate) VÀ STOP (không zombie)."""
+    try:
+        subprocess.run(["powershell", "-NoProfile", "-Command",
+                        "Get-CimInstance Win32_Process -Filter \"Name='chrome.exe'\" | "
+                        "Where-Object { $_.CommandLine -match 'pool_img_profiles|veo3tok_974' } | "
+                        "ForEach-Object { taskkill /F /T /PID $_.ProcessId 2>$null }"],
+                       capture_output=True, timeout=30, creationflags=0x08000000)
+    except Exception:
+        pass
+
+
 def _img_token_factory():
     """Token factory CLEAN dùng chung cho POOL ẢNH (action IMAGE_GENERATION). Chrome trắng tươi recycle -> token điểm cao."""
     global _IMG_TOKFAC
@@ -730,17 +743,8 @@ class ImagePoolBrowser:
 
     def start(self):
         os.makedirs(POOL_PROFILES, exist_ok=True)
-        # CLEAN SLATE: kill sạch chrome pool ẢNH CŨ còn sót từ lần chạy trước (tree-kill) -> tránh chrome mồ côi
-        # tích tụ khi restart/đổi số slot (vd đổi 10->5 vẫn còn 10 chrome cũ chạy).
-        try:
-            subprocess.run(["powershell", "-NoProfile", "-Command",
-                            "Get-CimInstance Win32_Process -Filter \"Name='chrome.exe'\" | "
-                            "Where-Object { $_.CommandLine -like '*pool_img_profiles*' } | "
-                            "ForEach-Object { taskkill /F /T /PID $_.ProcessId 2>$null }"],
-                           capture_output=True, timeout=30, creationflags=0x08000000)
-            time.sleep(2)
-        except Exception:
-            pass
+        # CLEAN SLATE: kill sạch chrome pool ẢNH CŨ còn sót (account + TOKEN FACTORY) từ lần chạy trước -> tránh zombie.
+        _kill_pool_chromes(); time.sleep(2)
         gmails = load_gmail_accounts()
         # CHỈ DÙNG ACCOUNT ĐÃ LOGIN (no-login mode): lọc bỏ account chưa có cookie google -> pool KHÔNG phí slot mở
         # chrome cho gmail chưa login (fail rồi nghỉ). User login thêm ở GUI -> RESTART tool để nạp thêm.
@@ -801,6 +805,13 @@ class ImagePoolBrowser:
         for a in list(self.active.values()):
             try: a.close()
             except Exception: pass
+        # STOP token factory (kill chrome mint) + BACKSTOP tree-kill mọi chrome pool -> KHÔNG để zombie khi tắt tool.
+        try:
+            global _IMG_TOKFAC
+            if _IMG_TOKFAC is not None:
+                _IMG_TOKFAC.stop()
+        except Exception: pass
+        _kill_pool_chromes()
 
     # ---------- 1 SLOT: bốc account -> chuẩn bị -> sản xuất tới khi account hỏng -> bốc account khác ----------
     def _slot_worker(self, slot):
@@ -1065,6 +1076,18 @@ def main():
     args = ap.parse_args()
     _FACTORY = ImagePoolBrowser(n_slots=args.accounts)
     _FACTORY.start()
+    # BACKSTOP zombie: dọn chrome khi tiến trình kết thúc kiểu nào (atexit + SIGTERM/SIGINT). taskkill /F thì
+    # clean-slate lần START sau lo (đã gồm token factory). -> KHÔNG để chrome zombie khi tắt tool.
+    import atexit, signal
+    atexit.register(_kill_pool_chromes)
+    def _on_sig(*_a):
+        try: _FACTORY.stop()
+        except Exception: pass
+        _kill_pool_chromes(); os._exit(0)
+    for _s in (getattr(signal, "SIGTERM", None), getattr(signal, "SIGINT", None), getattr(signal, "SIGBREAK", None)):
+        if _s is not None:
+            try: signal.signal(_s, _on_sig)
+            except Exception: pass
     srv = ThreadingHTTPServer(("127.0.0.1", args.port), _Handler)
     _log(f"HTTP ảnh browser nghe 127.0.0.1:{args.port} (POST /generate_image)")
     try:

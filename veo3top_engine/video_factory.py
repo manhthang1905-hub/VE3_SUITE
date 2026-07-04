@@ -235,6 +235,7 @@ class VideoFactory:
             try:
                 if a.ipv6: a.ipv6.stop()
             except Exception: pass
+        _kill_video_chromes()   # BACKSTOP: kill token chrome video còn sót -> KHÔNG zombie khi tắt
 
     # ---------- xử lý 1 job trên 1 account ----------
     def _process(self, account, job):
@@ -451,14 +452,38 @@ class _Handler(BaseHTTPRequestHandler):
         self._send(404, {"error": "not found"})
 
 
+def _kill_video_chromes():
+    """Tree-kill chrome token factory VIDEO (veo3tok_970x — PORT video base 9700). KHÔNG đụng ảnh (974x) / tool khác."""
+    import subprocess
+    try:
+        subprocess.run(["powershell", "-NoProfile", "-Command",
+                        "Get-CimInstance Win32_Process -Filter \"Name='chrome.exe'\" | "
+                        "Where-Object { $_.CommandLine -match 'veo3tok_970' } | "
+                        "ForEach-Object { taskkill /F /T /PID $_.ProcessId 2>$null }"],
+                       capture_output=True, timeout=30, creationflags=0x08000000)
+    except Exception:
+        pass
+
+
 def main():
     global _FACTORY
     ap = argparse.ArgumentParser()
     ap.add_argument("--port", type=int, default=8788)
     ap.add_argument("--token-chromes", type=int, default=2)
     args = ap.parse_args()
+    _kill_video_chromes()   # CLEAN SLATE: dọn token chrome video sót từ lần trước (tránh zombie tích tụ)
     _FACTORY = VideoFactory(token_chromes=args.token_chromes)
     _FACTORY.start()
+    import atexit, signal
+    atexit.register(_kill_video_chromes)   # BACKSTOP zombie khi tắt
+    def _on_sig(*_a):
+        try: _FACTORY.stop()
+        except Exception: pass
+        _kill_video_chromes(); os._exit(0)
+    for _s in (getattr(signal, "SIGTERM", None), getattr(signal, "SIGINT", None), getattr(signal, "SIGBREAK", None)):
+        if _s is not None:
+            try: signal.signal(_s, _on_sig)
+            except Exception: pass
     srv = ThreadingHTTPServer(("127.0.0.1", args.port), _Handler)
     _log(f"HTTP nghe 127.0.0.1:{args.port} (POST /generate, GET /health)")
     try:
@@ -466,7 +491,7 @@ def main():
     except KeyboardInterrupt:
         pass
     finally:
-        _FACTORY.stop()
+        _FACTORY.stop(); _kill_video_chromes()
 
 
 if __name__ == "__main__":

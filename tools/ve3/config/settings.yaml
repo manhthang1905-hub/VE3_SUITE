@@ -57,8 +57,13 @@ image_egress: ipv6
 image_fake_dns_google: true
 image_hide_chrome: true
 image_max_per_account: 5
-image_pool_accounts: 6
+image_pool_accounts: 24        # SỐ SLOT ảnh (concurrency). Account cookie-based nhẹ -> chạy nhiều. Máy yếu giảm.
+image_token_chromes: 6         # số chrome-trắng đẻ token ẢNH. CPU là trần (i9 ~6-8). Máy yếu giảm 3-4.
+image_token_recycle: 10        # đẻ ~N token/chrome rồi làm mới (cao=throughput, thấp=tươi hơn). 8-12 hợp lý.
 image_swap_giveup: 2
+# --- VIDEO (chỉnh theo máy) ---
+video_token_chromes: 3         # số chrome đẻ token VIDEO. Video async (render song song) cần ít. Tăng nếu retry nhiều + CPU dư.
+video_workers_per_account: 7   # luồng/account ultra (submit song song). 10 account x 7 = 70 worker.
 local_server_enabled: true
 local_server_list:
 - allowed_topics: ''

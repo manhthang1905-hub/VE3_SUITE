@@ -44,6 +44,18 @@ def _spawn_service(log=print):
     else:
         script = os.path.join(_HERE, "video_factory.py")
         args = [exe, script, "--port", str(PORT), "--token-chromes", str(_TOKEN_CHROMES)]
+    # Chỉnh theo máy qua settings.yaml (1 chỗ): video_token_chromes + video_workers_per_account.
+    _env = os.environ.copy()
+    try:
+        import yaml
+        _cfgp = os.path.join(os.path.dirname(os.path.dirname(_HERE)), "tools", "ve3", "config", "settings.yaml")
+        _cfg = yaml.safe_load(open(_cfgp, encoding="utf-8")) or {}
+        if _cfg.get("video_token_chromes") and "--token-chromes" in args:
+            args[args.index("--token-chromes") + 1] = str(int(_cfg["video_token_chromes"]))
+        if _cfg.get("video_workers_per_account"):
+            _env["VEO3TOP_POOL_WORKERS_PER_ACCOUNT"] = str(int(_cfg["video_workers_per_account"]))
+    except Exception:
+        pass
     CF = 0x08000000  # CREATE_NO_WINDOW
     # GHI log service ra FILE (CREATE_NO_WINDOW nuốt stdout -> trước đây không thấy token/generate lỗi gì).
     try:
@@ -52,7 +64,7 @@ def _spawn_service(log=print):
         out = lf
     except Exception:
         out = subprocess.DEVNULL
-    p = subprocess.Popen(args, creationflags=CF, cwd=_HERE, stdout=out, stderr=subprocess.STDOUT)
+    p = subprocess.Popen(args, creationflags=CF, cwd=_HERE, stdout=out, stderr=subprocess.STDOUT, env=_env)
     try:
         with open(_PIDF, "w") as f:
             f.write(str(p.pid))
