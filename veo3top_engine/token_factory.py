@@ -13,7 +13,7 @@ if _HERE not in sys.path:
 from cdp_chrome import ChromeCDP
 
 TOKEN_TTL = 85
-MINT_INTERVAL = 1.2      # GHÌM: giây giữa 2 lần mint (tránh flood recaptcha -> 429)
+MINT_INTERVAL = float(os.environ.get("VEO3TOP_MINT_INTERVAL", "1.2") or "1.2")  # GHÌM giây giữa 2 lần mint. Tăng (vd 2.2) = đốt quota reCAPTCHA CHẬM hơn -> bền, không cạn (sustainable mode).
 RECYCLE_TOKENS = 150     # account: recycle = reload (giữ login), ít cần fresh
 # blank: chrome TRẮNG MỚI TINH thường xuyên -> mỗi profile chỉ đẻ ít token khi session còn "sạch" (điểm cao),
 # giống veo3top mở rất nhiều chrome trắng. Tunable qua env VEO3TOP_TOKEN_RECYCLE.

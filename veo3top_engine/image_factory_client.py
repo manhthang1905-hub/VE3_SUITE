@@ -119,6 +119,8 @@ def _spawn_service(log=print):
             env["VEO3TOP_IMG_TOKEN_CHROMES"] = str(int(cfg.get("image_token_chromes")))
         if cfg.get("image_token_recycle"):
             env["VEO3TOP_TOKEN_RECYCLE"] = str(int(cfg.get("image_token_recycle")))
+        if cfg.get("mint_interval"):
+            env["VEO3TOP_MINT_INTERVAL"] = str(float(cfg.get("mint_interval")))   # sustainable: mint chậm -> đốt quota reCAPTCHA chậm (bền)
         # núm tinh chỉnh còn dùng: cách ly account đốt sau N lượt reCAPTCHA lì
         env["VEO3TOP_IMG_SWAP_GIVEUP"] = str(int(cfg.get("image_swap_giveup", 3)))
         # EGRESS ẢNH: 'direct' = IP máy + Fake DNS Google (đúng veo3top: điểm reCAPTCHA cao, hết IPv6 403+treo);

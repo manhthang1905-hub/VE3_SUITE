@@ -54,6 +54,8 @@ def _spawn_service(log=print):
             args[args.index("--token-chromes") + 1] = str(int(_cfg["video_token_chromes"]))
         if _cfg.get("video_workers_per_account"):
             _env["VEO3TOP_POOL_WORKERS_PER_ACCOUNT"] = str(int(_cfg["video_workers_per_account"]))
+        if _cfg.get("mint_interval"):
+            _env["VEO3TOP_MINT_INTERVAL"] = str(float(_cfg["mint_interval"]))   # sustainable: mint chậm -> đốt quota reCAPTCHA chậm
     except Exception:
         pass
     CF = 0x08000000  # CREATE_NO_WINDOW
