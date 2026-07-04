@@ -17,7 +17,7 @@ PORT = int(os.environ.get("VEO3TOP_POOL_PORT", "8788") or "8788")
 BASE = f"http://127.0.0.1:{PORT}"
 _LOCK = os.path.join(_SUITE, ".veo3top_pool_start.lock")
 _PIDF = os.path.join(_SUITE, ".veo3top_pool.pid")
-_TOKEN_CHROMES = int(os.environ.get("VEO3TOP_POOL_TOKEN_CHROMES", "10") or "10")  # ~1 chrome/account: 7 luồng/account cần ~7.3 token/s -> 10 chrome (như veo3top-b mỗi mã 1 chrome)
+_TOKEN_CHROMES = int(os.environ.get("VEO3TOP_POOL_TOKEN_CHROMES", "8") or "8")  # VIDEO async: submit NHIỀU -> render SONG SONG -> nhiều video hơn. Máy i9/64GB gánh khoẻ. Trần THẬT = quota reCAPTCHA (RESOURCE_EXHAUSTED), không phải máy.
 
 
 def is_up(timeout=3):

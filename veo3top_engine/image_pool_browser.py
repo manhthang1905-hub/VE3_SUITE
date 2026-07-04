@@ -41,8 +41,10 @@ STATE_FILE = os.path.join(SUITE, ".veo3top_imgpool_state.json")
 
 IMG_MODELS = [m.strip() for m in os.environ.get("VEO3TOP_IMG_MODELS", "GEM_PIX_2,NARWHAL,HARBOR_SEAL").split(",") if m.strip()]
 MODEL_REST_SECS = int(os.environ.get("VEO3TOP_IMG_MODEL_REST", "1800") or "1800")
-N_SLOTS = int(os.environ.get("VEO3TOP_IMG_POOL_ACCOUNTS", "10") or "10")
-LOGIN_CONCURRENCY = int(os.environ.get("VEO3TOP_IMG_LOGIN_CONCURRENCY", "3") or "3")
+# CONCURRENCY: account cookie-based (KHÔNG mở chrome/slot) -> chạy được NHIỀU slot song song (nhẹ). 24 account × 1 luồng
+# = 24 submit song song (per-account tải thấp -> né throttle tốt hơn ít-account-nhiều-luồng). Trải trên 96 account.
+N_SLOTS = int(os.environ.get("VEO3TOP_IMG_POOL_ACCOUNTS", "24") or "24")
+LOGIN_CONCURRENCY = int(os.environ.get("VEO3TOP_IMG_LOGIN_CONCURRENCY", "4") or "4")
 # CHỈ REUSE COOKIE (mặc định BẬT): pool KHÔNG tự login (login hàng loạt cùng 1 IP -> Google bắt reCAPTCHA challenge
 # -> gãy hết -> DEAD). User login riêng ở GUI (rải chậm) để profile có cookie; pool chỉ MỞ profile đã login sẵn +
 # generate. Account chưa có cookie -> đánh dấu 'nologin' (bỏ qua nhẹ, KHÔNG dead, thử lại sau khi user login).
@@ -182,7 +184,9 @@ def _profile_logged_in(email):
 #     (IPv6 + recycle + adaptive, KHÔNG chai như chrome account persistent) + submit NGOÀI curl_cffi. ---
 IMG_EXTERNAL_GEN = os.environ.get("VEO3TOP_IMG_EXTERNAL_GEN", "1") != "0"   # 1=winning external (mặc định); 0=in-page cũ (chai)
 # Account cookie-based KHÔNG mở chrome -> dồn tài nguyên cho NHIỀU token chrome hơn = nhiều token = nhiều ảnh.
-IMG_TOKEN_CHROMES = int(os.environ.get("VEO3TOP_IMG_TOKEN_CHROMES", "5") or "5")
+# ẢNH token-limited (synchronous, nhanh) -> nhiều token chrome nhất trong ngân sách máy (i9/64GB gánh khoẻ).
+# 8 chrome (recycle=10) ~4 token/s -> ~100+ ảnh/phút (mục tiêu 1000/10phút). Trần THẬT = quota reCAPTCHA.
+IMG_TOKEN_CHROMES = int(os.environ.get("VEO3TOP_IMG_TOKEN_CHROMES", "8") or "8")
 _IMG_TOKFAC = None
 _IMG_TOKFAC_LOCK = threading.Lock()
 
