@@ -1612,16 +1612,26 @@ class SettingsPage(ctk.CTkScrollableFrame):
         # NUM TINH CHINH NHA MAY ANH (toi uu toc do, chong 403). Tat ca so nguyen.
         knob = ctk.CTkFrame(gc, fg_color="transparent")
         knob.grid(row=8, column=0, columnspan=3, padx=10, pady=(0,6), sticky="w")
-        def _mk_knob(col, label, width=52):
-            ctk.CTkLabel(knob, text=label, font=("",10), text_color=T2).grid(row=0, column=col*2, padx=(0 if col==0 else 10, 4), sticky="e")
+        def _mk_knob(col, label, width=52, row=0):
+            ctk.CTkLabel(knob, text=label, font=("",10), text_color=T2).grid(row=row, column=col*2, padx=(0 if col==0 else 10, 4), pady=(0,3), sticky="e")
             e = ctk.CTkEntry(knob, width=width, height=28, corner_radius=4, font=("",11), fg_color=EN, border_color=BD, justify="center")
-            e.grid(row=0, column=col*2+1, sticky="w")
+            e.grid(row=row, column=col*2+1, pady=(0,3), sticky="w")
             return e
-        # So chrome = so chrome/slot pool anh chay song song; So ma = so MA (video) chay cung luc (0=khong gioi han);
-        # Cach ly = swap may lan (reCAPTCHA li) thi tam loai acc dot. (Da bo "So anh/acc" & "Nghi giay" - khai thac toi khi fail)
-        self.ent_img_accounts = _mk_knob(0, "So chrome:")
+        # HANG 1: So slot anh (concurrency) | So ma video song song | Cach ly acc dot
+        self.ent_img_accounts = _mk_knob(0, "Slot anh:")
         self.ent_codes       = _mk_knob(1, "So ma song song:", width=44)
         self.ent_img_giveup  = _mk_knob(2, "Cach ly:")
+        # HANG 2 (TUNE THEO MAY): token chrome anh/video + recycle + luong video
+        self.ent_img_tokchrome = _mk_knob(0, "Token chrome anh:", width=44, row=1)
+        self.ent_img_recycle   = _mk_knob(1, "Recycle token:", width=44, row=1)
+        self.ent_vid_tokchrome = _mk_knob(2, "Token chrome video:", width=44, row=1)
+        self.ent_vid_workers   = _mk_knob(3, "Luong/acc video:", width=44, row=1)
+        # CHU THICH y nghia (chinh theo may -> restart de ap) — dat trong frame knob, hang 2
+        ctk.CTkLabel(knob, justify="left", font=("",9), text_color=T2, anchor="w", wraplength=360,
+                     text=("Slot anh=so account song song (nhe, cookie-based). Token chrome=so chrome-trang de token "
+                           "(CPU la tran ~6-8). Recycle=N token/chrome roi lam moi (cao=nhanh). Token video=video async can it. "
+                           "Luong/acc video=submit/account ultra. Restart de ap.")
+                     ).grid(row=2, column=0, columnspan=8, padx=(0,4), pady=(4,0), sticky="w")
         ctk.CTkButton(gc, text="Save settings", width=120, height=30, fg_color=AC, hover_color=AC2, text_color="#FFF", font=("",11,"bold"), corner_radius=6, command=self._save).grid(row=9, column=0, columnspan=3, padx=10, pady=(4,4))
         self.lbl_saved = ctk.CTkLabel(gc, text="", font=("",9), text_color=OK)
         self.lbl_saved.grid(row=10, column=0, columnspan=3, padx=10, pady=(0,4))
@@ -2176,9 +2186,13 @@ class SettingsPage(ctk.CTkScrollableFrame):
         else:
             self.sw_img_hide.deselect()
         try:
-            for _ent, _key, _def in ((self.ent_img_accounts, "image_pool_accounts", 10),
+            for _ent, _key, _def in ((self.ent_img_accounts, "image_pool_accounts", 24),
                                      (self.ent_codes, "max_concurrent_codes", 0),
-                                     (self.ent_img_giveup, "image_swap_giveup", 3)):
+                                     (self.ent_img_giveup, "image_swap_giveup", 2),
+                                     (self.ent_img_tokchrome, "image_token_chromes", 6),
+                                     (self.ent_img_recycle, "image_token_recycle", 10),
+                                     (self.ent_vid_tokchrome, "video_token_chromes", 3),
+                                     (self.ent_vid_workers, "video_workers_per_account", 7)):
                 _ent.delete(0, "end"); _ent.insert(0, str(cfg.get(_key, _def)))
         except Exception:
             pass
@@ -2227,9 +2241,13 @@ class SettingsPage(ctk.CTkScrollableFrame):
                 cfg[key] = max(lo, min(hi, int((ent.get() or str(default)).strip())))
             except Exception:
                 cfg[key] = default
-        _knob(self.ent_img_accounts, "image_pool_accounts", 10, 1, 50)
+        _knob(self.ent_img_accounts, "image_pool_accounts", 24, 1, 60)
         _knob(self.ent_codes,       "max_concurrent_codes", 0, 0, 100)   # 0 = khong gioi han so ma
-        _knob(self.ent_img_giveup,  "image_swap_giveup", 3, 1, 20)
+        _knob(self.ent_img_giveup,  "image_swap_giveup", 2, 1, 20)
+        _knob(self.ent_img_tokchrome, "image_token_chromes", 6, 1, 16)   # token chrome anh (CPU la tran)
+        _knob(self.ent_img_recycle,   "image_token_recycle", 10, 2, 50)  # recycle token
+        _knob(self.ent_vid_tokchrome, "video_token_chromes", 3, 1, 16)   # token chrome video
+        _knob(self.ent_vid_workers,   "video_workers_per_account", 7, 1, 30)  # luong/account ultra
         cfg["veo3top_image_mode"] = self.image_backend_options.get(self.opt_image_backend.get().strip(), "")
         selected_provider_label = self.opt_excel_ai_provider.get().strip() or "DeepSeek"
         cfg["excel_ai_provider"] = self.excel_ai_provider_options.get(selected_provider_label, "deepseek")
@@ -2744,9 +2762,13 @@ Write-Output $kill.Count
         except: self.config_data = {}
         self.config_data.setdefault("music_workspace_mode_enabled", True)
         self.config_data.setdefault("image_hide_chrome", True)   # mặc định ẩn chrome tạo ảnh
-        self.config_data.setdefault("image_pool_accounts", 10)   # mặc định 10 mã chạy song song
-        self.config_data.setdefault("image_swap_giveup", 3)      # swap mấy lượt thì cách ly account đốt
+        self.config_data.setdefault("image_pool_accounts", 24)   # slot ảnh (account song song, cookie-based nhẹ)
+        self.config_data.setdefault("image_swap_giveup", 2)      # swap mấy lượt thì cách ly account đốt
         self.config_data.setdefault("max_concurrent_codes", 0)   # số mã (video) chạy song song; 0 = không giới hạn
+        self.config_data.setdefault("image_token_chromes", 6)    # chrome-trắng đẻ token ảnh (CPU là trần)
+        self.config_data.setdefault("image_token_recycle", 10)   # đẻ N token/chrome rồi làm mới
+        self.config_data.setdefault("video_token_chromes", 3)    # chrome đẻ token video (async cần ít)
+        self.config_data.setdefault("video_workers_per_account", 7)  # luồng submit/account ultra
 
     def _save_config(self):
         try:
