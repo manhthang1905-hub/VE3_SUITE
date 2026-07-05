@@ -57,9 +57,9 @@ image_egress: ipv6
 image_fake_dns_google: true
 image_hide_chrome: true
 image_max_per_account: 5
-image_pool_accounts: 12
+image_pool_accounts: 24
 image_swap_giveup: 2
-image_token_chromes: 2
+image_token_chromes: 4
 image_token_recycle: 10
 local_server_enabled: true
 local_server_list:
@@ -189,6 +189,7 @@ log_level: INFO
 max_concurrent: 4
 max_concurrent_codes: 2
 max_parallel_api: 11
+mint_interval: 1.2
 music_workspace_mode_enabled: true
 nanopic_access_token: ''
 nanopic_base_url: https://flow-api.nanoai.pics/api/v2
@@ -211,9 +212,8 @@ retry_count: 3
 topic: story
 use_local_token_for_image: false
 veo3top_image_mode: pool
-mint_interval: 2.2
-video_token_chromes: 2
-video_workers_per_account: 4
+video_token_chromes: 3
+video_workers_per_account: 7
 vov_direct_api_key: sk-6m5lfOmA6GdmbkZfWKXNYLtB6ouLfyfvf06obd7g3kZKdljB
 vov_direct_base_url: https://routerapi.vovantin.online/v1
 vov_direct_model: claude-sonnet-4-6
