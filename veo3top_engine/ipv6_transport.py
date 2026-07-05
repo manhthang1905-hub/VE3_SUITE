@@ -261,12 +261,27 @@ class IPv6Transport:
                 self.ip = newip
                 self.log(f"[ipv6] rotate (bound) {old} -> {newip}")
                 return newip
-            ip, gw = self._pool_rotate()
+            # FIX (2026-07-05): pool có ~136 IP unique NHƯNG _pool_rotate 1 worker chỉ xoay 2 IP -> IP cháy -> unusual.
+            # Lấy IP TƯƠI UNIQUE bằng WORKER MỚI mỗi lần (đã đo: worker khác = IP khác 6/6) -> né burn per-IP.
+            self._rot_n = getattr(self, "_rot_n", 0) + 1
+            ip = gw = None
+            try:
+                r = requests.get(f"{self.pool_url}/api/get_ip?worker={self.worker}_r{self._rot_n}", timeout=8).json()
+                if r.get("success"):
+                    ip, gw = r.get("ip"), r.get("gateway", "")
+            except Exception as e:
+                self.log(f"[ipv6] rotate fresh-ip err: {e}")
+            if not ip or ip == old:
+                ip, gw = self._pool_rotate()
             if not ip or ip == old:
                 ip, gw = self._pool_get()
             if not ip:
                 self.log("[ipv6] rotate: hết IP")
                 return None
+            # trả IP cũ về pool (điều phối: 136 IP xoay vòng, không cạn)
+            if old and old != ip:
+                try: requests.post(f"{self.pool_url}/api/release_ip", json={"ip": old, "worker": self.worker}, timeout=5)
+                except Exception: pass
             ensure_address(ip, gw, self.log)
             if self.proxy:
                 self.proxy.set_ipv6(ip)   # chỉ đổi source bind — an toàn đa tiến trình

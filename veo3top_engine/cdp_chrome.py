@@ -97,6 +97,11 @@ class ChromeCDP:
             args = [self.chrome_exe, f"--remote-debugging-port={self.port}", "--remote-allow-origins=*",
                     f"--user-data-dir={self.profile_dir}",
                     "--no-first-run", "--no-default-browser-check",
+                    # CHỐNG RÒ IP QUA WebRTC (đã mổ veo3top captcha chrome 2026-07-05: nó CÓ 2 cờ này, CLEAN mode mình
+                    # trước THIẾU -> WebRTC rò IP máy thật khác IP proxy -> reCAPTCHA thấy mismatch -> UNUSUAL. KHÔNG phải
+                    # cờ lộ-bot, mà là cờ NHẤT QUÁN IP như Chrome thật proxy). Google siết check WebRTC (hôm qua chưa).
+                    "--force-webrtc-ip-handling-policy=disable_non_proxied_udp",
+                    "--disable-features=WebRtcHideLocalIpsWithMdns,WebRTC-MDNS-Responder",
                     "--window-size=1280,860"]
         else:
             args = [self.chrome_exe, f"--remote-debugging-port={self.port}", "--remote-allow-origins=*",
