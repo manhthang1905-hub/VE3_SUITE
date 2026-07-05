@@ -36,6 +36,7 @@ WARP_PROXY = "socks5://127.0.0.1:40000"
 # LỖI THẬT = "reCAPTCHA evaluation failed" (recaptcha_quota): token bị đánh giá trượt -> phải RETRY TOKEN MỚI
 # KIÊN NHẪN (như veo3top ~50 lần) tới khi 1 token qua. KHÔNG nghỉ account (không phải lỗi account).
 GEN_ATTEMPTS = 40          # số lần bắn token MỚI/1 lượt lease (kiên nhẫn như veo3top) trước khi trả job về hàng đợi
+BYPASS_RETRY = int(os.environ.get("VEO3TOP_BYPASS_RETRY", "5") or "5")  # bypass trượt liên tiếp bao nhiêu lần mới mint WEB token fallback
 JOB_MAX_CYCLES = 40        # 1 job được chuyền/thử tối đa bao nhiêu lượt trước khi bỏ
 REST_SOFT = 8              # sau 1 lượt 40 lần vẫn chưa qua -> nghỉ NGẮN 8s cho account thở rồi worker pull tiếp
 REST_BASE = 20             # (chỉ dùng cho lỗi per-IP/account thật sự)
@@ -182,12 +183,12 @@ class VideoFactory:
         self.accounts = [Account(a["name"], a["email"], a["chrome_path"], self.cache, a.get("bundle", "")) for a in pool]
         self._startup_check()
 
-        # 2) egress: MỖI ACCOUNT 1 IPv6 RIÊNG (giống veo3top-b) -> quota reCAPTCHA per-IP KHÔNG dùng chung
-        #    -> 10 account = 10 IP độc lập = ~10x throughput (thay vì chung 1 IP bị nghẽn).
-        #    Tắt IPv6 -> VEO3TOP_POOL_USE_IPV6=0 (submit direct IP máy).
+        # 2) egress: android_bypass chạy 100% trên IP MÁY (đã đo video 13/13) -> KHÔNG cần IPv6.
+        #    IPv6Transport gọi netsh cho MỖI account -> netsh chất đống -> KẸT + NẶNG MÁY (giống ảnh).
+        #    -> MẶC ĐỊNH TẮT IPv6 (VEO3TOP_POOL_USE_IPV6=1 để bật lại nếu muốn phân tán per-IP volume lớn).
         self.transport = None
-        if os.environ.get("VEO3TOP_POOL_USE_IPV6", "1") != "1":
-            self.log("egress = DIRECT IP máy (VEO3TOP_POOL_USE_IPV6=0)")
+        if os.environ.get("VEO3TOP_POOL_USE_IPV6", "0") != "1":
+            self.log("egress = DIRECT IP máy (IPv6 TẮT — bypass chạy IP máy, tránh netsh nặng)")
             return self._start_rest()
         ok6 = 0
         for i, a in enumerate(self.accounts):
@@ -202,16 +203,11 @@ class VideoFactory:
 
     def _start_rest(self):
         self.log(f"EGRESS: {[e[0] for e in self.egress]}")
-        # 3) token factory chung (chrome trắng, account-agnostic).
-        #    CÔNG THỨC THẮNG VIDEO (đã ra 200 — xem memory video-token-winning-recipe):
-        #    ipv6=True  -> mỗi chrome mint đi ra IPv6 pool tươi (budget reCAPTCHA riêng, né TOO_MUCH_TRAFFIC IP máy)
-        #    clean=True -> cờ CLEAN (bỏ --test-type/--disable-gpu -> né UNUSUAL_ACTIVITY, GPU thật)
-        #    visible=True -> cửa sổ hiện (khớp lần test ra 200). Chrome tươi + IP tươi xoay liên tục = kiểu veo3top.
-        self.factory = tf.get_factory(mode="blank", n_chromes=self.token_chromes,
-                                      base_port=self.token_port, log=self.log,
-                                      ipv6=True, clean=True, visible=True)   # cửa sổ HIỆN = công thức THẮNG (test ra 200). offscreen(-32000) = tín hiệu bot nhẹ -> reCAPTCHA VIDEO (action nghiêm hơn ảnh) tụt điểm -> UNUSUAL (gộp recaptcha_quota). Ảnh chịu được offscreen, VIDEO KHÔNG.
-        if not (self.factory and self.factory._started):
-            self.log("CẢNH BÁO: token factory chưa sẵn sàng")
+        # 3) ĐƯỜNG CHÍNH giờ = android_bypass (submit curl thuần, KHÔNG mint captcha) -> KHÔNG cần token factory.
+        #    Token factory (mint WEB token thật qua Chrome) chỉ là FALLBACK khi bypass trượt -> khởi động LAZY
+        #    (chỉ mở Chrome khi thực sự cần), đỡ tốn Chrome/CPU khi bypass chạy tốt (~100%).
+        self.factory = None
+        self._factory_lock = threading.Lock()
         # 4) account workers — NHIỀU LUỒNG/ACCOUNT (như veo3top-b 7-20 luồng/tk, KHÔNG phải 1!)
         #    Mỗi account chạy song song nhiều video -> tận dụng hết account (render 1 cái, grind cái khác).
         self._running = True
@@ -227,6 +223,24 @@ class VideoFactory:
         self._warm_thread = threading.Thread(target=self._keep_warm_loop, daemon=True)
         self._warm_thread.start()
         return True
+
+    def _ensure_factory(self):
+        """LAZY: mở token factory WEB (Chrome mint token thật) LẦN ĐẦU khi bypass fail cần fallback.
+        Trả factory (đã _started) hoặc None. Bypass chạy tốt (~100%) thì KHÔNG bao giờ gọi -> không mở Chrome."""
+        if self.factory and getattr(self.factory, "_started", False):
+            return self.factory
+        with self._factory_lock:
+            if self.factory and getattr(self.factory, "_started", False):
+                return self.factory
+            try:
+                self.log("bypass fail -> KHỞI ĐỘNG token factory WEB (fallback, mở Chrome mint token thật)…")
+                self.factory = tf.get_factory(mode="blank", n_chromes=self.token_chromes,
+                                              base_port=self.token_port, log=self.log,
+                                              ipv6=True, clean=True, visible=True)
+            except Exception as e:
+                self.log(f"không khởi động được token factory WEB: {e}")
+                self.factory = None
+        return self.factory if (self.factory and getattr(self.factory, "_started", False)) else None
 
     def _keep_warm_loop(self):
         """Chủ động làm tươi account (không đợi tới lúc video chạy mới biết chết). refresh bearer từ cookie
@@ -315,21 +329,31 @@ class VideoFactory:
         # 2) generate I2V — RETRY TOKEN MỚI KIÊN NHẪN (như veo3top). Lỗi chính = reCAPTCHA đánh giá trượt
         #    -> cứ bắn token mới, backoff NGẮN, KHÔNG nghỉ account. Xoay egress phòng lỗi per-IP.
         auth_fails = 0
+        bypass_fails = 0
         for attempt in range(GEN_ATTEMPTS):
-            tok = self.factory.get()
-            if not tok:
-                time.sleep(1); continue
             # Submit qua IPv6 RIÊNG của account này (như veo3top-b) -> IP độc lập, quota reCAPTCHA không chung.
             # KHÔNG xoay ở đây; chỉ xoay khi 429 per-IP thật (nhánh ratelimit).
             if account.ipv6:
                 ename, eproxy = "ipv6", account.ipv6.proxy_url()
             else:
                 ename, eproxy = "ipmay", None
-            payload = fc.build_payload(job["prompt"], project, tok, seed,
-                                       aspect=aspect, reference_media_id=media_id)
-            # KHÔNG rate_coordinator machine-wide ở đây: mỗi account có IPv6 RIÊNG -> giới hạn per-IP độc lập,
-            # ghìm chung sẽ bóp cổ chai 70 luồng. 429 per-IP (nếu có) đã xử lý ở nhánh ratelimit (xoay IP).
-            kind, data = fc.generate(bearer, payload, url=fc.GEN_I2V, proxy=eproxy, cookie=cookie)
+            # ĐƯỜNG CHÍNH: android_bypass (giải mã tst) — bỏ qua reCAPTCHA, submit curl thuần, KHÔNG mint token
+            # (đó là nguồn UNUSUAL). Đã đo video 13/13 submit 200. Token='android_bypass', app_type=ANDROID.
+            payload = fc.build_payload(job["prompt"], project, fc.BYPASS_TOKEN, seed,
+                                       aspect=aspect, reference_media_id=media_id, app_type=fc.APP_TYPE_ANDROID)
+            kind, data = fc.generate(bearer, payload, url=fc.GEN_I2V, proxy=eproxy, bypass=True)
+            # bypass trượt (unusual/other) -> RETRY bypass vài lần (rẻ); liên tiếp >= BYPASS_RETRY mới mint WEB
+            # token thật fallback. KHÔNG fallback ratelimit/quota/auth/project (xử lý ở nhánh dưới).
+            if kind in ("unusual", "other"):
+                bypass_fails += 1
+                if bypass_fails < BYPASS_RETRY:
+                    time.sleep(0.4 + random.uniform(0, 0.4)); continue
+                fac = self._ensure_factory()
+                tok = fac.get() if fac else None
+                if tok:
+                    payload = fc.build_payload(job["prompt"], project, tok, seed,
+                                               aspect=aspect, reference_media_id=media_id, app_type=fc.APP_TYPE_WEB)
+                    kind, data = fc.generate(bearer, payload, url=fc.GEN_I2V, proxy=eproxy, cookie=cookie)
             if kind == "ok":
                 account.note_egress_win(ename)
                 op = (fc.operation_names(data) or [None])[0]
@@ -387,7 +411,8 @@ class VideoFactory:
                     return "retry_soft"
                 else:
                     # recaptcha_quota/unusual = token trượt reCAPTCHA -> bắn TOKEN MỚI nhanh (kiên nhẫn như veo3top)
-                    try: self.factory.note_error()   # tích lỗi -> reset chrome fresh (giống veo3top numreset)
+                    try:
+                        if self.factory: self.factory.note_error()   # tích lỗi -> reset chrome fresh (chỉ khi WEB fallback đang chạy)
                     except Exception: pass
                     time.sleep(1.0 + random.uniform(0, 0.8))
                 if attempt and attempt % 10 == 0:
@@ -513,6 +538,16 @@ def main():
     ap.add_argument("--port", type=int, default=8788)
     ap.add_argument("--token-chromes", type=int, default=2)
     args = ap.parse_args()
+    # SINGLETON GUARD (chống RESPAWN STORM): Windows allow_reuse_address=True -> nhiều process cùng bind :8788
+    # được -> chồng đống instance, mỗi cái mở chrome recovery = CỰC NẶNG. Nếu đã có video_factory chạy -> THOÁT.
+    try:
+        import urllib.request
+        _h = json.load(urllib.request.urlopen(f"http://127.0.0.1:{args.port}/health", timeout=3))
+        if isinstance(_h, dict) and ("accounts" in _h or "queue" in _h):
+            print(f"[videofactory] đã chạy sẵn trên :{args.port} -> THOÁT (tránh trùng instance).", flush=True)
+            return
+    except Exception:
+        pass
     _kill_video_chromes()   # CLEAN SLATE: dọn token chrome video sót từ lần trước (tránh zombie tích tụ)
     _FACTORY = VideoFactory(token_chromes=args.token_chromes)
     _FACTORY.start()

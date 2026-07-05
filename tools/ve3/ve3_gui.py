@@ -1632,6 +1632,7 @@ class SettingsPage(ctk.CTkScrollableFrame):
                            "(CPU la tran ~6-8). Recycle=N token/chrome roi lam moi (cao=nhanh). Token video=video async can it. "
                            "Luong/acc video=submit/account ultra. Restart de ap.")
                      ).grid(row=2, column=0, columnspan=8, padx=(0,4), pady=(4,0), sticky="w")
+        ctk.CTkButton(gc, text="⚙ Auto Setup (theo máy)", width=180, height=30, fg_color="#00897B", hover_color="#00695C", text_color="#FFF", font=("",11,"bold"), corner_radius=6, command=self._auto_setup).grid(row=8, column=0, columnspan=3, padx=10, pady=(6,2))
         ctk.CTkButton(gc, text="Save settings", width=120, height=30, fg_color=AC, hover_color=AC2, text_color="#FFF", font=("",11,"bold"), corner_radius=6, command=self._save).grid(row=9, column=0, columnspan=3, padx=10, pady=(4,4))
         self.lbl_saved = ctk.CTkLabel(gc, text="", font=("",9), text_color=OK)
         self.lbl_saved.grid(row=10, column=0, columnspan=3, padx=10, pady=(0,4))
@@ -2218,6 +2219,73 @@ class SettingsPage(ctk.CTkScrollableFrame):
                 })
         return servers
 
+    def _auto_setup(self):
+        """Đọc tài nguyên máy (CPU/RAM) + đếm số account ảnh/video -> tính thông số TỐI ƯU -> tự điền vào các ô.
+        Bypass = curl thuần (nhẹ) nên ảnh dùng HẾT account; token chrome chỉ là fallback -> để thấp theo CPU."""
+        import os, sys
+        # 1) tài nguyên máy
+        try:
+            import psutil
+            cores = psutil.cpu_count(logical=True) or 8
+            ram_gb = psutil.virtual_memory().total / 1e9
+        except Exception:
+            cores, ram_gb = (os.cpu_count() or 8), 16.0
+        # 2) đếm account ẢNH (sqlite accounts.db: account có password+totp — nguồn thật image_pool_browser dùng)
+        #    + VIDEO (pool_accounts.load_pool_accounts). Đọc trực tiếp -> KHÔNG import module nặng (cdp_chrome...).
+        n_img, n_vid = 96, 10
+        suite = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+        try:
+            import sqlite3
+            dbp = os.path.join(suite, "accounts", "accounts.db")
+            if os.path.isfile(dbp):
+                _c = sqlite3.connect(dbp)
+                _n = _c.execute("SELECT COUNT(DISTINCT lower(email)) FROM accounts "
+                                "WHERE password!='' AND totp_secret!=''").fetchone()[0]
+                _c.close()
+                if _n:
+                    n_img = int(_n)
+        except Exception:
+            pass
+        try:
+            eng = os.path.join(suite, "veo3top_engine")
+            if eng not in sys.path:
+                sys.path.insert(0, eng)
+            import pool_accounts as _pa
+            _vi = _pa.load_pool_accounts(); n_vid = len(_vi) if _vi else n_vid
+        except Exception:
+            pass
+        # 3) TÍNH TỐI ƯU
+        img_slots = max(1, min(n_img, 100))                              # ảnh dùng hết account (bypass nhẹ)
+        codes = max(2, min(max(4, img_slots // 10),                      # ~10 job ảnh/mã để fill pool
+                           int(ram_gb // 3),                             # RAM (~0.3GB/mã)
+                           max(4, cores),                                # CPU
+                           20))
+        tok_img = max(2, min(cores // 2, 6))                             # token chrome FALLBACK (CPU là trần)
+        tok_vid = max(2, min(cores // 3, 4))
+        recycle = 10
+        vid_workers = 7                                                  # đã chứng minh gần tối ưu (render-bound)
+        giveup = 2
+        # 4) ĐIỀN vào ô
+        def _set(ent, val):
+            try:
+                ent.delete(0, "end"); ent.insert(0, str(val))
+            except Exception:
+                pass
+        _set(self.ent_img_accounts, img_slots)
+        _set(self.ent_codes, codes)
+        _set(self.ent_img_giveup, giveup)
+        _set(self.ent_img_tokchrome, tok_img)
+        _set(self.ent_img_recycle, recycle)
+        _set(self.ent_vid_tokchrome, tok_vid)
+        _set(self.ent_vid_workers, vid_workers)
+        try:
+            self.lbl_saved.configure(
+                text=f"⚙ Auto: {cores} core · {ram_gb:.0f}GB · {n_img} acc ảnh · {n_vid} acc video → "
+                     f"slot ảnh {img_slots}, {codes} mã song song. Bấm Save + restart để áp.",
+                text_color="#00B894")
+        except Exception:
+            pass
+
     def _save(self):
         cfg = self.app.config_data
         # max_concurrent (Parallel jobs) giờ TỰ ĐỘNG (worker tính theo pool/số mã) -> không lưu từ GUI nữa
@@ -2241,7 +2309,7 @@ class SettingsPage(ctk.CTkScrollableFrame):
                 cfg[key] = max(lo, min(hi, int((ent.get() or str(default)).strip())))
             except Exception:
                 cfg[key] = default
-        _knob(self.ent_img_accounts, "image_pool_accounts", 24, 1, 60)
+        _knob(self.ent_img_accounts, "image_pool_accounts", 24, 1, 100)
         _knob(self.ent_codes,       "max_concurrent_codes", 0, 0, 100)   # 0 = khong gioi han so ma
         _knob(self.ent_img_giveup,  "image_swap_giveup", 2, 1, 20)
         _knob(self.ent_img_tokchrome, "image_token_chromes", 6, 1, 16)   # token chrome anh (CPU la tran)

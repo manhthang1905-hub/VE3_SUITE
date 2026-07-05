@@ -44,7 +44,7 @@ MODEL_REST_SECS = int(os.environ.get("VEO3TOP_IMG_MODEL_REST", "1800") or "1800"
 # CONCURRENCY: account cookie-based (KHÔNG mở chrome/slot) -> chạy được NHIỀU slot song song (nhẹ). 24 account × 1 luồng
 # = 24 submit song song (per-account tải thấp -> né throttle tốt hơn ít-account-nhiều-luồng). Trải trên 96 account.
 N_SLOTS = int(os.environ.get("VEO3TOP_IMG_POOL_ACCOUNTS", "24") or "24")
-LOGIN_CONCURRENCY = int(os.environ.get("VEO3TOP_IMG_LOGIN_CONCURRENCY", "4") or "4")
+LOGIN_CONCURRENCY = int(os.environ.get("VEO3TOP_IMG_LOGIN_CONCURRENCY", "5") or "5")
 # CHỈ REUSE COOKIE (mặc định BẬT): pool KHÔNG tự login (login hàng loạt cùng 1 IP -> Google bắt reCAPTCHA challenge
 # -> gãy hết -> DEAD). User login riêng ở GUI (rải chậm) để profile có cookie; pool chỉ MỞ profile đã login sẵn +
 # generate. Account chưa có cookie -> đánh dấu 'nologin' (bỏ qua nhẹ, KHÔNG dead, thử lại sau khi user login).
@@ -190,6 +190,8 @@ IMG_EXTERNAL_GEN = os.environ.get("VEO3TOP_IMG_EXTERNAL_GEN", "1") != "0"   # 1=
 IMG_TOKEN_CHROMES = int(os.environ.get("VEO3TOP_IMG_TOKEN_CHROMES", "6") or "6")
 _IMG_TOKFAC = None
 _IMG_TOKFAC_LOCK = threading.Lock()
+_IMG_TOKFAC_LAST_USE = 0.0            # lần cuối bypass fail cần WEB token -> để tự tắt token factory khi idle
+IMG_TOKFAC_IDLE_STOP = int(os.environ.get("VEO3TOP_IMG_TOKFAC_IDLE", "300") or "300")  # idle >5' -> đóng 4-5 chrome mint
 
 def _kill_pool_chromes():
     """Tree-kill chrome của pool ẢNH: account (pool_img_profiles) + token factory (veo3tok_974x — PORT ảnh, base 9740).
@@ -205,8 +207,10 @@ def _kill_pool_chromes():
 
 
 def _img_token_factory():
-    """Token factory CLEAN dùng chung cho POOL ẢNH (action IMAGE_GENERATION). Chrome trắng tươi recycle -> token điểm cao."""
-    global _IMG_TOKFAC
+    """Token factory CLEAN dùng chung cho POOL ẢNH (action IMAGE_GENERATION). Chrome trắng tươi recycle -> token điểm cao.
+    CHỈ dùng làm FALLBACK khi bypass fail (hiếm) -> ghi last-use để janitor tự tắt khi idle (đóng chrome mint)."""
+    global _IMG_TOKFAC, _IMG_TOKFAC_LAST_USE
+    _IMG_TOKFAC_LAST_USE = time.time()
     with _IMG_TOKFAC_LOCK:
         if _IMG_TOKFAC is None:
             # visible=True -> cửa sổ HIỆN = công thức THẮNG (như video đã fix 2026-07-05). offscreen(--window-position=-32000)
@@ -244,6 +248,12 @@ class Account:
         return None
 
     def _start_ipv6(self):
+        # android_bypass chạy 100% trên IP MÁY (đã đo 48/48) -> KHÔNG cần IPv6. IPv6Transport gọi netsh cho MỖI
+        # account prepare -> ~15 netsh treo chất đống -> KẸT prepare + nặng máy. Mặc định TẮT (VEO3TOP_IMG_USE_IPV6=1
+        # để bật lại nếu muốn phân tán per-IP cho volume rất lớn). None -> eproxy=None -> submit qua IP máy.
+        if os.environ.get("VEO3TOP_IMG_USE_IPV6", "0") != "1":
+            self.ipv6 = None
+            return
         if self.ipv6:
             return
         try:
@@ -426,41 +436,47 @@ class Account:
             except Exception as e:
                 log(f"{self.email}: login lỗi {e}"); ok = False
             if not ok:
-                self.state = "dead"; log(f"✗ {self.email}: login/warm THẤT BẠI -> DEAD"); return False
+                # QUAN TRỌNG: login FAIL (thường reCAPTCHA-challenge) -> ĐÓNG chrome login NGAY, đừng để hở.
+                # Trước đây return luôn không kill -> mỗi account fail để lại 1 chrome -> tích đống (rò rỉ) -> đơ máy.
+                self._kill_profile_chrome()
+                self.state = "dead"; log(f"✗ {self.email}: login/warm THẤT BẠI -> DEAD (đã đóng chrome)"); return False
             self._kill_profile_chrome(); time.sleep(3)
-        c = self._open_cdp()
-        if not c:
-            self.state = "dead"; return False
-        # ĐỢI session load THẬT (như nhánh reuse: email() OK) TRƯỚC khi tạo project — chrome mới mở sau login chưa có
-        # bearer ngay -> fresh_project() gọi sớm sẽ FAIL (đó là lý do 'không tạo được project' hàng loạt).
-        for _t in range(6):
+            # CDP chrome (warm+project) PHẢI TRONG semaphore (nối tiếp login_fn, cùng 1 `with login_sem`) -> tối đa
+            # LOGIN_CONCURRENCY chrome/lúc THẬT SỰ. Trước đây _open_cdp + warm (~20s) NẰM NGOÀI sem -> account qua
+            # login_fn (giới hạn 5) rồi trickle vào phase warm CÙNG LÚC không giới hạn -> flood 90 chrome, đơ máy.
+            c = self._open_cdp()
+            if not c:
+                self.state = "dead"; return False
+            # ĐỢI session load THẬT (như nhánh reuse: email() OK) TRƯỚC khi tạo project — chrome mới mở sau login chưa có
+            # bearer ngay -> fresh_project() gọi sớm sẽ FAIL (đó là lý do 'không tạo được project' hàng loạt).
+            for _t in range(6):
+                try:
+                    if c.email(): break
+                except Exception: pass
+                time.sleep(2)
+            # WARM VÀO TOOL: account vừa login còn kẹt ở landing 'Create with Google Flow' -> click vào + đợi thấy nút
+            # 'Dự án mới' (chỉ cần THẤY, không click). Chưa vào tool thì createProject API luôn FAIL -> DEAD oan. (Bước
+            # warm này login_google_chrome có nhưng ở chrome RIÊNG đã đóng; chrome mới của prepare phải warm lại.)
+            try: c.warm_flow()
+            except Exception: pass
             try:
-                if c.email(): break
-            except Exception: pass
-            time.sleep(2)
-        # WARM VÀO TOOL: account vừa login còn kẹt ở landing 'Create with Google Flow' -> click vào + đợi thấy nút
-        # 'Dự án mới' (chỉ cần THẤY, không click). Chưa vào tool thì createProject API luôn FAIL -> DEAD oan. (Bước
-        # warm này login_google_chrome có nhưng ở chrome RIÊNG đã đóng; chrome mới của prepare phải warm lại.)
-        try: c.warm_flow()
-        except Exception: pass
-        try:
-            self.project = c.fresh_project()   # TẠO project mới (như nhánh reuse) — account vừa login thường CHƯA có
-        except Exception:                       # project -> first_project_id() trả None -> DEAD oan. fresh_project tạo qua API.
-            self.project = None
-        if not self.project:
-            try: c.close(kill=True)
-            except Exception: pass
-            self.state = "dead"; log(f"✗ {self.email}: không tạo được project sau login (egress?) -> DEAD"); return False
-        self.cdp = c; self.state = "ready"
-        self._save_cookie()   # lưu cookie+bearer ra auth_cache (như veo3top) -> tái dùng
-        self._force_login = False   # login OK -> cookie tươi -> cho fast-path lại
-        if IMG_EXTERNAL_GEN:
-            # WINNING external: đóng chrome account NGAY sau khi cache cookie -> nhẹ (mint từ token factory, auth từ cookie)
-            try: c.close(kill=True)
-            except Exception: pass
-            self.cdp = None
-        log(f"✅ {self.email}: login+warm xong (project {self.project[:8]}) -> ready ({'external/đóng chrome' if IMG_EXTERNAL_GEN else 'in-page'})")
-        return True
+                self.project = c.fresh_project()   # TẠO project mới (như nhánh reuse) — account vừa login thường CHƯA có
+            except Exception:                       # project -> first_project_id() trả None -> DEAD oan. fresh_project tạo qua API.
+                self.project = None
+            if not self.project:
+                try: c.close(kill=True)
+                except Exception: pass
+                self.state = "dead"; log(f"✗ {self.email}: không tạo được project sau login (egress?) -> DEAD"); return False
+            self.cdp = c; self.state = "ready"
+            self._save_cookie()   # lưu cookie+bearer ra auth_cache (như veo3top) -> tái dùng
+            self._force_login = False   # login OK -> cookie tươi -> cho fast-path lại
+            if IMG_EXTERNAL_GEN:
+                # WINNING external: đóng chrome account NGAY sau khi cache cookie -> nhẹ (mint từ token factory, auth từ cookie)
+                try: c.close(kill=True)
+                except Exception: pass
+                self.cdp = None
+            log(f"✅ {self.email}: login+warm xong (project {self.project[:8]}) -> ready ({'external/đóng chrome' if IMG_EXTERNAL_GEN else 'in-page'})")
+            return True
 
     def _upload_ref(self, b64, mime="image/png", bearer=None, project=None):
         """Upload 1 ảnh reference (b64) -> media name. Upload qua PYTHON CURL DIRECT (không cần reCAPTCHA).
@@ -540,14 +556,24 @@ class Account:
             if resolved is None:
                 return "retry", {"err": "upload reference lỗi"}
             image_inputs = resolved
-        # 4) token từ factory CLEAN dùng chung (chrome trắng tươi recycle -> điểm cao)
-        tok = _img_token_factory().get(timeout=40)
-        if not tok:
-            return "retry", {"err": "no token"}
-        # 5) submit NGOÀI qua IPv6 riêng của account
-        payload = fc.build_image_payload(prompt, proj, tok, seed, aspect=aspect, model=model, image_inputs=image_inputs)
+        # 4+5) ĐƯỜNG CHÍNH: android_bypass (giải mã tst) — bỏ qua reCAPTCHA HOÀN TOÀN, submit curl thuần,
+        # KHÔNG mint token (KHÔNG cần _img_token_factory -> KHÔNG mở Chrome mint -> NHẸ MÁY). Đã đo 48/48=100%.
+        payload = fc.build_image_payload(prompt, proj, fc.BYPASS_TOKEN, seed, aspect=aspect, model=model,
+                                         image_inputs=image_inputs, app_type=fc.APP_TYPE_ANDROID)
         eproxy = self.ipv6.proxy_url() if self.ipv6 else None
-        kind, data = fc.generate_image(bearer, proj, payload, proxy=eproxy, cookie=cookie)
+        kind, data = fc.generate_image(bearer, proj, payload, proxy=eproxy, bypass=True)
+        # "other" = lỗi TRANSIENT (mạng/response lạ, ~3%) -> RETRY bypass (rẻ, curl). TUYỆT ĐỐI KHÔNG mở token
+        # factory (nặng: 4 chrome mint + recycle -> chrome spike 68, RAM 5GB, CPU 100% — đo được từ monitor).
+        # Trước đây fallback cả "other" -> token factory churn liên tục = gốc lag "càng chạy càng nặng".
+        if kind == "other":
+            return "retry", {"err": "bypass 'other' transient -> thử lại bypass (KHÔNG mở token factory)"}
+        # CHỈ "unusual" (reCAPTCHA reject thật — cực hiếm với bypass) mới fallback WEB token. Idle >5' tự tắt.
+        if kind == "unusual":
+            tok = _img_token_factory().get(timeout=40)
+            if tok:
+                payload = fc.build_image_payload(prompt, proj, tok, seed, aspect=aspect, model=model,
+                                                 image_inputs=image_inputs, app_type=fc.APP_TYPE_WEB)
+                kind, data = fc.generate_image(bearer, proj, payload, proxy=eproxy, cookie=cookie)
         # 6) map -> contract generate_inpage (ok/auth/quota/recaptcha/retry)
         if kind == "ok":
             name, fife, b64, rseed = fc.image_result(data)
@@ -786,12 +812,60 @@ class ImagePoolBrowser:
         return True
 
     def _chrome_sweeper(self):
-        """Định kỳ REAP chrome ZOMBIE (đã chết, không ExecutablePath) + chrome pool MỒ CÔI (profile pool nhưng
-        port KHÔNG thuộc slot đang chạy) -> tránh chrome rác tích tụ làm máy nặng dần. An toàn: KHÔNG đụng Chrome
-        cá nhân (có ExecutablePath + không profile pool + port active được giữ)."""
+        """Định kỳ REAP chrome MỒ CÔI của pool (fix GỐC zombie dài hạn).
+        NGUYÊN NHÂN zombie: pool bị /F kill -> handler dọn (atexit/signal) KHÔNG chạy -> chrome con mồ côi
+        (parent = pool process ĐÃ CHẾT). Sweeper CŨ chỉ kill theo PORT (giữ chrome ở dải 9500..) -> orphan
+        từ pool cũ TRÙNG dải port đó bị tưởng 'đang chạy' -> KHÔNG dọn -> zombie tích tụ.
+        FIX: dọn theo PARENT CHẾT (bất kể port). Chrome pool ĐANG SỐNG có parent = pool process này (còn sống)
+        -> giữ. Orphan có parent CHẾT -> kill. An toàn tuyệt đối với Chrome cá nhân (không profile pool)."""
+        # psutil để check parent còn sống (chính xác); fallback PowerShell zombie nếu không có.
+        try:
+            import psutil
+        except Exception:
+            psutil = None
         ports = "|".join(str(9500 + i) for i in range(self.n_slots))
         while self._running:
-            time.sleep(90)
+            time.sleep(30)   # 90->30s: dọn nhanh hơn, không để rác tích lâu
+            # (0) TOKEN FACTORY tự tắt khi IDLE: bypass ~99% nên fallback WEB token hiếm dùng. Nếu >IDLE giây không
+            #     ai gọi -> stop (đóng 4-5 chrome mint) -> nhẹ. Lần bypass-fail sau _img_token_factory() bật lại.
+            global _IMG_TOKFAC, _IMG_TOKFAC_LAST_USE
+            try:
+                if _IMG_TOKFAC is not None and (time.time() - _IMG_TOKFAC_LAST_USE) > IMG_TOKFAC_IDLE_STOP:
+                    with _IMG_TOKFAC_LOCK:
+                        if _IMG_TOKFAC is not None and (time.time() - _IMG_TOKFAC_LAST_USE) > IMG_TOKFAC_IDLE_STOP:
+                            try: _IMG_TOKFAC.stop()
+                            except Exception: pass
+                            _IMG_TOKFAC = None
+                            self.log("token factory IDLE > %ds -> đã tắt (đóng chrome mint), bypass-fail sau sẽ bật lại" % IMG_TOKFAC_IDLE_STOP)
+            except Exception:
+                pass
+            # (1) PARENT CHẾT = orphan chắc chắn (fix gốc, bất kể port) — cần psutil
+            if psutil is not None:
+                try:
+                    live = {pp.pid for pp in psutil.process_iter()}
+                    now = time.time()
+                    for p in psutil.process_iter(["pid", "name", "ppid", "cmdline", "create_time"]):
+                        try:
+                            if (p.info["name"] or "").lower() != "chrome.exe":
+                                continue
+                            cl = " ".join(p.info["cmdline"] or [])
+                            if "type=" in cl:                     # bỏ renderer con (parent = chrome main, không phải pool)
+                                continue
+                            if "pool_img_profiles" not in cl and "veo3tok_974" not in cl:
+                                continue                          # KHÔNG đụng Chrome cá nhân / tool khác
+                            if p.info["ppid"] in live:
+                                continue                          # parent còn sống (pool này) -> chrome hợp lệ, GIỮ
+                            # parent CHẾT: chỉ kill nếu chrome ĐÃ GIÀ >90s -> chắc chắn orphan từ pool cũ.
+                            # (login chrome qua GoogleChromePortable launcher có thể re-parent 'parent chết' nhưng
+                            #  ĐANG chạy còn trẻ <30s -> KHÔNG kill oan -> account không bị đánh dead nhầm.)
+                            if (now - (p.info.get("create_time") or now)) > 90:
+                                subprocess.run(["taskkill", "/PID", str(p.info["pid"]), "/T", "/F"],
+                                               capture_output=True, creationflags=0x08000000)
+                        except (psutil.NoSuchProcess, psutil.AccessDenied):
+                            continue
+                except Exception:
+                    pass
+            # (2) BACKSTOP (như cũ): zombie không ExecutablePath + chrome pool ở port NGOÀI slot đang chạy
             try:
                 cond = ("(-not $_.ExecutablePath) -or ($_.CommandLine -like '*pool_img_profiles*' -and "
                         f"$_.CommandLine -notmatch 'remote-debugging-port=({ports})(\\s|$|\")')")
@@ -1077,6 +1151,17 @@ def main():
     ap.add_argument("--port", type=int, default=8789)
     ap.add_argument("--accounts", type=int, default=N_SLOTS)
     args = ap.parse_args()
+    # SINGLETON GUARD (chống RESPAWN STORM): Windows để allow_reuse_address=True -> NHIỀU process cùng bind
+    # được :8789 mà KHÔNG lỗi -> GUI/worker spawn bao nhiêu cũng "chạy" hết -> chồng đống 5-7 instance, nặng máy.
+    # Nếu đã có pool (health có 'slots') -> THOÁT NGAY (trước khi prepare 89 account = trước việc nặng).
+    try:
+        import urllib.request
+        _h = json.load(urllib.request.urlopen(f"http://127.0.0.1:{args.port}/health", timeout=3))
+        if isinstance(_h, dict) and "slots" in _h:
+            _log(f"pool ẢNH đã chạy sẵn trên :{args.port} (active={len(_h.get('active',[]))}) -> THOÁT (tránh trùng instance).")
+            return
+    except Exception:
+        pass   # chưa ai chạy -> tiếp tục
     _FACTORY = ImagePoolBrowser(n_slots=args.accounts)
     _FACTORY.start()
     # BACKSTOP zombie: dọn chrome khi tiến trình kết thúc kiểu nào (atexit + SIGTERM/SIGINT). taskkill /F thì

@@ -28,6 +28,7 @@ from auth_cache import AuthCache
 from pool_accounts import load_image_pool_accounts
 
 GEN_ATTEMPTS = 40          # grind token mới /1 lượt (ảnh: 429 hay do IP -> IPv6 riêng cứu; recaptcha_quota thì chờ)
+BYPASS_RETRY = int(os.environ.get("VEO3TOP_BYPASS_RETRY", "5") or "5")  # bypass trượt liên tiếp bao nhiêu lần mới mở WEB fallback
 JOB_MAX_CYCLES = 6         # bound số lần requeue 1 job (tránh treo khi quota/ratelimit kéo dài)
 IMG_QUOTA_GIVEUP = int(os.environ.get("VEO3TOP_IMG_QUOTA_GIVEUP", "6") or "6")  # recaptcha_quota liên tiếp/1 model -> coi model đó hết quota
 # MODEL ẢNH theo THỨ TỰ CHẤT LƯỢNG cao->thấp. Mỗi account có quota RIÊNG mỗi model -> hết model này
@@ -193,14 +194,11 @@ class ImageFactory:
         else:
             self.log("egress ảnh = DIRECT IP máy")
 
-        # token factory ẢNH (action IMAGE_GENERATION) — RIÊNG factory video.
-        # CÔNG THỨC THẮNG (mang từ video, đã đo ảnh ~75-80%): chrome mint IPv6 tươi + cờ CLEAN + cửa sổ hiện
-        # + warm-up 1 token + rotate IPv6 mỗi recycle. Submit đã qua account.ipv6 (external, KHÔNG in-page/IPv4 máy).
-        self.factory = tf.get_image_factory(mode="blank", n_chromes=self.token_chromes,
-                                            base_port=self.token_port, log=self.log,
-                                            ipv6=True, clean=True, visible=True)
-        if not (self.factory and self.factory._started):
-            self.log("CẢNH BÁO: token factory ảnh chưa sẵn sàng")
+        # ĐƯỜNG CHÍNH giờ = android_bypass (submit curl thuần, KHÔNG mint captcha -> KHÔNG cần token factory).
+        # Token factory (mint WEB token thật qua Chrome) chỉ là FALLBACK khi bypass bị từ chối -> khởi động LAZY
+        # (chỉ mở Chrome khi thực sự cần), đỡ tốn RAM/CPU khi bypass chạy tốt (~100%).
+        self.factory = None
+        self._factory_lock = threading.Lock()
 
         # workers — 7 luồng/account (như video)
         self._running = True
@@ -225,6 +223,24 @@ class ImageFactory:
                 if a.ipv6: a.ipv6.stop()
             except Exception: pass
 
+    def _ensure_factory(self):
+        """LAZY: mở token factory WEB (Chrome mint token thật) LẦN ĐẦU khi bypass fail cần fallback.
+        Trả factory (đã _started) hoặc None. Chạy tốt thì KHÔNG bao giờ gọi -> không mở Chrome."""
+        if self.factory and getattr(self.factory, "_started", False):
+            return self.factory
+        with self._factory_lock:
+            if self.factory and getattr(self.factory, "_started", False):
+                return self.factory
+            try:
+                self.log("bypass fail -> KHỞI ĐỘNG token factory WEB (fallback, mở Chrome mint token thật)…")
+                self.factory = tf.get_image_factory(mode="blank", n_chromes=self.token_chromes,
+                                                    base_port=self.token_port, log=self.log,
+                                                    ipv6=True, clean=True, visible=True)
+            except Exception as e:
+                self.log(f"không khởi động được token factory WEB: {e}")
+                self.factory = None
+        return self.factory if (self.factory and getattr(self.factory, "_started", False)) else None
+
     # ---------- xử lý 1 job ảnh trên 1 account ----------
     def _process(self, account, job):
         """Trả 'success' | 'retry_soft' | ('fail', reason). Ảnh: KHÔNG poll, download fifeUrl luôn."""
@@ -232,11 +248,12 @@ class ImageFactory:
         if not auth or not auth.get("bearer") or not auth.get("project"):
             return "retry_soft"
         bearer = auth["bearer"]; cookie = auth.get("cookie")
-        project = self.next_project(cookie, fallback=auth["project"])   # XOAY project mỗi job (tránh đốt 1 cái)
+        project = account.next_project(cookie, fallback=auth["project"])   # XOAY project mỗi job (tránh đốt 1 cái)
         seed = job.get("seed") or (int(time.time() * 1000) % 900000)
         aspect = job.get("aspect") or "IMAGE_ASPECT_RATIO_LANDSCAPE"
         image_inputs = job.get("image_inputs") or None
         auth_fails = 0
+        bypass_fails = 0   # bypass trượt LIÊN TIẾP -> mới mở WEB fallback (hạn chế mở Chrome)
         quota_streak = 0   # recaptcha_quota LIÊN TIẾP trên 1 MODEL -> coi model đó hết quota, chuyển model kế
 
         # MODEL: chọn chất lượng cao nhất account này còn quota (Pro->Nano2->Lite). Hết mọi model -> nghỉ + requeue.
@@ -246,15 +263,29 @@ class ImageFactory:
             return "retry_soft"
 
         for attempt in range(GEN_ATTEMPTS):
-            tok = self.factory.get()
-            if not tok:
-                time.sleep(1); continue
             # submit qua IPv6 RIÊNG của account (ảnh 429 hay do per-IP -> IP riêng giúp nhiều)
             eproxy = account.ipv6.proxy_url() if account.ipv6 else None
             ename = "ipv6" if account.ipv6 else "ipmay"
-            payload = fc.build_image_payload(job["prompt"], project, tok, seed,
-                                             aspect=aspect, image_inputs=image_inputs, model=model)
-            kind, data = fc.generate_image(bearer, project, payload, proxy=eproxy, cookie=cookie)
+            # ĐƯỜNG CHÍNH: android_bypass (giải mã từ tst) — bỏ qua reCAPTCHA hoàn toàn, submit curl thuần,
+            # KHÔNG mint token (đó là nguồn UNUSUAL). Token='android_bypass', applicationType=ANDROID.
+            payload = fc.build_image_payload(job["prompt"], project, fc.BYPASS_TOKEN, seed,
+                                             aspect=aspect, image_inputs=image_inputs, model=model,
+                                             app_type=fc.APP_TYPE_ANDROID)
+            kind, data = fc.generate_image(bearer, project, payload, proxy=eproxy, bypass=True)
+            # bypass hiếm khi trượt. Nếu 'unusual'/'other' -> RETRY bypass vài lần (rẻ, không mở Chrome) TRƯỚC;
+            # chỉ khi trượt LIÊN TIẾP >= BYPASS_RETRY mới FALLBACK mint WEB token (mở Chrome — nặng, hạn chế).
+            # KHÔNG fallback với ratelimit/quota/auth (đó là vấn đề IP/quota/bearer, mint token không cứu được).
+            if kind in ("unusual", "other"):
+                bypass_fails += 1
+                if bypass_fails < BYPASS_RETRY:
+                    time.sleep(0.4 + random.uniform(0, 0.4)); continue   # thử lại bypass
+                fac = self._ensure_factory()
+                tok = fac.get() if fac else None
+                if tok:
+                    payload = fc.build_image_payload(job["prompt"], project, tok, seed,
+                                                     aspect=aspect, image_inputs=image_inputs, model=model,
+                                                     app_type=fc.APP_TYPE_WEB)
+                    kind, data = fc.generate_image(bearer, project, payload, proxy=eproxy, cookie=cookie)
             if kind == "ok":
                 account.note_egress_win(ename); account.note_model_win(model)
                 name, fife, b64, rseed = fc.image_result(data)

@@ -57,7 +57,7 @@ image_egress: ipv6
 image_fake_dns_google: true
 image_hide_chrome: true
 image_max_per_account: 5
-image_pool_accounts: 24
+image_pool_accounts: 96
 image_swap_giveup: 2
 image_token_chromes: 4
 image_token_recycle: 10
@@ -187,7 +187,7 @@ local_server_list:
 local_server_url: http://192.168.88.63:5100
 log_level: INFO
 max_concurrent: 4
-max_concurrent_codes: 2
+max_concurrent_codes: 10
 max_parallel_api: 11
 mint_interval: 1.2
 music_workspace_mode_enabled: true

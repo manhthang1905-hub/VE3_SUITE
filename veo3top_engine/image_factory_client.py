@@ -27,7 +27,7 @@ def _cfg_accounts(default=10):
         cfgp = os.path.join(_SUITE, "tools", "ve3", "config", "settings.yaml")
         cfg = yaml.safe_load(open(cfgp, encoding="utf-8")) or {}
         n = int(cfg.get("image_pool_accounts", _POOL_ACCOUNTS))
-        return max(1, min(50, n))
+        return max(1, min(100, n))   # trần 100 (trước là 50 -> chặn cứng dù settings=96); login bounded 5 nên 96 an toàn
     except Exception:
         return _POOL_ACCOUNTS
 # NHÀ MÁY ẢNH: image_pool_browser.py (96 account login + WINNING external mint: token từ chrome-trắng-CLEAN-tươi

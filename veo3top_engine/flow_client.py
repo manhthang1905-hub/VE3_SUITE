@@ -51,6 +51,26 @@ MODEL_T2V_LITE = "veo_3_1_t2v_lite_low_priority"
 MODEL_T2V_QUALITY = "veo_3_1_t2v"
 MODEL_I2V_LITE = "veo_3_1_r2v_lite_low_priority"
 
+# --- android_bypass (giải mã từ tool tst DgtCore.dll) ---
+# Endpoint aisandbox CHẤP NHẬN token placeholder "android_bypass" + applicationType=ANDROID mà KHÔNG cần
+# reCAPTCHA thật. Đây là toàn bộ khác biệt 40%->100%: KHÔNG mint captcha WEB (nguồn gây UNUSUAL). Chỉ khi
+# request bypass fail (403/unusual) mới fallback mint token WEB thật. Token đi 1 mình trong body, KHÔNG cookie.
+BYPASS_TOKEN = "android_bypass"
+APP_TYPE_WEB = "RECAPTCHA_APPLICATION_TYPE_WEB"
+APP_TYPE_ANDROID = "RECAPTCHA_APPLICATION_TYPE_ANDROID"
+UA_FF = "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:151.0) Gecko/20100101 Firefox/151.0"
+
+
+def _headers_ff(bearer):
+    """Headers KHỚP tool tst (DgtCore AddVeo3SandboxHeaders): Firefox 151 UA, KHÔNG cookie/x-client-data.
+    Dùng cho submit android_bypass (token đi 1 mình, không dính session cookie)."""
+    return {"Authorization": f"Bearer {bearer}", "Content-Type": "text/plain;charset=UTF-8",
+            "Accept": "*/*", "Accept-Language": "en-US,en;q=0.9,vi;q=0.8",
+            "Origin": "https://labs.google", "Referer": "https://labs.google/",
+            "User-Agent": UA_FF, "Cache-Control": "no-cache", "Pragma": "no-cache",
+            "Priority": "u=1, i", "Sec-Fetch-Dest": "empty", "Sec-Fetch-Mode": "cors",
+            "Sec-Fetch-Site": "cross-site", "X-Browser-Channel": "stable"}
+
 
 def _headers(bearer, cookie=None):
     # Khớp CHÍNH XÁC request Chrome đã ra 200. QUAN TRỌNG: KHÔNG ép User-Agent — để curl_cffi impersonate='chrome'
@@ -87,7 +107,7 @@ def upload_image(bearer, project_id, session_id, image_path, aspect=None, timeou
 
 
 def build_payload(prompt, project_id, recaptcha_token, seed, aspect="VIDEO_ASPECT_RATIO_PORTRAIT",
-                  model=None, reference_media_id=None):
+                  model=None, reference_media_id=None, app_type=APP_TYPE_WEB):
     if model is None:
         model = MODEL_I2V_LITE if reference_media_id else MODEL_T2V_LITE
     # FORMAT MỚI (đã soi request thật + ra 200): structuredPrompt + mediaGenerationContext + useV2ModelConfig.
@@ -101,7 +121,7 @@ def build_payload(prompt, project_id, recaptcha_token, seed, aspect="VIDEO_ASPEC
         "clientContext": {
             "sessionId": f";{int(time.time()*1000)}", "projectId": project_id,
             "tool": "PINHOLE", "userPaygateTier": "PAYGATE_TIER_TWO",
-            "recaptchaContext": {"applicationType": "RECAPTCHA_APPLICATION_TYPE_WEB", "token": recaptcha_token},
+            "recaptchaContext": {"applicationType": app_type, "token": recaptcha_token},
         },
         "requests": [req],
         "useV2ModelConfig": True,
@@ -143,13 +163,16 @@ def classify(resp):
 
 _USE_GEN_PROXY = object()   # sentinel: caller không truyền proxy -> dùng GEN_PROXY (hành vi cũ)
 
-def generate(bearer, payload, url=GEN_T2V, timeout=120, proxy=_USE_GEN_PROXY, cookie=None):
+def generate(bearer, payload, url=GEN_T2V, timeout=120, proxy=_USE_GEN_PROXY, cookie=None, bypass=False):
     # generate = gửi recaptcha token -> chỗ bị 429.
     # proxy: bỏ trống -> GEN_PROXY (mặc định IPv6). Truyền None -> DIRECT IPv4 máy. Truyền url -> WARP/khác.
     # -> cho phép EGRESS LADDER: thử ip máy(None) -> WARP(socks5://127.0.0.1:40000) -> IPv6 pool.
     # cookie: BẮT BUỘC để reCAPTCHA điểm cao (đã đo: thiếu Cookie -> UNUSUAL dù token tốt).
+    # bypass=True: android_bypass (payload token='android_bypass', app_type=ANDROID) -> headers Firefox tst,
+    # KHÔNG cookie. Đường CHÍNH cho cả video (đã đo 13/13 submit 200).
     p = GEN_PROXY if proxy is _USE_GEN_PROXY else proxy
-    r = _post(url, _headers(bearer, cookie), json.dumps(payload), timeout=timeout, proxy=p)
+    hdrs = _headers_ff(bearer) if bypass else _headers(bearer, cookie)
+    r = _post(url, hdrs, json.dumps(payload), timeout=timeout, proxy=p)
     return classify(r)
 
 
@@ -325,11 +348,13 @@ def image_gen_url(project_id):
 
 
 def build_image_payload(prompt, project_id, recaptcha_token, seed,
-                        aspect=IMG_ASPECT_LANDSCAPE, model=IMG_MODEL, image_inputs=None):
+                        aspect=IMG_ASPECT_LANDSCAPE, model=IMG_MODEL, image_inputs=None,
+                        app_type=APP_TYPE_WEB):
     """FORMAT MỚI (đã soi request thật): structuredPrompt + mediaGenerationContext.batchId + useNewMedia.
-    image_inputs: list dict {imageInputType, name} (ref đã UPLOAD -> name; KHÔNG dùng rawImageBytes nữa)."""
+    image_inputs: list dict {imageInputType, name} (ref đã UPLOAD -> name; KHÔNG dùng rawImageBytes nữa).
+    app_type: WEB (token reCAPTCHA thật) | ANDROID (dùng với recaptcha_token='android_bypass' -> bỏ qua captcha)."""
     import uuid as _uuid
-    ctx = {"recaptchaContext": {"token": recaptcha_token, "applicationType": "RECAPTCHA_APPLICATION_TYPE_WEB"},
+    ctx = {"recaptchaContext": {"token": recaptcha_token, "applicationType": app_type},
            "projectId": project_id, "tool": "PINHOLE", "sessionId": f";{int(time.time()*1000)}"}
     req = {"clientContext": dict(ctx), "imageModelName": model, "imageAspectRatio": aspect,
            "structuredPrompt": {"parts": [{"text": prompt}]}, "seed": seed, "imageInputs": image_inputs or []}
@@ -338,15 +363,18 @@ def build_image_payload(prompt, project_id, recaptcha_token, seed,
             "useNewMedia": True, "requests": [req]}
 
 
-def generate_image(bearer, project_id, payload, timeout=120, proxy=None, cookie=None):
+def generate_image(bearer, project_id, payload, timeout=120, proxy=None, cookie=None, bypass=False):
     """POST batchGenerateImages qua IPv6 pool. Trả classify() giống video:
     ('ok',json)|('ratelimit',None)|('recaptcha_quota',None)|('unusual',None)|('ip_block',None)|('auth',None)|('other',txt).
     proxy=None -> dùng GEN_PROXY toàn cục (như video). Truyền proxy riêng để KHÔNG phụ thuộc/đụng
     GEN_PROXY của video khi chạy cùng process (image provider truyền transport riêng của nó).
-    cookie: như video — buộc request vào session -> reCAPTCHA điểm cao hơn (thử nghiệm mang logic video sang ảnh)."""
+    cookie: như video — buộc request vào session -> reCAPTCHA điểm cao hơn (thử nghiệm mang logic video sang ảnh).
+    bypass=True: submit android_bypass (payload token='android_bypass', app_type=ANDROID) -> headers Firefox tst,
+    KHÔNG cookie (token đi 1 mình). Đây là đường CHÍNH (không đụng reCAPTCHA)."""
     p = GEN_PROXY if proxy is None else proxy
+    hdrs = _headers_ff(bearer) if bypass else _headers(bearer, cookie)
     try:
-        r = _post(image_gen_url(project_id), _headers(bearer, cookie), json.dumps(payload), timeout=timeout, proxy=p)
+        r = _post(image_gen_url(project_id), hdrs, json.dumps(payload), timeout=timeout, proxy=p)
     except Exception as e:
         # Lỗi mạng (proxy IPv6 rớt/abort, timeout...) -> báo retryable, KHÔNG cho crash scene.
         # Coi như per-IP hỏng để provider đổi IPv6 + thử token mới (giống ratelimit).
