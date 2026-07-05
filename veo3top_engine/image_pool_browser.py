@@ -209,10 +209,11 @@ def _img_token_factory():
     global _IMG_TOKFAC
     with _IMG_TOKFAC_LOCK:
         if _IMG_TOKFAC is None:
-            # visible=False -> đẩy cửa sổ RA NGOÀI màn hình (--window-position=-32000) NHƯNG giữ CLEAN + GPU thật
-            # (off-screen KHÔNG phải tín hiệu bot; chỉ cờ --disable-gpu/--test-type mới hại) -> vẫn ra ảnh, đỡ vướng.
+            # visible=True -> cửa sổ HIỆN = công thức THẮNG (như video đã fix 2026-07-05). offscreen(--window-position=-32000)
+            # LÀ tín hiệu bot -> reCAPTCHA tụt điểm (comment cũ 'off-screen không phải bot' là SAI, đã chứng minh ở VIDEO:
+            # visible=False -> unusual; visible=True -> ra). NGUYÊN TẮC ĐỪNG LÀM LẠI: KHÔNG ẩn chrome khi mint token.
             _IMG_TOKFAC = tf.get_image_factory(mode="blank", n_chromes=IMG_TOKEN_CHROMES, base_port=9740,
-                                               log=_log, ipv6=True, clean=True, visible=False)
+                                               log=_log, ipv6=True, clean=True, visible=True)
         return _IMG_TOKFAC
 
 
