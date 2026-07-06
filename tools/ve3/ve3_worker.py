@@ -102,8 +102,10 @@ class VE3Worker:
         self.use_veo3top_for_image = self.veo3top_image_mode in ("blank", "account", "pool")
         self._veo3top_image_provider = None
         # Neu CA anh VA video deu ban thang veo3top -> KHONG can server pool / bearer worker (moi buoc tu lay auth).
+        # veo3top_b_pool = NHA MAY CHUNG (pool anh + pool video): ca 2 buoc tu lay auth per-account (android_bypass),
+        # KHONG dung ExtAuth/token worker -> phai nam trong nhom nay (neu thieu -> chay nham ExtAuth cu -> "extension: no project").
         self._veo3top_only = self.use_veo3top_for_image and \
-            self.generation_backend in ("veo3top", "veo3top_b", "veo3top_b_ultra")
+            self.generation_backend in ("veo3top", "veo3top_b", "veo3top_b_ultra", "veo3top_b_pool")
         self.nanopic_fallback_enabled = bool(config.get("nanopic_fallback_enabled", True))
 
         # FlowKit config
@@ -1251,7 +1253,8 @@ Generator/context error:
             result["errors"].append("ÄÃ£ dá»«ng bá»Ÿi user")
             return result
 
-        if self.reference_media_validation_enabled:
+        # POOL: media_id VO DUNG (embed base64 per-account) -> KHONG validate media_id (tranh repair qua ExtAuth).
+        if self.reference_media_validation_enabled and self.generation_backend != "veo3top_b_pool":
             self.log("")
             self.log("=" * 50)
             self.log("PHASE 1B: Validate media_id cua reference")
@@ -1386,7 +1389,7 @@ Generator/context error:
         if self._stop_flag:
             return ref_result, {"total": 0, "completed": 0, "failed": 0}, {"total": 0, "completed": 0, "failed": 0}
 
-        if self.reference_media_validation_enabled:
+        if self.reference_media_validation_enabled and self.generation_backend != "veo3top_b_pool":
             self.log("")
             self.log("=" * 50)
             self.log("PHASE 1B: Validate media_id cua reference (luot 2)")
@@ -1936,6 +1939,17 @@ Generator/context error:
         char = self._ensure_psychology_reference_row(wb)
         if not char:
             return False
+        # POOL: nha may anh EMBED base64 nv1.png (file local) per-account -> media_id account-scoped VO DUNG,
+        # KHONG can upload ExtAuth. Chi can nv1.png ton tai local (da copy boi _ensure_psychology_reference_row).
+        if self.generation_backend == "veo3top_b_pool":
+            if str(getattr(char, "status", "") or "").strip().lower() != "done":
+                with self._excel_lock:
+                    wb.update_character("nv1", status="done", image_file="nv1.png")
+                    wb.safe_save(max_retries=8)
+                char.status = "done"
+            self._prepare_psychology_scene_references(wb)
+            self.log("[PSY] pool mode: nv1.png local san sang (embed per-account), bo qua upload ExtAuth", "INFO")
+            return True
         if str(getattr(char, "media_id", "") or "").strip():
             if str(getattr(char, "status", "") or "").strip().lower() != "done":
                 wb.update_character("nv1", status="done")
@@ -1976,6 +1990,16 @@ Generator/context error:
                 continue
 
             img_path = self.nv_dir / f"{char.id}.png"
+
+            # POOL: nha may EMBED base64 file anh local per-account -> KHONG can media_id, KHONG upload ExtAuth,
+            # KHONG sinh de len anh user. Co file anh local -> done luon; thieu file -> van sinh moi qua pool.
+            if self.generation_backend == "veo3top_b_pool" and img_path.exists():
+                if char.status != "done":
+                    with self._excel_lock:
+                        wb.update_character(char.id, status="done")
+                        wb.safe_save()
+                self.log(f"  Skip {char.id} (pool: da co anh local, embed per-account)")
+                continue
 
             # media_id moi la nguon su that cho reference
             if char.media_id:
