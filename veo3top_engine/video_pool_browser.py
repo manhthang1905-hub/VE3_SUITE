@@ -29,6 +29,9 @@ GEN_ATTEMPTS = int(os.environ.get("VEO3TOP_VID_GEN_ATTEMPTS", "40") or "40")   #
 POLL_MAX = int(os.environ.get("VEO3TOP_VID_POLL_MAX", "180") or "180")   # 180×5s = 15' chờ render (video lâu -> để RỘNG, khỏi 'render timeout' oan)
 JOB_MAX_CYCLES = 30
 VID_MODEL = os.environ.get("VEO3TOP_VID_MODEL", fc.MODEL_I2V_LITE)
+# TỰ HỒI account video bị OUT: cho phép prepare login+warm (giống pool ảnh POOL_LOGIN). Kèm wipe profile bẩn.
+# Đặt =0 nếu muốn video CHỈ reuse cookie (login thủ công qua GUI).
+VID_POOL_LOGIN = os.environ.get("VEO3TOP_VID_POOL_LOGIN", "1") == "1"
 
 
 VID_ACCOUNTS_FILE = os.path.join(os.path.dirname(_HERE), "accounts", "vid_accounts.txt")   # GOM VỀ 1 CHỖ: D:\VE3_SUITE\accounts\
@@ -194,7 +197,7 @@ class VideoPoolBrowser:
                 time.sleep(5); continue
             try:
                 a.idx = 20 + slot   # dải cổng RIÊNG (image service 0-7, video 20-27) -> không trùng khi chạy cùng
-                if not a.prepare(self._login, self.login_sem, self.log):
+                if not a.prepare(self._login, self.login_sem, self.log, allow_login=VID_POOL_LOGIN):
                     self._mark(a.email, state=a.state, reason="login/warm fail"); a.close(); continue
                 self._mark(a.email, state="ready", project=a.project)
                 while self._running and a.state == "ready":

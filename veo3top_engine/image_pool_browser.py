@@ -344,6 +344,25 @@ class Account:
         except Exception:
             pass
 
+    def _wipe_profile(self, log=None):
+        """XÓA SẠCH dữ liệu profile Chrome cho account bị OUT/session zombie. Google hay giữ 1 session-zombie
+        (redirect khỏi trang signin) khiến login đè lên profile bẩn bị KẸT/thất bại -> phải để Chrome TRẮNG mới
+        login lại được (yêu cầu người dùng). Kill chrome giữ profile -> rmtree retry (Windows lock) -> tạo lại rỗng.
+        CHỈ gọi ở nhánh LOGIN của prepare() (đã xác định session chết) -> KHÔNG đụng account đang ready/reuse-cookie."""
+        self._kill_profile_chrome()
+        time.sleep(1.5)
+        try:
+            tf._rmtree_hard(self.profile, tries=5)
+        except Exception:
+            pass
+        try:
+            os.makedirs(self.profile, exist_ok=True)
+        except Exception:
+            pass
+        if log:
+            try: log(f"🧹 {self.email}: đã XÓA profile bẩn (session out) -> Chrome trắng để login lại")
+            except Exception: pass
+
     def prepare(self, login_fn, login_sem, log, allow_login=False):
         """CHUẨN BỊ account: reuse session sẵn (như cookie video) -> ready; chưa có -> login+warm+tạo project.
         allow_login=True: CHO login+warm account thiếu cookie (gieo/hồi session). Dùng ở 'Chuẩn bị' manager VÀ pool
@@ -419,7 +438,9 @@ class Account:
         if not login_fn:
             self.state = "dead"; return False
         with login_sem:
-            self._kill_profile_chrome(); time.sleep(2)
+            # Tới nhánh này = reuse-session đã fail (email() None sau 4 lần) HOẶC _force_login (401 runtime) -> session
+            # CHẾT/zombie. Profile bẩn hay KẸT login -> XÓA SẠCH cho Chrome TRẮNG rồi mới login (profile mới toanh -> no-op).
+            self._wipe_profile(log); time.sleep(2)
             # LOGIN QUA IPv6 (mỗi account 1 IP khác -> giảm 'cùng 1 IP nhiều login' -> đỡ reCAPTCHA challenge khi hồi
             # hàng loạt). IMG_NATIVE=1 -> IP máy. login_google_chrome cần scheme socks5:// (đổi từ socks5h).
             _pxy = ""
