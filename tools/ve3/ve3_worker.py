@@ -1371,6 +1371,9 @@ Generator/context error:
         except Exception as e:
             self.log(f"  Finalize loi (bo qua): {e}", "WARN")
 
+        # Còn scene 'error' (retry được) -> ghi marker backoff để GUI tự chạy lại (pool còn account thì không bỏ)
+        self._write_retry_marker_if_pending(wb)
+
         return result
 
     def _run_full_rerun_pass(self, wb: PromptWorkbook) -> tuple:
@@ -1693,20 +1696,57 @@ Generator/context error:
             wb._save_pending_write("character", char_id="nv1", **char.to_dict())
         return char
 
-    def _write_quota_wait_marker(self, server_name: str = ""):
-        """Write marker file so GUI queue skips this project for 1 hour."""
+    def _write_quota_wait_marker(self, server_name: str = "", seconds: int = 3600, reason: str = "429_QUOTA"):
+        """Write marker file so GUI queue skips this project for `seconds`.
+        Dùng chung cho: (a) FlowKit 429 (1h) và (b) POOL retry backoff (ngắn hơn) — GUI đọc cùng file
+        .flowkit_quota_wait (chỉ cần resume_ts) nên KHÔNG phải sửa GUI cho backoff."""
         marker = self.project_dir / ".flowkit_quota_wait"
-        resume_ts = time.time() + 3600
+        resume_ts = time.time() + max(30, int(seconds))
         try:
             marker.write_text(json.dumps({
                 "resume_after": time.strftime("%Y-%m-%dT%H:%M:%S", time.localtime(resume_ts)),
                 "resume_ts": resume_ts,
                 "server": server_name,
-                "reason": "429_QUOTA",
+                "reason": reason,
             }), encoding="utf-8")
-            self.log(f"[FLOWKIT] Quota exhausted — project paused for 1h (resume {time.strftime('%H:%M:%S', time.localtime(resume_ts))})", "WARN")
+            self.log(f"[QUEUE] {reason} — project tạm nghỉ {int(seconds)}s (resume {time.strftime('%H:%M:%S', time.localtime(resume_ts))}), sẽ tự retry", "WARN")
         except Exception as e:
-            self.log(f"[FLOWKIT] Failed to write quota marker: {e}", "ERROR")
+            self.log(f"[QUEUE] Failed to write retry-wait marker: {e}", "ERROR")
+
+    def _fail_status_for(self, error_text: str) -> str:
+        """Phân loại trạng thái fail 1 scene:
+        - 'failed' (TERMINAL, không retry nữa): lỗi POLICY nội dung (đã rewrite hết vòng vẫn bị chặn) — retry vô ích.
+        - 'error'  (RETRY được): lỗi TÀI NGUYÊN tạm thời (quota/429/ratelimit/reCAPTCHA/timeout/mạng/pool cạn lượt).
+          Pool còn account/quota ở lượt sau -> phải làm lại tới khi OK (nguyên tắc: không bỏ khi còn tài nguyên)."""
+        if self._is_policy_violation_error(error_text):
+            return "failed"
+        return "error"
+
+    def _write_retry_marker_if_pending(self, wb):
+        """Cuối run (pool backend): nếu còn scene 'error' (retry được) chưa có file -> ghi marker backoff để
+        GUI tự chạy lại project sau `ve3_retry_wait_seconds` giây (tránh hot-loop). 'failed' = terminal -> KHÔNG retry."""
+        if self.generation_backend != "veo3top_b_pool":
+            return
+        try:
+            has_retry = False
+            for s in wb.get_scenes():
+                sid = int(getattr(s, "scene_id", 0) or 0)
+                if sid <= 0:
+                    continue
+                st_img = str(getattr(s, "status_img", "") or "").strip().lower()
+                st_vid = str(getattr(s, "status_vid", "") or "").strip().lower()
+                has_img = ((self.img_dir / f"{sid}.png").exists() or (self.img_dir / f"{sid}.jpg").exists()
+                           or (self.img_dir / f"{sid}.mp4").exists())
+                has_vid = ((self.vid_dir / f"{sid}.mp4").exists() or (self.img_dir / f"{sid}.mp4").exists())
+                if str(getattr(s, "img_prompt", "") or "").strip() and st_img == "error" and not has_img:
+                    has_retry = True; break
+                if str(getattr(s, "video_prompt", "") or "").strip() and st_vid == "error" and not has_vid:
+                    has_retry = True; break
+            if has_retry:
+                secs = int(self.config.get("ve3_retry_wait_seconds", 300) or 300)
+                self._write_quota_wait_marker(seconds=secs, reason="POOL_RETRY")
+        except Exception as e:
+            self.log(f"  [retry-marker] loi (bo qua): {e}", "WARN")
 
     def _pick_flowkit_server(self, auto_reserve: bool = True):
         """Pick FlowKit server with sticky affinity — same project always uses same server.
@@ -2421,7 +2461,7 @@ Generator/context error:
                 if len(missing_refs) > 6:
                     missing_preview += ", ..."
                 with self._excel_lock:
-                    wb.update_scene(scene_id, status_img="error")
+                    wb.update_scene(scene_id, status_img="failed")   # thiếu ref = lỗi cấu trúc, retry vô ích -> terminal
                     wb.safe_save()
                 self.log(f"    Scene {scene_id} -> SKIP missing references: {missing_preview}", "WARN")
                 self.on_item_status("scene", scene_id, "error", None,
@@ -2509,10 +2549,12 @@ Generator/context error:
                         prompt, rewritten_prompt=current_prompt, error_text=error_text,
                         round_index=rewrite_round, mode="image"
                     )
+                fs = self._fail_status_for(error_text)
                 with self._excel_lock:
-                    wb.update_scene(scene_id, status_img="error")
+                    wb.update_scene(scene_id, status_img=fs)
                     wb.safe_save()
-                self.log(f"    Scene {scene_id} â†’ FAIL ({elapsed}s)", "WARN")
+                _tag = "TERMINAL policy" if fs == "failed" else "retry lượt sau"
+                self.log(f"    Scene {scene_id} â†’ FAIL ({elapsed}s) [{fs}: {_tag}]", "WARN")
                 self.on_item_status("scene", scene_id, "error", None,
                                     {"elapsed": elapsed, **server_info})
                 return False
@@ -3176,10 +3218,12 @@ Generator/context error:
                         vp, rewritten_prompt=current_prompt, error_text=error_text,
                         round_index=rewrite_round, mode="video"
                     )
+                fs = self._fail_status_for(error_text)
                 with self._excel_lock:
-                    wb.update_scene(sid, status_vid="error")
+                    wb.update_scene(sid, status_vid=fs)
                     wb.safe_save()
-                self.log(f"    Video scene {sid} â†’ FAIL ({elapsed}s)", "WARN")
+                _tag = "TERMINAL policy" if fs == "failed" else "retry lượt sau"
+                self.log(f"    Video scene {sid} â†’ FAIL ({elapsed}s) [{fs}: {_tag}]", "WARN")
                 self.on_item_status("scene", sid, "error", None,
                                     {"elapsed": elapsed, "phase": "video", **server_info})
                 return False

@@ -7063,7 +7063,10 @@ Get-CimInstance Win32_Process |
                         or (img_dir / f"{sid}.jpg").exists()
                         or (img_dir / f"{sid}.mp4").exists()
                     )
-                    if (not has_img) and st_img not in ("skip", "error"):
+                    # 'error' = lỗi TÀI NGUYÊN tạm thời (quota/ratelimit/pool cạn lượt) -> VẪN pending -> retry lượt sau
+                    #   (backoff bằng marker .flowkit_quota_wait do worker ghi -> không hot-loop).
+                    # 'failed' = TERMINAL (policy đã rewrite hết / thiếu ref) -> KHÔNG pending -> project vẫn hoàn tất.
+                    if (not has_img) and st_img not in ("skip", "failed"):
                         pending_img = True
 
                 video_prompt = str(getattr(s, "video_prompt", "") or "").strip()
@@ -7073,9 +7076,9 @@ Get-CimInstance Win32_Process |
                         (vid_dir / f"{sid}.mp4").exists()
                         or (img_dir / f"{sid}.mp4").exists()
                     )
-                    # video GIỐNG HỆT ảnh: chưa có file + status không "skip"/"error" -> pending (re-run redo scene CHƯA LÀM).
-                    # "error" (đã retry hết trong lượt) -> KHÔNG pending -> project VẪN hoàn tất được (không kẹt mãi ở lỗi).
-                    if (not has_vid) and st_vid not in ("skip", "error"):
+                    # video GIỐNG HỆT ảnh: 'error' (lỗi tài nguyên tạm thời) -> VẪN pending -> retry lượt sau (backoff marker);
+                    # 'failed' (terminal: policy/thiếu ref) -> KHÔNG pending -> project VẪN hoàn tất được (không kẹt mãi).
+                    if (not has_vid) and st_vid not in ("skip", "failed"):
                         pending_vid = True
 
                 if pending_img or pending_vid:
