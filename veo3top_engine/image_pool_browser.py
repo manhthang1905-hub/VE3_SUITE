@@ -608,7 +608,12 @@ class Account:
                 if self.ipv6: self.ipv6.rotate()
             except Exception: pass
             return "recaptcha", {"body": "ratelimit->rotate ipv6"}
-        if kind in ("unusual", "recaptcha_quota"):
+        if kind == "recaptcha_quota":
+            # 429 RESOURCE_EXHAUSTED = HẾT QUOTA MODEL này (PER-MODEL — đã test 15/15: GEM_PIX_2 cạn nhưng
+            # NARWHAL/HARBOR_SEAL vẫn ra ảnh). -> nhánh "quota" ĐỔI MODEL, KHÔNG phải reCAPTCHA (retry cùng model = phí).
+            return "quota", {}
+        if kind == "unusual":
+            # reCAPTCHA reject THẬT -> retry token mới (kiên nhẫn), không đổi model
             return "recaptcha", {"body": (str(data)[:70] if data else "")}
         if pp.is_project_error(kind, data):
             self._proj.mark_bad(proj, log=lambda m: _log(f"{self.email}: {m}"))
