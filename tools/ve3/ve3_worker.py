@@ -2461,7 +2461,7 @@ Generator/context error:
                 if len(missing_refs) > 6:
                     missing_preview += ", ..."
                 with self._excel_lock:
-                    wb.update_scene(scene_id, status_img="failed")   # thiếu ref = lỗi cấu trúc, retry vô ích -> terminal
+                    wb.update_scene(scene_id, status_img="error")   # thiếu ref có thể do transient/bug (pool: ref local chưa sẵn) -> RETRY được, không bỏ
                     wb.safe_save()
                 self.log(f"    Scene {scene_id} -> SKIP missing references: {missing_preview}", "WARN")
                 self.on_item_status("scene", scene_id, "error", None,
@@ -2623,6 +2623,20 @@ Generator/context error:
             dedup.append(c)
         return dedup, base_no_ext
 
+    def _pool_ref_local(self, ref_name: str) -> bool:
+        """POOL: ref build bằng EMBED base64 từ FILE local (nv/<ref>.png) -> KHÔNG cần media_id.
+        _make_ref (pool) đọc thẳng file này. -> ref coi là CÓ nếu file tồn tại, dù media_id rỗng.
+        (Fix: Fix-4 bỏ upload nv1 -> media_id rỗng -> _build_references báo 'missing' oan -> 0 ảnh.)"""
+        if getattr(self, "veo3top_image_mode", "") != "pool" or not ref_name:
+            return False
+        try:
+            for ext in (".png", ".jpg", ".jpeg"):
+                if (self.nv_dir / f"{ref_name}{ext}").exists():
+                    return True
+        except Exception:
+            pass
+        return False
+
     def _build_references(self, scene: Scene, media_ids: Dict[str, str], with_details: bool = False, ignored_ids: Optional[set] = None):
         """Build ImageInput references cho scene."""
         refs = []
@@ -2647,8 +2661,8 @@ Generator/context error:
                 media_id = media_ids.get(c)
                 if media_id:
                     break
-            if media_id:
-                refs.append(self._make_ref(ref_name, media_id))
+            if media_id or self._pool_ref_local(ref_name):
+                refs.append(self._make_ref(ref_name, media_id or ""))
             else:
                 missing_refs.append(ref_name)
 
@@ -2660,8 +2674,8 @@ Generator/context error:
                         continue
                     expected_refs.append(cid)
                     media_id = media_ids.get(cid) or media_ids.get(f"{cid}.png")
-                    if media_id:
-                        refs.append(self._make_ref(cid, media_id))
+                    if media_id or self._pool_ref_local(cid):
+                        refs.append(self._make_ref(cid, media_id or ""))
                     else:
                         missing_refs.append(cid)
 
@@ -2677,8 +2691,8 @@ Generator/context error:
                     return refs
                 expected_refs.append(loc_id)
                 media_id = media_ids.get(loc_id) or media_ids.get(f"{loc_id}.png")
-                if media_id:
-                    refs.append(self._make_ref(loc_id, media_id))
+                if media_id or self._pool_ref_local(loc_id):
+                    refs.append(self._make_ref(loc_id, media_id or ""))
                 else:
                     missing_refs.append(loc_id)
 
@@ -2717,8 +2731,8 @@ Generator/context error:
                 media_id = media_ids.get(c)
                 if media_id:
                     break
-            if media_id:
-                refs.append(self._make_ref(ref_name, media_id))
+            if media_id or self._pool_ref_local(ref_name):
+                refs.append(self._make_ref(ref_name, media_id or ""))
             else:
                 missing_refs.append(ref_name)
 
