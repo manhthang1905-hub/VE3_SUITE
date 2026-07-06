@@ -41,6 +41,8 @@ STATE_FILE = os.path.join(SUITE, ".veo3top_imgpool_state.json")
 
 IMG_MODELS = [m.strip() for m in os.environ.get("VEO3TOP_IMG_MODELS", "GEM_PIX_2,NARWHAL,HARBOR_SEAL").split(",") if m.strip()]
 MODEL_REST_SECS = int(os.environ.get("VEO3TOP_IMG_MODEL_REST", "1800") or "1800")
+# Account CẠN CẢ 3 MODEL (429) = hết hạn mức NGÀY -> nghỉ 12h (hammer trong ngày vô ích), slot bốc account tươi.
+ALL_MODEL_REST_SECS = int(os.environ.get("VEO3TOP_IMG_ALLMODEL_REST", "43200") or "43200")  # 12h
 # CONCURRENCY: account cookie-based (KHÔNG mở chrome/slot) -> chạy được NHIỀU slot song song (nhẹ). 24 account × 1 luồng
 # = 24 submit song song (per-account tải thấp -> né throttle tốt hơn ít-account-nhiều-luồng). Trải trên 96 account.
 N_SLOTS = int(os.environ.get("VEO3TOP_IMG_POOL_ACCOUNTS", "24") or "24")
@@ -1072,7 +1074,12 @@ class ImagePoolBrowser:
                     nxt = a.pick_model()
                     if nxt and nxt != model:
                         self.log(f"📊 {a.email} {model} hết quota -> đổi {nxt}"); model = nxt; continue
-                    self.log(f"📊 {a.email} [{tag}]: hết quota MỌI model -> job sang account khác")
+                    # CẠN CẢ 3 MODEL = hết hạn mức NGÀY -> NGHỈ 12h (quota theo ngày, thử lại trong ngày vô ích),
+                    # slot bốc account TƯƠI. Job -> account khác (retry_soft requeue ở _slot_worker).
+                    self.log(f"📊 {a.email} [{tag}]: hết quota CẢ 3 model -> nghỉ {ALL_MODEL_REST_SECS//3600}h (quota theo ngày)")
+                    self._mark(a.email, state="resting", until=int(time.time()) + ALL_MODEL_REST_SECS,
+                               reason=f"hết quota cả {len(IMG_MODELS)} model - nghỉ {ALL_MODEL_REST_SECS//3600}h")
+                    a.state = "resting"                # thoát produce-loop -> slot bốc account tươi
                     return "retry_soft"                # het quota moi model -> job sang account khac
                 elif kind == "recaptcha":
                     # reCAPTCHA cham diem thap -> RETRY TOKEN MOI (kien nhan nhu video, "retry chan moi duoc").

@@ -3664,10 +3664,172 @@ Generator/context error:
             return False, None, {}, f"img-pool: import client loi: {e}"
         ok, info, err = ifc.generate_image(prompt, str(output_path), aspect=aspect,
                                            image_inputs=image_inputs, log=self.log)
+        # TIER 3: pro pool hết quota CẢ 3 model TRÊN NHIỀU account -> fallback tài khoản ULTRA (video).
+        # Quota IMAGE_GENERATION của Ultra TÁCH BIỆT quota VIDEO -> KHÔNG hại video. -> 1 ảnh gần như không bao giờ fail.
+        if not ok and self._pool_quota_exhausted(err) and self.config.get("ultra_image_fallback", True):
+            self.log("    [pool] pro cạn quota (3 model × account) -> TIER3: thử tài khoản ULTRA", "WARN")
+            u_ok, u_name, u_sinfo, u_err = self._submit_image_ultra(prompt, output_path, image_inputs, aspect)
+            if u_ok:
+                return True, u_name, u_sinfo, ""
+            err = f"{err} | ultra: {u_err}"
         sinfo = {"backend": "veo3top-b-image-pool"}
         if info:
             sinfo.update({k: info[k] for k in ("bytes", "seed", "account", "egress") if k in info})
         return (ok, (info or {}).get("media_name"), sinfo, err if not ok else "")
+
+    def _pool_quota_exhausted(self, err) -> bool:
+        """True nếu image pool trả lỗi do CẠN QUOTA (không phải lỗi khác) -> đáng fallback Ultra."""
+        e = (err or "").lower()
+        return ("quota" in e) or ("quá nhiều lượt" in e) or ("qua nhieu luot" in e)
+
+    def _load_ultra_accounts(self):
+        """Load account ULTRA (accounts/vid_accounts.txt) + cookie từ _auth_cache (video pool đã cache).
+        Cache ở instance. Chỉ lấy account CÓ cookie."""
+        if getattr(self, "_ultra_accts", None) is not None:
+            return self._ultra_accts
+        accts = []
+        try:
+            import json as _j
+            vf = SUITE_ROOT / "accounts" / "vid_accounts.txt"
+            cdir = SUITE_ROOT / "veo3top_engine" / "_auth_cache"
+            emails = []
+            if vf.exists():
+                for line in vf.read_text(encoding="utf-8").splitlines():
+                    line = line.strip()
+                    if line and not line.startswith("#") and "@" in line:
+                        emails.append(line.split("|")[0].strip())
+            for e in emails:
+                safe = e.replace("@", "_").replace(".", "_")
+                cf = cdir / f"{safe}.json"
+                if cf.exists():
+                    try:
+                        d = _j.load(open(cf, encoding="utf-8"))
+                        if d.get("cookie"):
+                            accts.append({"email": e, "cookie": d["cookie"], "project": d.get("project")})
+                    except Exception:
+                        pass
+        except Exception as ex:
+            self.log(f"  [ultra] load account lỗi: {ex}", "WARN")
+        self._ultra_accts = accts
+        self.log(f"  [ultra] {len(accts)} tài khoản Ultra sẵn cookie cho fallback ảnh")
+        return accts
+
+    def _ultra_upload_inputs(self, fc, bearer, proj, email, image_inputs):
+        """Upload rawImageBytes refs lên account Ultra -> [{imageInputType, name}]. Cache per (email, hash).
+        Trả None nếu upload lỗi (bỏ account này). [] nếu không có ref."""
+        if not image_inputs:
+            return []
+        import base64 as _b64, tempfile as _tf, os as _os
+        if not hasattr(self, "_ultra_ref_cache"):
+            self._ultra_ref_cache = {}
+        out = []
+        for inp in image_inputs:
+            itype = inp.get("imageInputType", "IMAGE_INPUT_TYPE_REFERENCE")
+            if inp.get("name"):
+                out.append({"imageInputType": itype, "name": inp["name"]}); continue
+            b64 = inp.get("rawImageBytes")
+            if not b64:
+                continue
+            ck = (email, hash(b64))
+            nm = self._ultra_ref_cache.get(ck)
+            if not nm:
+                tp = None
+                try:
+                    raw = _b64.b64decode(b64)
+                    fd, tp = _tf.mkstemp(suffix=".png"); _os.close(fd)
+                    with open(tp, "wb") as f:
+                        f.write(raw)
+                    nm, _err = fc.upload_image(bearer, proj, f";{int(time.time()*1000)}", tp)
+                    if nm:
+                        self._ultra_ref_cache[ck] = nm
+                except Exception:
+                    nm = None
+                finally:
+                    if tp:
+                        try: _os.remove(tp)
+                        except Exception: pass
+            if not nm:
+                return None
+            out.append({"imageInputType": itype, "name": nm})
+        return out
+
+    def _submit_image_ultra(self, prompt, output_path, image_inputs, aspect) -> tuple:
+        """TIER 3 fallback: tạo ảnh bằng tài khoản ULTRA (video) khi pro pool cạn quota cả 3 model.
+        android_bypass (curl thuần, không chrome). Xoay account + xoay 3 model. Quota IMAGE Ultra tách biệt VIDEO."""
+        try:
+            import sys as _s
+            _eng = r"D:\VE3_SUITE\veo3top_engine"
+            if _eng not in _s.path:
+                _s.path.insert(0, _eng)
+            import flow_client as fc
+        except Exception as e:
+            return False, None, {}, f"ultra: import flow_client lỗi: {e}"
+        accts = self._load_ultra_accounts()
+        if not accts:
+            return False, None, {}, "ultra: không có account (thiếu vid_accounts.txt / cookie)"
+        import random as _r
+        models = ["GEM_PIX_2", "NARWHAL", "HARBOR_SEAL"]
+        seed = (abs(hash(prompt)) % 900000) + 1
+        aspect = aspect or "IMAGE_ASPECT_RATIO_LANDSCAPE"
+        start = _r.randrange(len(accts))
+        order = list(range(start, len(accts))) + list(range(0, start))
+        last_err = "ultra: hết account × model"
+        for idx in order:
+            if self._stop_flag:
+                return False, None, {}, "ultra: stop"
+            a = accts[idx]
+            try:
+                bearer, _ = fc.bearer_from_cookie(a["cookie"])
+            except Exception:
+                bearer = None
+            if not bearer:
+                last_err = "ultra: cookie chết"; continue
+            proj = a.get("project")
+            if not proj:
+                try:
+                    projs = fc.list_projects(a["cookie"]) or []
+                    proj = projs[0] if projs else fc.create_project(a["cookie"])
+                    a["project"] = proj
+                except Exception:
+                    proj = None
+            if not proj:
+                last_err = "ultra: không có project"; continue
+            resolved = self._ultra_upload_inputs(fc, bearer, proj, a["email"], image_inputs)
+            if resolved is None:
+                last_err = "ultra: upload ref lỗi"; continue
+            for model in models:
+                if self._stop_flag:
+                    return False, None, {}, "ultra: stop"
+                payload = fc.build_image_payload(prompt, proj, fc.BYPASS_TOKEN, seed, aspect=aspect,
+                                                 model=model, image_inputs=resolved, app_type=fc.APP_TYPE_ANDROID)
+                try:
+                    kind, data = fc.generate_image(bearer, proj, payload, bypass=True)
+                except Exception as e:
+                    kind, data = "other", str(e)
+                if kind == "ok":
+                    name, fife, b64, rseed = fc.image_result(data)
+                    if fife or b64:
+                        try:
+                            output_path.parent.mkdir(parents=True, exist_ok=True)
+                            if fife:
+                                n = fc.download_image_url(fife, str(output_path))
+                            else:
+                                import base64 as _b64
+                                b = _b64.b64decode(b64)
+                                with open(output_path, "wb") as f:
+                                    f.write(b)
+                                n = len(b)
+                            self.log(f"    [ultra] ✅ RA ẢNH {output_path.name} ({n//1024}KB) [{a['email'][:18]} {model}]", "SUCCESS")
+                            return True, name, {"backend": "ultra-fallback", "account": a["email"], "model": model, "bytes": n}, ""
+                        except Exception as e:
+                            last_err = f"ultra: tải ảnh lỗi {e}"; continue
+                elif kind == "auth":
+                    last_err = "ultra: 401"; break         # cookie account này chết -> account khác
+                elif kind == "recaptcha_quota":
+                    last_err = f"ultra: {a['email'][:12]} {model} hết quota"; continue   # -> model kế
+                else:
+                    last_err = f"ultra: {kind}"; continue   # unusual/other -> model kế
+        return False, None, {}, last_err
 
     def _nanopic_client(self) -> NanoPicAPI:
         use_flow_proxy = self.config.get("nanopic_use_flow_proxy", False)
