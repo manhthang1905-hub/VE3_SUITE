@@ -1027,7 +1027,9 @@ def login_google_chrome(account_info: dict, chrome_portable: str = None, profile
         # v1.0.571: Proxy args - dam bao login dung cung proxy nhu tao anh
         if proxy_arg:
             options.set_argument(f'--proxy-server={proxy_arg}')
-            options.set_argument('--proxy-bypass-list=<-loopback>')
+            # PHẢI bypass loopback CHO CDP: '<-loopback>' XOÁ bypass mặc định -> 127.0.0.1 (cổng CDP) route QUA proxy
+            # -> DrissionPage KHÔNG connect được chrome (BrowserConnectError). Thêm 127.0.0.1;localhost để CDP bypass proxy.
+            options.set_argument('--proxy-bypass-list=<-loopback>;127.0.0.1;localhost;[::1]')
             log(f"[NET] Login qua proxy: {proxy_arg}")
             # v1.0.662: Xoa firewall block IPv4 cu (tu IPv6 mode) de proxy IPv4 hoat dong
             try:
