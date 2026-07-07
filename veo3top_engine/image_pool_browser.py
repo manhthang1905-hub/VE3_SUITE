@@ -271,6 +271,44 @@ def _kill_pool_chromes():
         pass
 
 
+def _startup_clean_slate(port=8789):
+    """START TỰ DỌN (chống kẹt/chồng instance + profile khoá — khỏi phải kill tay):
+    1) KILL instance image_pool_browser CŨ (khác PID mình) -> free :8789 + hết zombie process (kể cả khi 8789 down).
+    2) KILL chrome pool (account + token factory).
+    3) XOÁ profile lock cũ (Singleton*/lockfile) chrome crash để lại -> hết 'user folder conflict' khi login."""
+    import glob
+    me = os.getpid()
+    try:
+        _ps = ("Get-CimInstance Win32_Process | Where-Object { $_.CommandLine -like '*image_pool_browser*' -and "
+               "$_.ProcessId -ne " + str(me) + " } | ForEach-Object { taskkill /F /T /PID $_.ProcessId 2>$null }")
+        subprocess.run(["powershell", "-NoProfile", "-Command", _ps],
+                       capture_output=True, timeout=30, creationflags=0x08000000)
+        _log("startup clean-slate: đã kill instance image_pool cũ (nếu có) + chrome pool + xoá profile lock")
+    except Exception:
+        pass
+    _kill_pool_chromes(); time.sleep(1)
+    try:
+        for pat in ("SingletonLock", "SingletonCookie", "SingletonSocket", "lockfile"):
+            for lk in glob.glob(os.path.join(POOL_PROFILES, "**", pat), recursive=True):
+                try: os.remove(lk)
+                except Exception: pass
+    except Exception:
+        pass
+
+
+def _clear_profile_lock(profile):
+    """Xoá file khoá cũ của 1 profile (chrome crash để lại) -> tránh 'user folder does not conflict with open browser'
+    khi mở lại. Dùng cho đường REUSE (không wipe cả profile để giữ session login)."""
+    import glob
+    try:
+        for pat in ("SingletonLock", "SingletonCookie", "SingletonSocket", "lockfile"):
+            for lk in glob.glob(os.path.join(profile, "**", pat), recursive=True):
+                try: os.remove(lk)
+                except Exception: pass
+    except Exception:
+        pass
+
+
 def _img_token_factory():
     """Token factory CLEAN dùng chung cho POOL ẢNH (action IMAGE_GENERATION). Chrome trắng tươi recycle -> token điểm cao.
     CHỈ dùng làm FALLBACK khi bypass fail (hiếm) -> ghi last-use để janitor tự tắt khi idle (đóng chrome mint)."""
@@ -337,6 +375,7 @@ class Account:
             self._start_ipv6()
             proxy = self.ipv6.proxy_url() if self.ipv6 else None
         port = 9500 + self.idx
+        _clear_profile_lock(self.profile)   # xoá lock cũ (chrome crash để lại) -> tránh 'user folder conflict' khi mở
         # ẨN/HIỆN đọc ĐỘNG theo nút "An Chrome" của GUI (env VEO3TOP_HIDE_CHROME: "1"=ẩn/"0"=hiện); chưa set -> IMG_HIDE.
         # (Trước đây kẹt ở hằng IMG_HIDE lúc import -> bấm nút vô tác dụng.)
         _he = os.environ.get("VEO3TOP_HIDE_CHROME")
@@ -1300,6 +1339,8 @@ def main():
     ap.add_argument("--port", type=int, default=8789)
     ap.add_argument("--accounts", type=int, default=N_SLOTS)
     args = ap.parse_args()
+    # TỰ DỌN khi MỞ: kill instance cũ + chrome zombie + profile lock -> hết kẹt/chồng (khỏi kill tay).
+    _startup_clean_slate(args.port); time.sleep(1)
     # SINGLETON GUARD (chống RESPAWN STORM): Windows để allow_reuse_address=True -> NHIỀU process cùng bind
     # được :8789 mà KHÔNG lỗi -> GUI/worker spawn bao nhiêu cũng "chạy" hết -> chồng đống 5-7 instance, nặng máy.
     # Nếu đã có pool (health có 'slots') -> THOÁT NGAY (trước khi prepare 89 account = trước việc nặng).
