@@ -326,6 +326,7 @@ class Account:
         self.state = "new"      # new | ready | bad | dead
         self.good = False
         self.wins = 0; self.fails = 0; self.busy = False; self.last_kind = ""
+        self.login_fails = 0   # số lần login FAIL LIÊN TIẾP -> slot worker nghỉ dài dần (Google chặn -> khỏi loop 40s)
         self.model_wins = {}; self.model_rest = {}
         self.last_swap = 0.0   # lần gần nhất bị đổi lượt (reCAPTCHA lì) -> xoay về cuối ưu tiên, KHÔNG nghỉ cứng
         self.swaps = 0         # số lượt swap LIÊN TIẾP (reCAPTCHA lì); >= SWAP_GIVEUP -> cách ly; ra ảnh -> reset 0
@@ -584,13 +585,17 @@ class Account:
                     log(f"{self.email}: login lỗi {e}"); ok = False
                 self._kill_profile_chrome()
                 if ok:
+                    self.login_fails = 0   # login OK -> reset đếm fail
                     break
                 if _try < n_try - 1:
                     log(f"↻ {self.email}: login fail qua [{_tag}] (lần {_try+1}/{n_try}) -> retry egress khác")
                     time.sleep(3)
             if not ok:
-                # RETRY hết vẫn fail -> NGHỈ NGẮN rồi THỬ LẠI (resting, KHÔNG dead 3h). Slot nhả cho account khác.
-                self.state = "resting"; log(f"↻ {self.email}: login fail {LOGIN_RETRIES} lần -> nghỉ ngắn thử lại (KHÔNG dead)"); return False
+                # RETRY hết vẫn fail -> đếm login_fails LIÊN TIẾP (slot worker nghỉ DÀI DẦN nếu Google chặn -> khỏi loop 40s).
+                self.login_fails = getattr(self, "login_fails", 0) + 1
+                self.state = "resting"
+                log(f"↻ {self.email}: login fail {LOGIN_RETRIES} lần (liên tiếp {self.login_fails}) -> nghỉ, slot dùng acc khác")
+                return False
             time.sleep(3)
             # CDP chrome (warm+project) PHẢI TRONG semaphore (nối tiếp login_fn, cùng 1 `with login_sem`) -> tối đa
             # LOGIN_CONCURRENCY chrome/lúc THẬT SỰ. Trước đây _open_cdp + warm (~20s) NẰM NGOÀI sem -> account qua
@@ -1082,9 +1087,19 @@ class ImagePoolBrowser:
                 ok = a.prepare(self._login, self.login_sem, self.log, allow_login=POOL_LOGIN)
                 if not ok:
                     reason = "chưa login (reuse cookie)" if a.state == "nologin" else "login/warm fail"
-                    self._mark(a.email, state=a.state, reason=reason)
+                    lf = getattr(a, "login_fails", 0)
+                    if a.state != "nologin" and lf >= 3:
+                        # login FAIL LIÊN TIẾP nhiều lần = Google chặn/thử thách acc này (vd challenge sau password).
+                        # Retry mỗi ~40s vô ích -> nghỉ DÀI DẦN: lần 3->15', 4->30'... tối đa 2h. Slot dùng acc khác.
+                        _rest = min(7200, 900 * (lf - 2))
+                        self._mark(a.email, state="resting", until=int(time.time()) + _rest,
+                                   reason=f"login fail {lf} lần liên tiếp (Google chặn?) -> nghỉ {_rest//60}'")
+                        self.log(f"⏸️ {a.email}: login fail {lf} lần liên tiếp -> nghỉ {_rest//60}' (khỏi loop 40s)")
+                    else:
+                        self._mark(a.email, state=a.state, reason=reason)
                     a.close(); continue
                 self._ever_ready.add(a.email)   # login/reuse OK -> đếm vào "đã login" (live)
+                a.login_fails = 0               # prepare OK (reuse/login) -> reset đếm login fail
                 self._mark(a.email, state="ready", project=a.project, cookie="alive")
                 a.stint = 0                       # lượt active mới -> đếm lại số ảnh cho trần MAX_PER_ACCT
                 # SẢN XUẤT tới khi account đủ trần (MAX_PER_ACCT) hoặc BẮT ĐẦU FAIL (reCAPTCHA lì) -> xoay account khác
