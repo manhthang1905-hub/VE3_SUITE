@@ -7124,61 +7124,77 @@ Get-CimInstance Win32_Process |
             return False
         return self._project_has_pending_ve3_units(project_dir)
 
+    def _project_pending_img_vid(self, project_dir):
+        """Trả (pending_img, pending_vid): còn scene chưa có FILE ảnh / video (status không skip/failed).
+        'error' = lỗi tài nguyên tạm thời -> VẪN pending (retry lượt sau, backoff marker).
+        'failed'/'skip' = terminal -> KHÔNG pending. Raise nếu Excel không đọc được (caller xử lý)."""
+        state = self._get_project_state_cached(project_dir)
+        if not state or state.get("error"):
+            raise RuntimeError(state.get("error") if state else "Excel state unavailable")
+        scenes_all = state.get("scenes") or []
+        img_dir = project_dir / "img"
+        vid_dir = project_dir / "vid"
+        pending_img = False
+        pending_vid = False
+        for s in scenes_all:
+            sid = int(getattr(s, "scene_id", 0) or 0)
+            if sid <= 0:
+                continue
+            img_prompt = str(getattr(s, "img_prompt", "") or "").strip()
+            if img_prompt:
+                st_img = str(getattr(s, "status_img", "") or "").strip().lower()
+                has_img = ((img_dir / f"{sid}.png").exists() or (img_dir / f"{sid}.jpg").exists()
+                           or (img_dir / f"{sid}.mp4").exists())
+                if (not has_img) and st_img not in ("skip", "failed"):
+                    pending_img = True
+            video_prompt = str(getattr(s, "video_prompt", "") or "").strip()
+            if video_prompt:
+                st_vid = str(getattr(s, "status_vid", "") or "").strip().lower()
+                has_vid = ((vid_dir / f"{sid}.mp4").exists() or (img_dir / f"{sid}.mp4").exists())
+                # video I2V cần ẢNH NGUỒN. Ảnh còn đang làm -> tính qua pending_img (chưa tới lượt video).
+                # Ảnh 'failed'/không có file -> video KHÔNG làm được -> KHÔNG coi là pending (tránh kẹt vô tận).
+                has_img_file = ((img_dir / f"{sid}.png").exists() or (img_dir / f"{sid}.jpg").exists())
+                if (not has_vid) and has_img_file and st_vid not in ("skip", "failed"):
+                    pending_vid = True
+            if pending_img and pending_vid:
+                break   # cả 2 đã xác định -> đủ (needs_image/needs_video đều dùng được)
+        return pending_img, pending_vid
+
     def _project_has_pending_ve3_units(self, project_dir):
         """True when project still has actionable VE3 work (img/video)."""
         ep = self._project_excel_path(project_dir)
         if not ep.exists():
             return False
         try:
-            state = self._get_project_state_cached(project_dir)
-            if not state or state.get("error"):
-                raise RuntimeError(state.get("error") if state else "Excel state unavailable")
-            scenes_all = state.get("scenes") or []
-            img_dir = project_dir / "img"
-            vid_dir = project_dir / "vid"
-
-            pending_img = False
-            pending_vid = False
-
-            for s in scenes_all:
-                sid = int(getattr(s, "scene_id", 0) or 0)
-                if sid <= 0:
-                    continue
-
-                img_prompt = str(getattr(s, "img_prompt", "") or "").strip()
-                if img_prompt:
-                    st_img = str(getattr(s, "status_img", "") or "").strip().lower()
-                    has_img = (
-                        (img_dir / f"{sid}.png").exists()
-                        or (img_dir / f"{sid}.jpg").exists()
-                        or (img_dir / f"{sid}.mp4").exists()
-                    )
-                    # 'error' = lỗi TÀI NGUYÊN tạm thời (quota/ratelimit/pool cạn lượt) -> VẪN pending -> retry lượt sau
-                    #   (backoff bằng marker .flowkit_quota_wait do worker ghi -> không hot-loop).
-                    # 'failed' = TERMINAL (policy đã rewrite hết / thiếu ref) -> KHÔNG pending -> project vẫn hoàn tất.
-                    if (not has_img) and st_img not in ("skip", "failed"):
-                        pending_img = True
-
-                video_prompt = str(getattr(s, "video_prompt", "") or "").strip()
-                if video_prompt:
-                    st_vid = str(getattr(s, "status_vid", "") or "").strip().lower()
-                    has_vid = (
-                        (vid_dir / f"{sid}.mp4").exists()
-                        or (img_dir / f"{sid}.mp4").exists()
-                    )
-                    # video GIỐNG HỆT ảnh: 'error' (lỗi tài nguyên tạm thời) -> VẪN pending -> retry lượt sau (backoff marker);
-                    # 'failed' (terminal: policy/thiếu ref) -> KHÔNG pending -> project VẪN hoàn tất được (không kẹt mãi).
-                    if (not has_vid) and st_vid not in ("skip", "failed"):
-                        pending_vid = True
-
-                if pending_img or pending_vid:
-                    break
-
-            return bool(pending_img or pending_vid)
+            pi, pv = self._project_pending_img_vid(project_dir)
+            return bool(pi or pv)
         except Exception as exc:
             self._log(f"[QUEUE/VE3] {project_dir.name}: khng c c Excel {exc}", "WARN", "ve3")
             # Safe default: if cannot verify, treat as still pending to avoid premature endpoint.
             return True
+
+    def _project_needs_image(self, project_dir):
+        """TRẠM ẢNH: còn scene chưa có ảnh -> cần chạy worker image-only."""
+        ep = self._project_excel_path(project_dir)
+        if not ep.exists():
+            return False
+        try:
+            pi, _pv = self._project_pending_img_vid(project_dir)
+            return bool(pi)
+        except Exception:
+            return False   # không chắc -> KHÔNG claim ở trạm ảnh (an toàn)
+
+    def _project_needs_video(self, project_dir):
+        """TRẠM VIDEO: ẢNH XONG HẾT (không còn pending_img) + còn video chưa xong -> chạy worker video-only.
+        Điều kiện 'ảnh đủ hẳn' (not pending_img) đảm bảo I2V có ảnh + tránh race giữa 2 trạm."""
+        ep = self._project_excel_path(project_dir)
+        if not ep.exists():
+            return False
+        try:
+            pi, pv = self._project_pending_img_vid(project_dir)
+            return bool(pv and not pi)
+        except Exception:
+            return False
 
     def _project_ready_for_endpoint_by_files(self, project_dir):
         """Ground-truth completion check from folders, not Excel status flags."""
