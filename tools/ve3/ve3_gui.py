@@ -323,8 +323,7 @@ class HomePage(ctk.CTkScrollableFrame):
         self._progress_slot_codes = []
         self._ui_progress_cache = {}
         self.grid_columnconfigure(0, weight=1)
-        self._mk_projects()      # 1. Danh sch m
-        self._mk_pool_stats()    # 1b. So lieu pool (hien duoi Projects)
+        self._mk_projects()      # 1. Danh sch m (kem hang tiles so lieu pool ngay duoi thong ke)
         self._mk_queue_state()   # 2. Tin
         self._mk_log()           # 3. Nht k
         self._mk_process_monitor()
@@ -427,38 +426,10 @@ class HomePage(ctk.CTkScrollableFrame):
         # Progress cards removed - this method is now a no-op
         pass
 
-    def _mk_pool_stats(self):
-        """SỐ LIỆU POOL — tiles ĐỒNG BỘ style Overview, hiện NGAY dưới Projects (luôn thấy). Cập nhật 5s."""
-        c = self._card(1, "Pool ảnh + video")
-        c.grid_columnconfigure(0, weight=1)
-        ov = ctk.CTkFrame(c, fg_color=CD, corner_radius=8, border_width=1, border_color=BD)
-        ov.grid(row=1, column=0, padx=8, pady=(4, 2), sticky="ew")
-        ov.grid_columnconfigure((0, 1, 2, 3, 4, 5, 6, 7), weight=1)
-        self.pool_tiles = {}
-        _specs = [
-            ("img_tram", "TRẠM ẢNH",      "#1a73e8", "#EAF4FF"),
-            ("img_acc",  "ACC KHAI THÁC", "#0A7",    "#F5F5F5"),
-            ("img_rest", "CÁCH LY 429",   "#F90",    "#F5F5F5"),
-            ("img_rate", "ẢNH / GIỜ",     "#0A7",    "#EAF4FF"),
-            ("vid_tram", "TRẠM VIDEO",    "#E60",    "#FFF0E6"),
-            ("vid_acc",  "ULTRA SỐNG",    "#0A7",    "#F5F5F5"),
-            ("vid_rest", "CÁCH LY VID",   "#F90",    "#F5F5F5"),
-            ("vid_rate", "VIDEO / GIỜ",   "#E60",    "#FFF0E6"),
-        ]
-        for i, (key, label, color, bg) in enumerate(_specs):
-            f = ctk.CTkFrame(ov, fg_color=bg, corner_radius=6, border_width=1, border_color=BD)
-            f.grid(row=0, column=i, padx=4, pady=8, sticky="ew")
-            ctk.CTkLabel(f, text=label, font=("", 9, "bold"), text_color=T2).pack(pady=(6, 2))
-            lb = ctk.CTkLabel(f, text="-", font=("", 18, "bold"), text_color=color)
-            lb.pack(pady=(0, 6))
-            self.pool_tiles[key] = lb
-        self.pool_status_lbl = ctk.CTkLabel(c, text="Đang đọc pool...", font=("", 10), text_color=T2, anchor="w", justify="left")
-        self.pool_status_lbl.grid(row=2, column=0, padx=12, pady=(0, 8), sticky="w")
-
     def _mk_projects(self):
         c = self._card(0, "Projects")
         c.grid_columnconfigure(0, weight=1)
-        c.grid_rowconfigure(2, weight=1)  # Make projects_list expandable
+        c.grid_rowconfigure(4, weight=1)  # projects_list expandable (row 4 sau overview + tiles pool)
 
         # Overview section - matching tool color scheme
         overview = ctk.CTkFrame(c, fg_color=CD, corner_radius=8, border_width=1, border_color=BD)
@@ -521,8 +492,31 @@ class HomePage(ctk.CTkScrollableFrame):
         self.lbl_overview_vid_today = ctk.CTkLabel(f8, text="0", font=("",20,"bold"), text_color="#E60")
         self.lbl_overview_vid_today.pack(pady=(0,6))
 
+        # ===== SỐ LIỆU POOL — hàng tiles NGAY DƯỚI hàng thống kê trên (đồng bộ style), tự cập nhật 5s =====
+        ov2 = ctk.CTkFrame(c, fg_color=CD, corner_radius=8, border_width=1, border_color=BD)
+        ov2.grid(row=2, column=0, padx=8, pady=(0,2), sticky="ew")
+        ov2.grid_columnconfigure((0,1,2,3,4,5,6,7), weight=1)
+        self.pool_tiles = {}
+        for i, (key, label, color, bg) in enumerate([
+                ("img_tram", "TRẠM ẢNH",      "#1a73e8", "#EAF4FF"),
+                ("img_acc",  "ACC KHAI THÁC", "#0A7",    "#F5F5F5"),
+                ("img_rest", "CÁCH LY 429",   "#F90",    "#F5F5F5"),
+                ("img_rate", "ẢNH / GIỜ",     "#0A7",    "#EAF4FF"),
+                ("vid_tram", "TRẠM VIDEO",    "#E60",    "#FFF0E6"),
+                ("vid_acc",  "ULTRA SỐNG",    "#0A7",    "#F5F5F5"),
+                ("vid_rest", "CÁCH LY VID",   "#F90",    "#F5F5F5"),
+                ("vid_rate", "VIDEO / GIỜ",   "#E60",    "#FFF0E6")]):
+            f = ctk.CTkFrame(ov2, fg_color=bg, corner_radius=6, border_width=1, border_color=BD)
+            f.grid(row=0, column=i, padx=4, pady=6, sticky="ew")
+            ctk.CTkLabel(f, text=label, font=("",9,"bold"), text_color=T2).pack(pady=(6,2))
+            lb = ctk.CTkLabel(f, text="-", font=("",18,"bold"), text_color=color)
+            lb.pack(pady=(0,6))
+            self.pool_tiles[key] = lb
+        self.pool_status_lbl = ctk.CTkLabel(c, text="Đang đọc pool...", font=("",10), text_color=T2, anchor="w", justify="left")
+        self.pool_status_lbl.grid(row=3, column=0, padx=12, pady=(0,4), sticky="w")
+
         self.projects_list = ctk.CTkScrollableFrame(c, height=600, fg_color="#F3F5F7", corner_radius=6, border_width=1, border_color=BD2)
-        self.projects_list.grid(row=2, column=0, padx=8, pady=(0,8), sticky="nsew")
+        self.projects_list.grid(row=4, column=0, padx=8, pady=(0,8), sticky="nsew")
         self.projects_list.grid_columnconfigure(0, weight=1)
         self.projects_box = None
 
