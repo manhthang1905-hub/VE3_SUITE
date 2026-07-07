@@ -669,7 +669,7 @@ class HomePage(ctk.CTkScrollableFrame):
             return
         self._pool_poll_busy = True
 
-        def _work():
+        def _work_body():
             import urllib.request, json as _json
 
             def _get(port):
@@ -800,12 +800,21 @@ class HomePage(ctk.CTkScrollableFrame):
                 else:                       # fail lẻ tẻ -> GIỮ số cũ
                     status.append(f"🎬 Pool video: /health chậm, giữ số cũ (lần {self._vid_hfail}/3)")
             status.append(f"⟳ {_time.strftime('%H:%M:%S')}")
-            self._pool_poll_busy = False   # xong -> mở cờ cho lượt sau (đặt TRƯỚC reschedule)
-            # ÁP KẾT QUẢ + LÊN LỊCH LẦN SAU trên MAIN THREAD (widget chỉ đụng từ main thread)
+            # ÁP KẾT QUẢ trên MAIN THREAD (widget chỉ đụng từ main thread). Reset busy + reschedule -> ở _work finally.
             try: self.after(0, lambda vv=vals, st="     ".join(status): self._apply_pool_health(vv, st))
             except Exception: pass
-            try: self.after(POOL_POLL_MS, self._poll_pool_health)   # giãn nhịp (mặc định 15s) -> nhẹ, đỡ đơ
-            except Exception: pass
+
+        def _work():
+            # SELF-HEAL: dù _work_body CRASH (pool chưa sẵn lúc startup, /health lạ...) VẪN reset busy + reschedule
+            # -> poll KHÔNG chết vĩnh viễn (trước đây crash -> _pool_poll_busy kẹt True -> tiles đứng '-' mãi).
+            try:
+                _work_body()
+            except Exception:
+                pass
+            finally:
+                self._pool_poll_busy = False
+                try: self.after(POOL_POLL_MS, self._poll_pool_health)
+                except Exception: pass
 
         threading.Thread(target=_work, daemon=True, name="pool-health").start()
 
