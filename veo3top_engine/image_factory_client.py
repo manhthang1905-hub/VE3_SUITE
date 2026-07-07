@@ -121,7 +121,7 @@ def _spawn_service(log=print):
         _g4 = cfg.get("login_4g_proxies") or []   # list "host:port" socks5 4G (nhập ở GUI Settings)
         if isinstance(_g4, str): _g4 = [x.strip() for x in _g4.replace("\n", ",").split(",") if x.strip()]
         env["VEO3TOP_IMG_LOGIN_4G"] = ",".join(str(x).strip() for x in _g4 if str(x).strip())
-        env["VEO3TOP_IMG_LOGIN_WARP"] = "1" if cfg.get("login_use_warp", True) else "0"
+        env["VEO3TOP_IMG_LOGIN_WARP"] = "1" if cfg.get("login_use_warp", False) else "0"   # mặc định TẮT (login IP máy, đơn giản)
         if cfg.get("image_token_chromes"):   # cho phép chỉnh số token chrome ẢNH qua settings.yaml
             env["VEO3TOP_IMG_TOKEN_CHROMES"] = str(int(cfg.get("image_token_chromes")))
         if cfg.get("image_login_concurrency"):   # SỐ CHROME LOGIN đồng thời tối đa (mặc định 5); máy yếu -> hạ xuống

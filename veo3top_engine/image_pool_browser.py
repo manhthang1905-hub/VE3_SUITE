@@ -109,7 +109,7 @@ IMG_NATIVE = os.environ.get("VEO3TOP_IMG_NATIVE", "0") == "1"   # 0 = GIỮ IPv6
 #  - 4G proxy (nhập ở GUI, IP tự đổi theo thời gian -> KHÔNG cần rotate): VEO3TOP_IMG_LOGIN_4G = "host:port,host:port"
 #  - WARP (Cloudflare socks5 :40000, IP khác IP máy): VEO3TOP_IMG_LOGIN_WARP=1
 # Login CỨ RETRY xoay vòng qua pool tới khi OK. Generate VẪN đi IP máy (nhanh, không đụng).
-IMG_LOGIN_WARP = os.environ.get("VEO3TOP_IMG_LOGIN_WARP", "1") == "1"
+IMG_LOGIN_WARP = os.environ.get("VEO3TOP_IMG_LOGIN_WARP", "0") == "1"   # mặc định TẮT (đơn giản: login IP máy như user thật). Bật nếu máy bị 'Something went wrong'.
 IMG_LOGIN_4G = [p.strip() for p in os.environ.get("VEO3TOP_IMG_LOGIN_4G", "").split(",") if p.strip()]
 # ẨN chrome (mặc định BẬT): đẩy cửa sổ ra ngoài màn hình (vẫn GPU -> ảnh vẫn chạy). Tắt (0) -> hiện cửa sổ. Như video.
 IMG_HIDE = os.environ.get("VEO3TOP_IMG_HIDE", "1") == "1"
