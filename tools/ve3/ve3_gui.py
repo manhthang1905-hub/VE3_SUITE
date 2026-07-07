@@ -1849,7 +1849,9 @@ class SettingsPage(ctk.CTkScrollableFrame):
                            "Account pool anh = tran so account nap. Token chrome = so chrome-trang de token (CPU la tran ~6-8). "
                            "Recycle = N token/chrome roi lam moi. Luong/acc video = submit/account ultra. Restart de ap.")
                      ).grid(row=2, column=0, columnspan=8, padx=(0,4), pady=(4,0), sticky="w")
-        ctk.CTkButton(gc, text="⚙ Auto Setup (theo máy)", width=180, height=30, fg_color="#00897B", hover_color="#00695C", text_color="#FFF", font=("",11,"bold"), corner_radius=6, command=self._auto_setup).grid(row=10, column=0, columnspan=3, padx=10, pady=(6,2))
+        # (Bỏ nút 'Auto Setup theo máy': số MÃ ảnh/video TỰ LINH HOẠT ở runtime — _compute_pool_capacity đọc /health
+        #  live -> nhân sự thực bao nhiêu làm bấy nhiêu (Mã=0=auto). Núm token chrome có default + token factory đã
+        #  demand-driven idle nên khỏi tinh chỉnh tay. Muốn chỉnh vẫn sửa núm trực tiếp được.)
         ctk.CTkButton(gc, text="Save settings", width=120, height=30, fg_color=AC, hover_color=AC2, text_color="#FFF", font=("",11,"bold"), corner_radius=6, command=self._save).grid(row=11, column=0, columnspan=3, padx=10, pady=(4,4))
         self.lbl_saved = ctk.CTkLabel(gc, text="", font=("",9), text_color=OK)
         self.lbl_saved.grid(row=12, column=0, columnspan=3, padx=10, pady=(0,4))
