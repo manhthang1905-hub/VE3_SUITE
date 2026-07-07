@@ -1820,7 +1820,11 @@ class SettingsPage(ctk.CTkScrollableFrame):
         self.txt_login_4g = ctk.CTkTextbox(gc, height=48, corner_radius=4, font=("Consolas",9), fg_color=EN, border_color=BD, border_width=1, wrap="none")
         self.txt_login_4g.grid(row=8, column=1, columnspan=2, sticky="ew", padx=(0,10), pady=(0,4))
         self.sw_login_warp = ctk.CTkSwitch(gc, text="Dung WARP cho login (Cloudflare, IP khac IP may)", progress_color=OK, button_color="#FFF", button_hover_color="#EEE")
-        self.sw_login_warp.grid(row=9, column=0, columnspan=3, padx=10, pady=(0,8), sticky="w")
+        self.sw_login_warp.grid(row=9, column=0, columnspan=2, padx=10, pady=(0,8), sticky="w")
+        self.btn_warp_setup = ctk.CTkButton(gc, text="⬇ Setup WARP", width=110, height=26, corner_radius=5,
+                                            fg_color="#F38020", hover_color="#D96D10", text_color="#FFF", font=("",10,"bold"),
+                                            command=self._setup_warp)
+        self.btn_warp_setup.grid(row=9, column=2, padx=(0,10), pady=(0,8), sticky="e")
         # NUM TINH CHINH NHA MAY ANH (toi uu toc do, chong 403). Tat ca so nguyen.
         knob = ctk.CTkFrame(gc, fg_color="transparent")
         knob.grid(row=10, column=0, columnspan=3, padx=10, pady=(0,6), sticky="w")
@@ -2455,6 +2459,49 @@ class SettingsPage(ctk.CTkScrollableFrame):
                     "enabled": True,
                 })
         return servers
+
+    def _setup_warp(self):
+        """Cài + đăng ký Cloudflare WARP (máy chưa có) -> bật Local proxy :40000 để dùng cho login.
+        Tải MSI (nếu chưa cài) -> cài im lặng (cần admin) -> registration new -> mode proxy -> connect."""
+        def _set(msg, color=T3):
+            try: self.after(0, lambda: self.lbl_saved.configure(text=msg, text_color=color))
+            except Exception: pass
+        def _do():
+            import subprocess, os, tempfile, urllib.request, socket
+            WARP = r"C:\Program Files\Cloudflare\Cloudflare WARP\warp-cli.exe"
+            try:
+                self.after(0, lambda: self.btn_warp_setup.configure(text="...", state="disabled"))
+                # 1) chưa cài -> TẢI + CÀI
+                if not os.path.exists(WARP):
+                    _set("WARP: đang tải Cloudflare WARP...", T3)
+                    msi = os.path.join(tempfile.gettempdir(), "Cloudflare_WARP.msi")
+                    _rq = urllib.request.Request("https://1111-releases.cloudflareclient.com/win/latest",
+                                                 headers={"User-Agent": "Mozilla/5.0"})   # thiếu UA -> 403
+                    with urllib.request.urlopen(_rq, timeout=120) as _resp, open(msi, "wb") as _f:
+                        _f.write(_resp.read())
+                    _set("WARP: đang cài (bấm YES nếu hỏi quyền admin)...", T3)
+                    subprocess.run(["msiexec", "/i", msi, "/qn", "/norestart"], timeout=300)
+                if not os.path.exists(WARP):
+                    _set("❌ Cài WARP thất bại (thử tải tay: 1.1.1.1)", ER); return
+                # 2) đăng ký (free) + bật proxy mode :40000 + connect
+                _set("WARP: đăng ký + bật Local proxy :40000...", T3)
+                for a in (["registration", "new"], ["mode", "proxy"], ["proxy", "port", "40000"], ["connect"]):
+                    subprocess.run([WARP, "--accept-tos", *a], capture_output=True, text=True, timeout=40)
+                import time as _t; _t.sleep(4)
+                # 3) kiểm port 40000 mở chưa
+                s = socket.socket(); s.settimeout(3)
+                ok = (s.connect_ex(("127.0.0.1", 40000)) == 0); s.close()
+                if ok:
+                    _set("✅ WARP sẵn sàng (Local proxy :40000) — bật switch + Save để dùng cho login", OK)
+                    self.after(0, lambda: self.sw_login_warp.select())
+                else:
+                    _set("⚠️ WARP cài xong nhưng chưa nghe :40000 — mở app Cloudflare WARP, chọn Mode=Local proxy", "#FF8C00")
+            except Exception as e:
+                _set(f"❌ WARP lỗi: {str(e)[:60]}", ER)
+            finally:
+                self.after(0, lambda: self.btn_warp_setup.configure(text="⬇ Setup WARP", state="normal"))
+        import threading
+        threading.Thread(target=_do, daemon=True).start()
 
     def _auto_setup(self):
         """Đọc tài nguyên máy (CPU/RAM) + đếm số account ảnh/video -> tính thông số TỐI ƯU -> tự điền vào các ô.
