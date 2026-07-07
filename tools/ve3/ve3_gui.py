@@ -428,12 +428,32 @@ class HomePage(ctk.CTkScrollableFrame):
         pass
 
     def _mk_pool_stats(self):
-        """Panel SỐ LIỆU POOL hiện NGAY dưới Projects (luôn thấy, không cần mở Logs)."""
-        c = self._card(1, "📊 Số liệu Pool (ảnh + video) — tự cập nhật 5s")
-        self.pool_overview_box = ctk.CTkTextbox(c, height=190, font=("Consolas", 12), fg_color="#0d1117",
-                                                text_color="#c9d1d9", corner_radius=4, wrap="none")
-        self.pool_overview_box.grid(row=1, column=0, sticky="ew", padx=8, pady=(0, 6))
-        self.pool_overview_box.configure(state="disabled")
+        """SỐ LIỆU POOL — tiles ĐỒNG BỘ style Overview, hiện NGAY dưới Projects (luôn thấy). Cập nhật 5s."""
+        c = self._card(1, "Pool ảnh + video")
+        c.grid_columnconfigure(0, weight=1)
+        ov = ctk.CTkFrame(c, fg_color=CD, corner_radius=8, border_width=1, border_color=BD)
+        ov.grid(row=1, column=0, padx=8, pady=(4, 2), sticky="ew")
+        ov.grid_columnconfigure((0, 1, 2, 3, 4, 5, 6, 7), weight=1)
+        self.pool_tiles = {}
+        _specs = [
+            ("img_tram", "TRẠM ẢNH",      "#1a73e8", "#EAF4FF"),
+            ("img_acc",  "ACC KHAI THÁC", "#0A7",    "#F5F5F5"),
+            ("img_rest", "CÁCH LY 429",   "#F90",    "#F5F5F5"),
+            ("img_rate", "ẢNH / GIỜ",     "#0A7",    "#EAF4FF"),
+            ("vid_tram", "TRẠM VIDEO",    "#E60",    "#FFF0E6"),
+            ("vid_acc",  "ULTRA SỐNG",    "#0A7",    "#F5F5F5"),
+            ("vid_rest", "CÁCH LY VID",   "#F90",    "#F5F5F5"),
+            ("vid_rate", "VIDEO / GIỜ",   "#E60",    "#FFF0E6"),
+        ]
+        for i, (key, label, color, bg) in enumerate(_specs):
+            f = ctk.CTkFrame(ov, fg_color=bg, corner_radius=6, border_width=1, border_color=BD)
+            f.grid(row=0, column=i, padx=4, pady=8, sticky="ew")
+            ctk.CTkLabel(f, text=label, font=("", 9, "bold"), text_color=T2).pack(pady=(6, 2))
+            lb = ctk.CTkLabel(f, text="-", font=("", 18, "bold"), text_color=color)
+            lb.pack(pady=(0, 6))
+            self.pool_tiles[key] = lb
+        self.pool_status_lbl = ctk.CTkLabel(c, text="Đang đọc pool...", font=("", 10), text_color=T2, anchor="w", justify="left")
+        self.pool_status_lbl.grid(row=2, column=0, padx=12, pady=(0, 8), sticky="w")
 
     def _mk_projects(self):
         c = self._card(0, "Projects")
@@ -576,13 +596,7 @@ class HomePage(ctk.CTkScrollableFrame):
             except Exception: _sz0 = 0
             self._pool_log_files[_name] = [_p, _box, _sz0]  # [path, box, last_size]
 
-        # Tab SỐ LIỆU pool: poll /health (ảnh 8789 + video 8788) -> nắm tình hình TRỰC TIẾP
-        # (ra ảnh/video, model nào chạy, quota cạn?, bao nhiêu account 429/nghỉ/chết). Refresh mỗi 5s.
-        _stab = self.log_tabs.add("📊 Số liệu")
-        _stab.grid_columnconfigure(0, weight=1); _stab.grid_rowconfigure(0, weight=1)
-        self.pool_stat_box = ctk.CTkTextbox(_stab, font=("Consolas", 13), fg_color="#0d1117",
-                                            text_color="#c9d1d9", corner_radius=4, wrap="none")
-        self.pool_stat_box.grid(row=0, column=0, sticky="nsew"); self.pool_stat_box.configure(state="disabled")
+        # Số liệu pool hiện ở TILES dưới Projects (_mk_pool_stats) -> chỉ cần khởi động vòng poll.
         self._poll_pool_health()
 
         self._tail_pool_logs()
@@ -630,7 +644,7 @@ class HomePage(ctk.CTkScrollableFrame):
             except Exception: pass
 
     def _poll_pool_health(self):
-        """Poll /health pool ẢNH (8789) + VIDEO (8788) -> hiện số liệu để nắm tình hình pool trực tiếp. Mỗi 5s."""
+        """Poll /health pool ẢNH (8789) + VIDEO (8788) -> cập nhật TILES + dòng trạng thái. Mỗi 5s."""
         import urllib.request, json as _json
 
         def _get(port):
@@ -640,24 +654,24 @@ class HomePage(ctk.CTkScrollableFrame):
             except Exception:
                 return None
 
-        L = []
-        # ---------- 🏭 NHÀ MÁY TỰ TÍNH (linh hoạt theo nhân sự thực) ----------
+        def _set(key, val):
+            lb = getattr(self, "pool_tiles", {}).get(key)
+            if lb is not None:
+                try: lb.configure(text=str(val))
+                except Exception: pass
+
+        # nhà máy tự tính (số mã + luồng)
         try:
             cap = self.app._compute_pool_capacity()
             cfgd = getattr(self.app, "config_data", {}) or {}
             _ic = int(cfgd.get("max_concurrent_image_codes", 0) or 0)
             _vc = int(cfgd.get("max_concurrent_video_codes", 0) or 0)
-            _img_codes = _ic if _ic > 0 else cap["img_codes"]
-            _vid_codes = _vc if _vc > 0 else cap["vid_codes"]
-            L.append("┏━━━ 🏭 NHÀ MÁY (tự tính theo nhân sự đang khai thác) ━━━━")
-            L.append(f"┃ 🖼️  Trạm ẢNH: {_img_codes} mã × ~{cap['img_per']} luồng"
-                     f"  (nhân sự {cap['img_cap']}/{cap['img_total']} account){'' if _ic<=0 else ' [cố định]'}")
-            L.append(f"┃ 🎬 Trạm VIDEO: {_vid_codes} mã"
-                     f"  (Ultra {cap['vid_cap']}/{cap['vid_total']}){'' if _vc<=0 else ' [cố định]'}")
-            L.append("┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
-            L.append("")
+            img_codes = _ic if _ic > 0 else cap.get("img_codes", "-")
+            vid_codes = _vc if _vc > 0 else cap.get("vid_codes", "-")
         except Exception:
-            pass
+            cap = {}; img_codes = "-"; vid_codes = "-"
+
+        status = []
         # ---------- ẢNH ----------
         h = _get(8789)
         if h:
@@ -666,53 +680,38 @@ class HomePage(ctk.CTkScrollableFrame):
             for a in act:
                 for m, n in (a.get("model_wins") or {}).items():
                     mw[m] = mw.get(m, 0) + n
-            model_str = "  ".join(f"{m}={n}" for m, n in sorted(mw.items(), key=lambda x: -x[1])) or "(chưa có)"
-            qb = h.get("quota_blocked")
-            quota_str = (f"⛔ CẠN (mở lại sau {h.get('quota_block_remaining_s',0)}s)" if qb else "✅ còn quota")
-            L.append("┏━━━ 🖼️  POOL ẢNH  (cổng 8789) ━━━━━━━━━━━━━━━━━━━")
-            L.append(f"┃ 🎨 Ra ảnh: {h.get('done',0):<6} Lỗi: {h.get('fail',0):<5} Tốc độ: ~{h.get('image_per_hour',0)}/giờ   Hàng đợi: {h.get('queue',0)}")
-            _tot = h.get('candidates', 0); _rest = h.get('known_resting', 0); _dead = h.get('known_dead', 0)
-            _busy = sum(1 for a in act if a.get('busy')); _work = max(0, _tot - _rest - _dead)
-            L.append(f"┃ 👤 Tài khoản: {_tot} tổng")
-            L.append(f"┃    🟢 Khai thác được: {_work}    ⚡ Đang tạo: {_busy}    😴 Cách ly 429 (3h): {_rest}    ⛔ Chết(login lại): {_dead}")
-            L.append(f"┃ 🧬 Model đang ra ảnh: {model_str}")
-            L.append(f"┃ 📊 Quota ảnh: {quota_str}   | reCAPTCHA liên tiếp: {h.get('consec_recaptcha',0)}")
-            L.append("┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+            top_model = max(mw.items(), key=lambda x: x[1])[0] if mw else "-"
+            _tot = int(h.get('candidates', 0) or 0); _rest = int(h.get('known_resting', 0) or 0); _dead = int(h.get('known_dead', 0) or 0)
+            _work = max(0, _tot - _rest - _dead)
+            _set("img_tram", f"{img_codes}×{cap.get('img_per', '?')}")
+            _set("img_acc", f"{_work}/{_tot}")
+            _set("img_rest", _rest)
+            _set("img_rate", h.get('image_per_hour', 0))
+            _qb = h.get("quota_blocked")
+            status.append(f"🖼️ Pool ảnh: ra {h.get('done',0)} | model {top_model} | quota {'⛔ cạn' if _qb else '✅ còn'} | chết {_dead}")
         else:
-            L.append("🖼️  POOL ẢNH (8789): ⏸️  chưa chạy / không kết nối được (pool chưa bật hoặc project chưa tới phase ảnh)")
-        L.append("")
+            for k in ("img_tram", "img_acc", "img_rest", "img_rate"): _set(k, "⏸")
+            status.append("🖼️ Pool ảnh: ⏸ chưa chạy (chưa tới phase ảnh / pool tắt)")
         # ---------- VIDEO ----------
         v = _get(8788)
         if v:
             accs = v.get("accounts") or []
             resting = [a for a in accs if (a.get("resting_in") or 0) > 1]
             q429 = sum(1 for a in resting if "quota" in str(a.get("last_kind", "")).lower())
-            busy = sum(1 for a in accs if a.get("busy"))
-            L.append("┏━━━ 🎬 POOL VIDEO  (cổng 8788) ━━━━━━━━━━━━━━━━━━")
-            L.append(f"┃ 🎥 Ra video: {v.get('done',0):<5} Lỗi: {v.get('fail',0):<4} Tốc độ: ~{v.get('video_per_hour',0)}/giờ   Hàng đợi: {v.get('queue',0)}")
-            _vtot = len(accs); _vrest = len(resting); _vwork = max(0, _vtot - _vrest)
-            L.append(f"┃ 👤 Tài khoản Ultra: {_vtot} tổng")
-            L.append(f"┃    🟢 Khai thác được: {_vwork}    ⚡ Đang tạo: {busy}    😴 Cách ly 429 (3h): {q429}    (nghỉ khác: {_vrest - q429})")
-            if resting:
-                _pre = ", ".join(f"{a.get('email','?')[:16]}({int(a.get('resting_in',0)//60)}p)" for a in resting[:6])
-                L.append(f"┃ 😴 Đang cách ly: {_pre}")
-            L.append("┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+            _vtot = len(accs); _vwork = max(0, _vtot - len(resting))
+            _set("vid_tram", f"{vid_codes} mã")
+            _set("vid_acc", f"{_vwork}/{_vtot}")
+            _set("vid_rest", q429)
+            _set("vid_rate", v.get('video_per_hour', 0))
+            status.append(f"🎬 Pool video: ra {v.get('done',0)} | hàng đợi {v.get('queue',0)}")
         else:
-            L.append("🎬 POOL VIDEO (8788): ⏸️  chưa chạy / không kết nối được (chưa tới phase video)")
-        L.append("")
-        L.append(f"⟳ tự cập nhật mỗi 5s — {_time.strftime('%H:%M:%S')}")
-
-        _txt = "\n".join(L)
-        for _box in (getattr(self, "pool_overview_box", None), getattr(self, "pool_stat_box", None)):
-            if _box is None:
-                continue
-            try:
-                _box.configure(state="normal")
-                _box.delete("1.0", "end")
-                _box.insert("1.0", _txt)
-                _box.configure(state="disabled")
-            except Exception:
-                pass
+            for k in ("vid_tram", "vid_acc", "vid_rest", "vid_rate"): _set(k, "⏸")
+            status.append("🎬 Pool video: ⏸ chưa chạy (chưa tới phase video)")
+        status.append(f"⟳ {_time.strftime('%H:%M:%S')}")
+        try:
+            self.pool_status_lbl.configure(text="     ".join(status))
+        except Exception:
+            pass
         try:
             self.after(5000, self._poll_pool_health)
         except Exception:
