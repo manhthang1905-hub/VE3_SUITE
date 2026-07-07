@@ -115,7 +115,8 @@ def _spawn_service(log=print):
         cfgp = os.path.join(_SUITE, "tools", "ve3", "config", "settings.yaml")
         cfg = yaml.safe_load(open(cfgp, encoding="utf-8")) or {}
         env["VEO3TOP_IMG_HIDE"] = "1" if cfg.get("image_hide_chrome", True) else "0"
-        env["VEO3TOP_HIDE_CHROME"] = env["VEO3TOP_IMG_HIDE"]   # ẨN cả login (gốc lỗi login là IP, KHÔNG phải ẩn — đã fix IP bằng 4G/WARP)
+        # KHÔNG ẩn LOGIN chrome: ĐO THẬT -> offscreen (-32000) làm 'Password page NOT detected' + PageDisconnected ->
+        # login FAIL (29/0 qua cả WARP+IP máy). Generation/reuse vẫn ẩn qua IMG_HIDE. Login hiện (hiếm, 1 lần/account).
         # LOGIN EGRESS: POOL 4G (IP tự đổi) + WARP -> retry xoay vòng tới khi OK (né 'Something went wrong' do dồn 1 IP).
         _g4 = cfg.get("login_4g_proxies") or []   # list "host:port" socks5 4G (nhập ở GUI Settings)
         if isinstance(_g4, str): _g4 = [x.strip() for x in _g4.replace("\n", ",").split(",") if x.strip()]
