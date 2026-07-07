@@ -42,8 +42,13 @@ REST_SOFT = 8              # sau 1 lượt 40 lần vẫn chưa qua -> nghỉ NG
 # 429 recaptcha_quota = HẾT QUOTA VIDEO của account (per-account) -> grind token VÔ ÍCH. Thử VID_QUOTA_GIVEUP lần
 # (phòng thoáng qua), chắc chắn 429 -> NGHỈ 3h + đổi account (chỉ 10 account Ultra -> nghỉ dài, khỏi đốt token factory).
 # SUBMIT ĐỒNG THỜI/ACCOUNT: bắn dồn > ~4-5 submit cùng lúc/account -> kích THROTTLE (đã đo: 40 dồn -> 5 pass, 35 throttled).
-# Giới hạn ~4 submit đồng thời/account (poll/download vẫn song song thoải mái) -> khai thác mượt, không tự kích throttle.
-SUBMIT_CONCURRENCY = int(os.environ.get("VEO3TOP_VID_SUBMIT_CONCURRENCY", "4") or "4")
+# KHÔNG cứng 4: mỗi account TỰ ĐIỀU CHỈNH trần submit (AIMD như TCP) -> dính throttle giảm, chạy mượt tăng dần,
+# tự dò trần tối đa của account/thời điểm đó -> khai thác TỐI ĐA mà vẫn không tự kích throttle.
+SUBMIT_START = int(os.environ.get("VEO3TOP_VID_SUBMIT_START", "4") or "4")   # trần khởi đầu/account
+SUBMIT_MIN   = int(os.environ.get("VEO3TOP_VID_SUBMIT_MIN", "1") or "1")     # sàn khi bị throttle liên tục
+SUBMIT_MAX   = int(os.environ.get("VEO3TOP_VID_SUBMIT_MAX", "8") or "8")     # trần tối đa dò lên (>~5 đo thật, đủ room)
+SUBMIT_UP_AFTER = int(os.environ.get("VEO3TOP_VID_SUBMIT_UP_AFTER", "6") or "6")  # N submit mượt liên tiếp -> +1 trần
+SUBMIT_CONCURRENCY = SUBMIT_START   # (giữ tên cũ cho tương thích log/health)
 # THROTTLE (USER_REQUESTS_THROTTLED) hồi trong vài giây -> nghỉ NGẮN, KHÔNG cách ly (khác hết-quota).
 VID_THROTTLE_REST = float(os.environ.get("VEO3TOP_VID_THROTTLE_REST", "4") or "4")   # ~4s (+jitter)
 VID_QUOTA_GIVEUP = int(os.environ.get("VEO3TOP_VID_QUOTA_GIVEUP", "5") or "5")
@@ -60,6 +65,48 @@ def _log(msg):
     print(f"[videofactory] {msg}", flush=True)
 
 
+class AdaptiveLimiter:
+    """Trần submit ĐỒNG THỜI TỰ ĐIỀU CHỈNH per-account (AIMD như điều khiển tắc nghẽn TCP).
+    - Chạy mượt (submit 200) SUBMIT_UP_AFTER lần liên tiếp -> +1 trần (additive increase, dò lên từ từ).
+    - Dính THROTTLE (429 rate) -> trần /=2 (multiplicative decrease, lùi nhanh) + reset streak.
+    Kết quả: mỗi account tự hội tụ về trần TỐI ĐA mà không kích throttle -> khai thác tối đa, tự thích nghi theo
+    account/thời điểm/độ nóng của Google (không cần chỉnh tay)."""
+    def __init__(self, start=SUBMIT_START, lo=SUBMIT_MIN, hi=SUBMIT_MAX):
+        self._lo = max(1, int(lo)); self._hi = max(self._lo, int(hi))
+        self._limit = float(min(max(start, self._lo), self._hi))
+        self._active = 0
+        self._ok_streak = 0
+        self._cond = threading.Condition()
+
+    def acquire(self):
+        with self._cond:
+            while self._active >= int(self._limit):
+                self._cond.wait(timeout=1.0)
+            self._active += 1
+
+    def release(self):
+        with self._cond:
+            self._active = max(0, self._active - 1)
+            self._cond.notify()
+
+    def on_ok(self):
+        with self._cond:
+            self._ok_streak += 1
+            if self._ok_streak >= SUBMIT_UP_AFTER and self._limit < self._hi:
+                self._limit = min(self._hi, self._limit + 1)
+                self._ok_streak = 0
+                self._cond.notify()      # đánh thức 1 chờ vì vừa nới trần
+
+    def on_throttle(self):
+        with self._cond:
+            self._limit = max(self._lo, self._limit / 2.0)
+            self._ok_streak = 0
+
+    def snapshot(self):
+        with self._cond:
+            return int(self._limit), self._active
+
+
 class Account:
     """1 account ultra trong pool + trạng thái runtime (nghỉ, thắng/thua, egress)."""
     def __init__(self, name, email, chrome_path, cache, bundle=""):
@@ -70,7 +117,7 @@ class Account:
         self.resume_at = 0.0
         self.rest_streak = 0
         self.busy = False
-        self.submit_sem = threading.Semaphore(SUBMIT_CONCURRENCY)   # giới hạn submit ĐỒNG THỜI/account (chống burst -> throttle)
+        self.limiter = AdaptiveLimiter()   # trần submit ĐỒNG THỜI/account TỰ ĐIỀU CHỈNH (AIMD) -> khai thác tối đa
         self.wins = 0; self.fails = 0
         self.egress_wins = {}     # egress name -> count
         self.last_kind = ""       # loại lỗi gần nhất (ratelimit/recaptcha_quota/unusual...)
@@ -353,8 +400,11 @@ class VideoFactory:
             # (đó là nguồn UNUSUAL). Đã đo video 13/13 submit 200. Token='android_bypass', app_type=ANDROID.
             payload = fc.build_payload(job["prompt"], project, fc.BYPASS_TOKEN, seed,
                                        aspect=aspect, reference_media_id=media_id, app_type=fc.APP_TYPE_ANDROID)
-            with account.submit_sem:   # giới hạn submit ĐỒNG THỜI/account -> không burst -> không tự kích throttle
+            account.limiter.acquire()   # trần submit đồng thời/account TỰ ĐIỀU CHỈNH (AIMD) -> không burst kích throttle
+            try:
                 kind, data = fc.generate(bearer, payload, url=fc.GEN_I2V, proxy=eproxy, bypass=True)
+            finally:
+                account.limiter.release()
             # bypass trượt (unusual/other) -> RETRY bypass vài lần (rẻ); liên tiếp >= BYPASS_RETRY mới mint WEB
             # token thật fallback. KHÔNG fallback ratelimit/quota/auth/project (xử lý ở nhánh dưới).
             if kind in ("unusual", "other"):
@@ -366,9 +416,13 @@ class VideoFactory:
                 if tok:
                     payload = fc.build_payload(job["prompt"], project, tok, seed,
                                                aspect=aspect, reference_media_id=media_id, app_type=fc.APP_TYPE_WEB)
-                    with account.submit_sem:
+                    account.limiter.acquire()
+                    try:
                         kind, data = fc.generate(bearer, payload, url=fc.GEN_I2V, proxy=eproxy, cookie=cookie)
+                    finally:
+                        account.limiter.release()
             if kind == "ok":
+                account.limiter.on_ok()   # submit mượt -> tín hiệu nới trần dần (AIMD)
                 account.note_egress_win(ename)
                 op = (fc.operation_names(data) or [None])[0]
                 if not op:
@@ -428,7 +482,9 @@ class VideoFactory:
                     # GIỚI HẠN TỐC ĐỘ/BURST (USER_REQUESTS_THROTTLED) — hồi trong VÀI GIÂY. NGHỈ NGẮN rồi bắn lại
                     # CÙNG account. KHÔNG tính quota_streak, TUYỆT ĐỐI KHÔNG cách ly (đã đo: ngừng burst 1-2' -> 200 ngay).
                     quota_streak = 0
-                    account.last_kind = "throttle"
+                    account.limiter.on_throttle()   # TỰ HẠ trần submit/account (AIMD) -> lần sau ít burst hơn
+                    lim, _act = account.limiter.snapshot()
+                    account.last_kind = f"throttle(lim={lim})"
                     time.sleep(VID_THROTTLE_REST + random.uniform(0, VID_THROTTLE_REST))
                 elif kind == "recaptcha_quota":
                     # HẾT QUOTA THẬT (RESOURCE_EXHAUSTED KHÁC throttle — hết quota model/ngày). Hiếm với video Ultra.
@@ -503,6 +559,7 @@ class VideoFactory:
             "accounts": [
                 {"name": a.name, "email": a.email, "resting_in": round(a.rest_remaining(), 1),
                  "busy": a.busy, "wins": a.wins, "fails": a.fails, "egress_wins": a.egress_wins,
+                 "submit_limit": a.limiter.snapshot()[0], "submit_active": a.limiter.snapshot()[1],
                  "last_kind": getattr(a, "last_kind", "")}
                 for a in self.accounts
             ],
