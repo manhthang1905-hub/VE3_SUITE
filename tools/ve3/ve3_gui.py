@@ -674,7 +674,7 @@ class HomePage(ctk.CTkScrollableFrame):
 
             def _get(port):
                 try:
-                    r = urllib.request.urlopen(f"http://127.0.0.1:{port}/health", timeout=2)
+                    r = urllib.request.urlopen(f"http://127.0.0.1:{port}/health", timeout=4)
                     return _json.loads(r.read().decode("utf-8", "replace"))
                 except Exception:
                     return None
@@ -696,6 +696,7 @@ class HomePage(ctk.CTkScrollableFrame):
             # ---------- ẢNH ----------
             h = _get(8789)
             if h:
+                self._img_hfail = 0   # /health OK -> reset đếm fail
                 try:
                     act = h.get("active") or []
                     mw = {}
@@ -744,12 +745,17 @@ class HomePage(ctk.CTkScrollableFrame):
                 except Exception:
                     status.append("🖼️ Pool ảnh: ⚠️ /health dữ liệu lạ")
             else:
-                for k in ("img_login", "img_run", "img_q429", "img_nghi", "img_dead", "img_rate", "img_done", "img_codes"): vals[k] = "⏸"
-                vals["img_issue"] = ("⏸ Pool ảnh chưa chạy (chưa tới phase ảnh / pool tắt)", GRAY)
-                status.append("🖼️ Pool ảnh: ⏸ chưa chạy (chưa tới phase ảnh / pool tắt)")
+                self._img_hfail = getattr(self, "_img_hfail", 0) + 1
+                if self._img_hfail >= 3:   # 3 lần liên tiếp (~45s) không phản hồi -> mới coi là tắt (hiện ⏸)
+                    for k in ("img_login", "img_run", "img_q429", "img_nghi", "img_dead", "img_rate", "img_done", "img_codes"): vals[k] = "⏸"
+                    vals["img_issue"] = ("⏸ Pool ảnh chưa chạy (chưa tới phase ảnh / pool tắt)", GRAY)
+                    status.append("🖼️ Pool ảnh: ⏸ chưa chạy")
+                else:                       # fail lẻ tẻ -> GIỮ số cũ (không nháy về ⏸)
+                    status.append(f"🖼️ Pool ảnh: /health chậm, giữ số cũ (lần {self._img_hfail}/3)")
             # ---------- VIDEO ----------
             v = _get(8788)
             if v:
+                self._vid_hfail = 0   # /health OK -> reset đếm fail
                 try:
                     accs = [a for a in (v.get("accounts") or []) if isinstance(a, dict)]
                     resting = [a for a in accs if (a.get("resting_in") or 0) > 1]
@@ -786,9 +792,13 @@ class HomePage(ctk.CTkScrollableFrame):
                 except Exception:
                     status.append("🎬 Pool video: ⚠️ /health dữ liệu lạ")
             else:
-                for k in ("vid_acc", "vid_rest", "vid_heal", "vid_queue", "vid_submit", "vid_rate", "vid_done", "vid_codes"): vals[k] = "⏸"
-                vals["vid_issue"] = ("⏸ Pool video chưa chạy (chưa tới phase video)", GRAY)
-                status.append("🎬 Pool video: ⏸ chưa chạy (chưa tới phase video)")
+                self._vid_hfail = getattr(self, "_vid_hfail", 0) + 1
+                if self._vid_hfail >= 3:   # 3 lần liên tiếp không phản hồi -> mới ⏸
+                    for k in ("vid_acc", "vid_rest", "vid_heal", "vid_queue", "vid_submit", "vid_rate", "vid_done", "vid_codes"): vals[k] = "⏸"
+                    vals["vid_issue"] = ("⏸ Pool video chưa chạy (chưa tới phase video)", GRAY)
+                    status.append("🎬 Pool video: ⏸ chưa chạy")
+                else:                       # fail lẻ tẻ -> GIỮ số cũ
+                    status.append(f"🎬 Pool video: /health chậm, giữ số cũ (lần {self._vid_hfail}/3)")
             status.append(f"⟳ {_time.strftime('%H:%M:%S')}")
             self._pool_poll_busy = False   # xong -> mở cờ cho lượt sau (đặt TRƯỚC reschedule)
             # ÁP KẾT QUẢ + LÊN LỊCH LẦN SAU trên MAIN THREAD (widget chỉ đụng từ main thread)
