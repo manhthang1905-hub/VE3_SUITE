@@ -41,8 +41,9 @@ STATE_FILE = os.path.join(SUITE, ".veo3top_imgpool_state.json")
 
 IMG_MODELS = [m.strip() for m in os.environ.get("VEO3TOP_IMG_MODELS", "GEM_PIX_2,NARWHAL,HARBOR_SEAL").split(",") if m.strip()]
 MODEL_REST_SECS = int(os.environ.get("VEO3TOP_IMG_MODEL_REST", "1800") or "1800")
-# Account CẠN CẢ 3 MODEL (429) = hết hạn mức NGÀY -> cách ly nghỉ 3h (đồng bộ với video), slot bốc account tươi.
-ALL_MODEL_REST_SECS = int(os.environ.get("VEO3TOP_IMG_ALLMODEL_REST", "10800") or "10800")  # 3h (đồng bộ video)
+# Account CẠN CẢ 3 MODEL (429) = hết hạn mức NGÀY -> cách ly nghỉ (đồng bộ với video), slot bốc account tươi.
+# Chỉnh qua GUI settings (pool_isolation_hours) -> env. Mặc định 6h.
+ALL_MODEL_REST_SECS = int(os.environ.get("VEO3TOP_IMG_ALLMODEL_REST", "21600") or "21600")  # 6h
 # CONCURRENCY: account cookie-based (KHÔNG mở chrome/slot) -> chạy được NHIỀU slot song song (nhẹ). 24 account × 1 luồng
 # = 24 submit song song (per-account tải thấp -> né throttle tốt hơn ít-account-nhiều-luồng). Trải trên 96 account.
 N_SLOTS = int(os.environ.get("VEO3TOP_IMG_POOL_ACCOUNTS", "24") or "24")

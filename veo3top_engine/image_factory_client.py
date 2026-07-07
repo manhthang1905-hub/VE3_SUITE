@@ -123,6 +123,8 @@ def _spawn_service(log=print):
             env["VEO3TOP_MINT_INTERVAL"] = str(float(cfg.get("mint_interval")))   # sustainable: mint chậm -> đốt quota reCAPTCHA chậm (bền)
         # núm tinh chỉnh còn dùng: cách ly account đốt sau N lượt reCAPTCHA lì
         env["VEO3TOP_IMG_SWAP_GIVEUP"] = str(int(cfg.get("image_swap_giveup", 3)))
+        # CÁCH LY 429 (hết quota ngày cả 3 model) -> nghỉ N giờ. Chỉnh qua GUI settings (pool_isolation_hours). Mặc định 6h.
+        env["VEO3TOP_IMG_ALLMODEL_REST"] = str(int(float(cfg.get("pool_isolation_hours", 6) or 6) * 3600))
         # EGRESS ẢNH: 'direct' = IP máy + Fake DNS Google (đúng veo3top: điểm reCAPTCHA cao, hết IPv6 403+treo);
         # 'ipv6' = pool IPv6 (hợp VIDEO chống 429, nhưng ẢNH bị 403 flood). Mặc định direct. Đổi ở settings.yaml.
         _egress = str(cfg.get("image_egress", "ipv6")).strip().lower()   # mặc định IPv6 (pool) — direct bị 429 khi 10 slot dồn 1 IP

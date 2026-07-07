@@ -42,7 +42,8 @@ REST_SOFT = 8              # sau 1 lượt 40 lần vẫn chưa qua -> nghỉ NG
 # 429 recaptcha_quota = HẾT QUOTA VIDEO của account (per-account) -> grind token VÔ ÍCH. Thử VID_QUOTA_GIVEUP lần
 # (phòng thoáng qua), chắc chắn 429 -> NGHỈ 3h + đổi account (chỉ 10 account Ultra -> nghỉ dài, khỏi đốt token factory).
 VID_QUOTA_GIVEUP = int(os.environ.get("VEO3TOP_VID_QUOTA_GIVEUP", "5") or "5")
-VID_QUOTA_REST = int(os.environ.get("VEO3TOP_VID_QUOTA_REST", "10800") or "10800")   # 3h
+# Chỉnh qua GUI settings (pool_isolation_hours) -> env. Mặc định 6h (đồng bộ với ảnh).
+VID_QUOTA_REST = int(os.environ.get("VEO3TOP_VID_QUOTA_REST", "21600") or "21600")   # 6h
 REST_BASE = 20             # (chỉ dùng cho lỗi per-IP/account thật sự)
 REST_MAX = 180
 BACKOFF = 2.0              # chờ giữa 2 lần thử generate (nhẹ, + jitter)

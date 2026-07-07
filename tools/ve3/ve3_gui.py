@@ -645,7 +645,10 @@ class HomePage(ctk.CTkScrollableFrame):
             quota_str = (f"⛔ CẠN (mở lại sau {h.get('quota_block_remaining_s',0)}s)" if qb else "✅ còn quota")
             L.append("┏━━━ 🖼️  POOL ẢNH  (cổng 8789) ━━━━━━━━━━━━━━━━━━━")
             L.append(f"┃ 🎨 Ra ảnh: {h.get('done',0):<6} Lỗi: {h.get('fail',0):<5} Tốc độ: ~{h.get('image_per_hour',0)}/giờ   Hàng đợi: {h.get('queue',0)}")
-            L.append(f"┃ 👤 Account: {h.get('candidates',0)} tổng | ✅tốt {h.get('known_good',0)} | 😴nghỉ {h.get('known_resting',0)} | ⛔chết {h.get('known_dead',0)} | đang bận {sum(1 for a in act if a.get('busy'))}")
+            _tot = h.get('candidates', 0); _rest = h.get('known_resting', 0); _dead = h.get('known_dead', 0)
+            _busy = sum(1 for a in act if a.get('busy')); _work = max(0, _tot - _rest - _dead)
+            L.append(f"┃ 👤 Tài khoản: {_tot} tổng")
+            L.append(f"┃    🟢 Khai thác được: {_work}    ⚡ Đang tạo: {_busy}    😴 Cách ly 429 (3h): {_rest}    ⛔ Chết(login lại): {_dead}")
             L.append(f"┃ 🧬 Model đang ra ảnh: {model_str}")
             L.append(f"┃ 📊 Quota ảnh: {quota_str}   | reCAPTCHA liên tiếp: {h.get('consec_recaptcha',0)}")
             L.append("┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
@@ -661,10 +664,12 @@ class HomePage(ctk.CTkScrollableFrame):
             busy = sum(1 for a in accs if a.get("busy"))
             L.append("┏━━━ 🎬 POOL VIDEO  (cổng 8788) ━━━━━━━━━━━━━━━━━━")
             L.append(f"┃ 🎥 Ra video: {v.get('done',0):<5} Lỗi: {v.get('fail',0):<4} Tốc độ: ~{v.get('video_per_hour',0)}/giờ   Hàng đợi: {v.get('queue',0)}")
-            L.append(f"┃ 👤 Account Ultra: {len(accs)} tổng | đang bận {busy} | 😴nghỉ {len(resting)} | trong đó 429(nghỉ 3h): {q429}")
+            _vtot = len(accs); _vrest = len(resting); _vwork = max(0, _vtot - _vrest)
+            L.append(f"┃ 👤 Tài khoản Ultra: {_vtot} tổng")
+            L.append(f"┃    🟢 Khai thác được: {_vwork}    ⚡ Đang tạo: {busy}    😴 Cách ly 429 (3h): {q429}    (nghỉ khác: {_vrest - q429})")
             if resting:
                 _pre = ", ".join(f"{a.get('email','?')[:16]}({int(a.get('resting_in',0)//60)}p)" for a in resting[:6])
-                L.append(f"┃ 😴 Account nghỉ: {_pre}")
+                L.append(f"┃ 😴 Đang cách ly: {_pre}")
             L.append("┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
         else:
             L.append("🎬 POOL VIDEO (8788): ⏸️  chưa chạy / không kết nối được (chưa tới phase video)")
@@ -1694,6 +1699,7 @@ class SettingsPage(ctk.CTkScrollableFrame):
         self.ent_img_accounts = _mk_knob(0, "Slot anh:")
         self.ent_codes       = _mk_knob(1, "So ma song song:", width=44)
         self.ent_img_giveup  = _mk_knob(2, "Cach ly:")
+        self.ent_iso_hours   = _mk_knob(3, "Nghi 429 (gio):", width=40)   # cach ly account het quota ngay (anh+video)
         # HANG 2 (TUNE THEO MAY): token chrome anh/video + recycle + luong video
         self.ent_img_tokchrome = _mk_knob(0, "Token chrome anh:", width=44, row=1)
         self.ent_img_recycle   = _mk_knob(1, "Recycle token:", width=44, row=1)
@@ -2266,7 +2272,8 @@ class SettingsPage(ctk.CTkScrollableFrame):
                                      (self.ent_img_tokchrome, "image_token_chromes", 6),
                                      (self.ent_img_recycle, "image_token_recycle", 10),
                                      (self.ent_vid_tokchrome, "video_token_chromes", 3),
-                                     (self.ent_vid_workers, "video_workers_per_account", 7)):
+                                     (self.ent_vid_workers, "video_workers_per_account", 7),
+                                     (self.ent_iso_hours, "pool_isolation_hours", 6)):
                 _ent.delete(0, "end"); _ent.insert(0, str(cfg.get(_key, _def)))
         except Exception:
             pass
@@ -2389,6 +2396,7 @@ class SettingsPage(ctk.CTkScrollableFrame):
         _knob(self.ent_img_recycle,   "image_token_recycle", 10, 2, 50)  # recycle token
         _knob(self.ent_vid_tokchrome, "video_token_chromes", 3, 1, 16)   # token chrome video
         _knob(self.ent_vid_workers,   "video_workers_per_account", 7, 1, 30)  # luong/account ultra
+        _knob(self.ent_iso_hours,     "pool_isolation_hours", 6, 1, 48)   # cach ly account 429 het quota ngay (anh+video), gio
         cfg["veo3top_image_mode"] = self.image_backend_options.get(self.opt_image_backend.get().strip(), "")
         selected_provider_label = self.opt_excel_ai_provider.get().strip() or "DeepSeek"
         cfg["excel_ai_provider"] = self.excel_ai_provider_options.get(selected_provider_label, "deepseek")
@@ -2909,6 +2917,7 @@ Write-Output $kill.Count
         self.config_data.setdefault("image_pool_accounts", 24)   # slot ảnh (account song song, cookie-based nhẹ)
         self.config_data.setdefault("image_swap_giveup", 2)      # swap mấy lượt thì cách ly account đốt
         self.config_data.setdefault("max_concurrent_codes", 0)   # số mã (video) chạy song song; 0 = không giới hạn
+        self.config_data.setdefault("pool_isolation_hours", 6)   # cách ly account 429 (hết quota ngày) nghỉ N giờ - ảnh+video
         self.config_data.setdefault("image_token_chromes", 6)    # chrome-trắng đẻ token ảnh (CPU là trần)
         self.config_data.setdefault("image_token_recycle", 10)   # đẻ N token/chrome rồi làm mới
         self.config_data.setdefault("video_token_chromes", 3)    # chrome đẻ token video (async cần ít)
