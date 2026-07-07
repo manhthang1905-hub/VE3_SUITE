@@ -19,6 +19,10 @@ RECYCLE_TOKENS = 150     # account: recycle = reload (giữ login), ít cần fr
 # giống veo3top mở rất nhiều chrome trắng. Tunable qua env VEO3TOP_TOKEN_RECYCLE.
 RECYCLE_TOKENS_BLANK = int(os.environ.get("VEO3TOP_TOKEN_RECYCLE", "3") or "3")  # chrome tươi mỗi ~3 token (đo: recycle thấp=rate cao); adaptive (RESET_ON_ERRORS) reset thêm khi chai giữa chừng
 RECYCLE_SECS = 300
+# DEMAND-DRIVEN: android_bypass lo CHÍNH -> WEB token chỉ là fallback HIẾM (đo: 1410 recycle / 11 token dùng =
+# 99% churn vô ích). Nếu KHÔNG có get() trong TOKEN_IDLE_SECS -> minter NGƯNG mint (chrome vẫn mở sẵn, demand tới
+# mint ngay) -> hết churn chrome oan. 0 = tắt (mint liên tục như cũ).
+TOKEN_IDLE_SECS = int(os.environ.get("VEO3TOP_TOKEN_IDLE_SECS", "20") or "20")
 
 
 def _rmtree_hard(path, tries=3):
@@ -238,6 +242,11 @@ class _Minter:
                     t_recycle = time.time()
             if self.pool.maxsize and self.pool.qsize() >= self.pool.maxsize:
                 time.sleep(0.3); continue
+            # DEMAND-DRIVEN: không có get() gần đây (bypass đang lo tốt) -> NGƯNG mint (khỏi recycle chrome vô ích).
+            # Chrome vẫn MỞ sẵn -> khi bypass trượt gọi get() -> _last_demand cập nhật -> mint lại ngay (độ trễ nhỏ).
+            if TOKEN_IDLE_SECS > 0 and self.factory is not None and \
+               (time.time() - getattr(self.factory, "_last_demand", 0)) > TOKEN_IDLE_SECS:
+                time.sleep(1); continue
             try:
                 with self.lock:
                     tok = self.cdp.mint_token(self.action)
@@ -301,6 +310,7 @@ class TokenFactory:
         # RESET theo lỗi (giống veo3top): lỗi recaptcha tích > RESET_ON_ERRORS -> reset chrome fresh
         self._reset_gen = 0
         self._err_count = 0
+        self._last_demand = time.time()   # lần get() gần nhất -> demand-driven mint (idle thì ngưng, khỏi churn)
         # ADAPTIVE: reset chrome theo LẦN BỊ CHAI (lỗi reCAPTCHA tích) thay vì đợi RECYCLE cố định.
         # Hạ 30->6: chrome chai chỉ sau vài token (đã đo), phí 30 token xấu là quá nhiều -> reset sớm = rate cao hơn.
         self.RESET_ON_ERRORS = int(os.environ.get("VEO3TOP_RESET_ON_ERRORS", "6") or "6")
@@ -354,6 +364,7 @@ class TokenFactory:
         return None
 
     def get(self, timeout=45):
+        self._last_demand = time.time()   # có nhu cầu -> đánh thức minter mint (demand-driven)
         end = time.time() + timeout
         while time.time() < end:
             try:
