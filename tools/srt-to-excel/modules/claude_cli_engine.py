@@ -120,6 +120,13 @@ class ClaudeCliEngine:
             self._key_cd_secs = int(self.config.get("claude_cli_key_cooldown_secs", 3600) or 3600)
         except Exception:
             self._key_cd_secs = 3600
+        # QUOTA-PRECHECK (digishop): check remaining TRUOC khi dung -> bo key het token NGAY, khoi phi ~3'
+        # cho claude.exe treo roi bao 401. Cache theo TTL de key TU HOI se quay lai. Fail-open neu khong check duoc.
+        self._key_quota_cache = {}   # key -> (con_quota_bool, epoch_check)
+        try:
+            self._quota_ttl = int(self.config.get("claude_cli_key_quota_ttl_secs", 180) or 180)
+        except Exception:
+            self._quota_ttl = 180
 
         # Transport backend:
         #   "cli"        — spawn the local claude.exe (Claude Max)
@@ -230,9 +237,34 @@ class ClaudeCliEngine:
         except Exception:
             pass
 
+    def _key_has_quota(self, key: str) -> bool:
+        """Check remaining cua key qua endpoint quota digishop (cache TTL). remaining<=0 hoac het han -> False.
+        Khong check duoc (endpoint khac/loi mang) -> True (fail-open, de cooldown/401 lo)."""
+        if not key:
+            return False
+        now = time.time()
+        c = self._key_quota_cache.get(key)
+        if c and (now - c[1]) < self._quota_ttl:
+            return c[0]
+        alive = True
+        try:
+            import urllib.request as _u, json as _j
+            req = _u.Request("https://token-quota.digishop.work",
+                             headers={"Authorization": f"Bearer {key}"})
+            with _u.urlopen(req, timeout=8) as r:
+                q = (_j.loads(r.read()) or {}).get("quota", {})
+            try: rem = int(q.get("remaining", 0) or 0)
+            except Exception: rem = 0
+            alive = (not q.get("is_expired")) and rem > 0
+        except Exception:
+            alive = True   # khong check duoc -> cho qua (fail-open)
+        self._key_quota_cache[key] = (alive, now)
+        return alive
+
     def _next_proxy_key(self) -> str:
-        """Lay key digishop ke tiep (round-robin) -> chia tai giua nhieu key. Bo qua key dang COOLDOWN
-        (het token, dang cho hoi). Tat ca cooldown -> chon key sap hoi som nhat (fail-open). '' neu chua co key."""
+        """Lay key digishop ke tiep (round-robin). BO QUA key dang COOLDOWN (vua 401) VA key HET QUOTA
+        (remaining<=0, check truoc -> khoi phi ~3' cho claude.exe treo). Tat ca chet -> chon cai do nhat
+        (fail-open, van chay). '' neu chua co key. Check quota NGOAI lock (tranh giu lock luc goi HTTP)."""
         keys = getattr(self, "_proxy_keys", None) or []
         if not keys:
             return ""
@@ -241,20 +273,26 @@ class ClaudeCliEngine:
         now = time.time()
         n = len(keys)
         with self._proxy_key_lock:
-            for _ in range(n):   # thu toi da n key theo vong tron, bo qua cai dang cooldown
-                k = keys[self._proxy_key_i % n]
-                self._proxy_key_i += 1
-                if self._key_cooldown.get(k, 0) <= now:
-                    return k
-            # tat ca dang cooldown -> chon cai sap hoi som nhat (do nhat) de van chay, khong dung han
-            return min(keys, key=lambda kk: self._key_cooldown.get(kk, 0))
+            start = self._proxy_key_i
+            self._proxy_key_i += 1
+        for off in range(n):   # duyet n key tu vi tri round-robin, bo cooldown + het quota (check ngoai lock)
+            k = keys[(start + off) % n]
+            if self._key_cooldown.get(k, 0) > now:
+                continue
+            if not self._key_has_quota(k):
+                continue
+            return k
+        # khong con key nao vua het cooldown vua con quota -> chon cai sap hoi som nhat (fail-open van chay)
+        return min(keys, key=lambda kk: self._key_cooldown.get(kk, 0))
 
     def _mark_key_cooldown(self, key: str) -> None:
-        """Key vua bao 401/het token -> cho NGHI cooldown (mac dinh 60') roi tu quay lai vong khi hoi."""
+        """Key vua bao 401/het token -> cho NGHI cooldown (mac dinh 60') roi tu quay lai vong khi hoi.
+        Xoa cache quota de lan sau check lai tuoi."""
         if not key:
             return
         with self._proxy_key_lock:
             self._key_cooldown[key] = time.time() + self._key_cd_secs
+            self._key_quota_cache.pop(key, None)
 
     @staticmethod
     def _resolve_claude_path(explicit: str) -> str:
