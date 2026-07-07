@@ -37,6 +37,10 @@ WARP_PROXY = "socks5://127.0.0.1:40000"
 # KIÊN NHẪN (như veo3top ~50 lần) tới khi 1 token qua. KHÔNG nghỉ account (không phải lỗi account).
 GEN_ATTEMPTS = 40          # số lần bắn token MỚI/1 lượt lease (kiên nhẫn như veo3top) trước khi trả job về hàng đợi
 BYPASS_RETRY = int(os.environ.get("VEO3TOP_BYPASS_RETRY", "5") or "5")  # bypass trượt liên tiếp bao nhiêu lần mới mint WEB token fallback
+# CHỈ ANDROID (mặc định BẬT): bypass trượt (unusual/other) -> RETRY BYPASS kiên nhẫn, TUYỆT ĐỐI KHÔNG mint WEB token.
+# WEB token = app_type WEB = dính reCAPTCHA -> đốt recaptcha_quota (881 lần đo được). android_bypass KHÔNG reCAPTCHA
+# nên chỉ cần kiên nhẫn retry bypass. Tắt (0) -> cho phép fallback WEB như cũ.
+VID_ANDROID_ONLY = os.environ.get("VEO3TOP_VID_ANDROID_ONLY", "1") == "1"
 JOB_MAX_CYCLES = 40        # 1 job được chuyền/thử tối đa bao nhiêu lượt trước khi bỏ
 REST_SOFT = 8              # sau 1 lượt 40 lần vẫn chưa qua -> nghỉ NGẮN 8s cho account thở rồi worker pull tiếp
 # 429 recaptcha_quota = HẾT QUOTA VIDEO của account (per-account) -> grind token VÔ ÍCH. Thử VID_QUOTA_GIVEUP lần
@@ -409,7 +413,8 @@ class VideoFactory:
             # token thật fallback. KHÔNG fallback ratelimit/quota/auth/project (xử lý ở nhánh dưới).
             if kind in ("unusual", "other"):
                 bypass_fails += 1
-                if bypass_fails < BYPASS_RETRY:
+                # CHỈ ANDROID: KHÔNG mint WEB token (nguồn recaptcha_quota) -> chỉ RETRY BYPASS kiên nhẫn (như veo3top).
+                if VID_ANDROID_ONLY or bypass_fails < BYPASS_RETRY:
                     time.sleep(0.4 + random.uniform(0, 0.4)); continue
                 fac = self._ensure_factory()
                 tok = fac.get() if fac else None
