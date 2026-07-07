@@ -669,9 +669,11 @@ class HomePage(ctk.CTkScrollableFrame):
         # ---------- ẢNH ----------
         h = _get(8789)
         if h:
+          try:
             act = h.get("active") or []
             mw = {}
             for a in act:
+                if not isinstance(a, dict): continue
                 for m, n in (a.get("model_wins") or {}).items():
                     mw[m] = mw.get(m, 0) + n
             top_model = max(mw.items(), key=lambda x: x[1])[0] if mw else "-"
@@ -683,13 +685,17 @@ class HomePage(ctk.CTkScrollableFrame):
             _set("img_rate", h.get('image_per_hour', 0))
             _qb = h.get("quota_blocked")
             status.append(f"🖼️ Pool ảnh: ra {h.get('done',0)} | model {top_model} | quota {'⛔ cạn' if _qb else '✅ còn'} | chết {_dead}")
+          except Exception:
+            status.append("🖼️ Pool ảnh: ⚠️ /health dữ liệu lạ")
         else:
             for k in ("img_tram", "img_acc", "img_rest", "img_rate"): _set(k, "⏸")
             status.append("🖼️ Pool ảnh: ⏸ chưa chạy (chưa tới phase ảnh / pool tắt)")
         # ---------- VIDEO ----------
         v = _get(8788)
         if v:
+          try:
             accs = v.get("accounts") or []
+            accs = [a for a in accs if isinstance(a, dict)]
             resting = [a for a in accs if (a.get("resting_in") or 0) > 1]
             q429 = sum(1 for a in resting if "quota" in str(a.get("last_kind", "")).lower())
             _vtot = len(accs); _vwork = max(0, _vtot - len(resting))
@@ -698,6 +704,8 @@ class HomePage(ctk.CTkScrollableFrame):
             _set("vid_rest", q429)
             _set("vid_rate", v.get('video_per_hour', 0))
             status.append(f"🎬 Pool video: ra {v.get('done',0)} | hàng đợi {v.get('queue',0)}")
+          except Exception:
+            status.append("🎬 Pool video: ⚠️ /health dữ liệu lạ")
         else:
             for k in ("vid_tram", "vid_acc", "vid_rest", "vid_rate"): _set(k, "⏸")
             status.append("🎬 Pool video: ⏸ chưa chạy (chưa tới phase video)")

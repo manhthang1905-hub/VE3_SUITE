@@ -40,7 +40,7 @@ BYPASS_RETRY = int(os.environ.get("VEO3TOP_BYPASS_RETRY", "5") or "5")  # bypass
 JOB_MAX_CYCLES = 40        # 1 job được chuyền/thử tối đa bao nhiêu lượt trước khi bỏ
 REST_SOFT = 8              # sau 1 lượt 40 lần vẫn chưa qua -> nghỉ NGẮN 8s cho account thở rồi worker pull tiếp
 # 429 recaptcha_quota = HẾT QUOTA VIDEO của account (per-account) -> grind token VÔ ÍCH. Thử VID_QUOTA_GIVEUP lần
-# (phòng thoáng qua), chắc chắn 429 -> NGHỈ 3h + đổi account (chỉ 10 account Ultra -> nghỉ dài, khỏi đốt token factory).
+# (phòng thoáng qua), chắc chắn 429 -> NGHỈ 6h + đổi account (chỉ 10 account Ultra -> nghỉ dài, khỏi đốt token factory).
 # SUBMIT ĐỒNG THỜI/ACCOUNT: bắn dồn > ~4-5 submit cùng lúc/account -> kích THROTTLE (đã đo: 40 dồn -> 5 pass, 35 throttled).
 # KHÔNG cứng 4: mỗi account TỰ ĐIỀU CHỈNH trần submit (AIMD như TCP) -> dính throttle giảm, chạy mượt tăng dần,
 # tự dò trần tối đa của account/thời điểm đó -> khai thác TỐI ĐA mà vẫn không tự kích throttle.
@@ -423,6 +423,7 @@ class VideoFactory:
                         account.limiter.release()
             if kind == "ok":
                 account.limiter.on_ok()   # submit mượt -> tín hiệu nới trần dần (AIMD)
+                quota_streak = 0          # submit 200 -> KHÔNG hết quota -> reset (chống 6h oan do đếm dồn xen kẽ)
                 account.note_egress_win(ename)
                 op = (fc.operation_names(data) or [None])[0]
                 if not op:
@@ -458,6 +459,7 @@ class VideoFactory:
                     a2 = account.auth(force=True)
                     if a2 and a2.get("bearer"):
                         bearer = a2["bearer"]; cookie = a2.get("cookie"); project = a2.get("project") or project
+                        quota_streak = 0   # 401 (bearer hết hạn) KHÁC hết-quota -> reset, không cộng dồn vào 6h
                         continue
                 account.last_kind = "auth_recovering"
                 self.log(f"VIDEO: {account.email} 401 -> chữa NỀN (login+warm+cookie), PARK + requeue (account khác chạy tiếp).")
@@ -559,7 +561,7 @@ class VideoFactory:
             "accounts": [
                 {"name": a.name, "email": a.email, "resting_in": round(a.rest_remaining(), 1),
                  "busy": a.busy, "wins": a.wins, "fails": a.fails, "egress_wins": a.egress_wins,
-                 "submit_limit": a.limiter.snapshot()[0], "submit_active": a.limiter.snapshot()[1],
+                 "submit_limit": (_snap := a.limiter.snapshot())[0], "submit_active": _snap[1],
                  "last_kind": getattr(a, "last_kind", "")}
                 for a in self.accounts
             ],
