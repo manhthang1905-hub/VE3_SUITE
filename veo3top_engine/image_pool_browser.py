@@ -105,8 +105,41 @@ QUOTA_PROBE_ATTEMPTS = int(os.environ.get("VEO3TOP_IMG_PROBE_ATTEMPTS", "2") or 
 #     IPv6 pool proxy VẪN ra ảnh -> GIỮ IPv6 (né 429 như video), chỉ cần bỏ cờ bẩn. Cửa sổ HIỆN (offscreen là tín hiệu bot). ---
 os.environ["VEO3TOP_CLEAN_FLAGS"] = "1"    # LUÔN dùng cờ tối giản cho ẢNH (điểm reCAPTCHA cao)
 IMG_NATIVE = os.environ.get("VEO3TOP_IMG_NATIVE", "0") == "1"   # 0 = GIỮ IPv6 (mặc định, như video); 1 = mạng máy
+# LOGIN EGRESS: NHIỀU login dồn 1 IP máy -> Google 'Something went wrong'. Giải pháp: POOL egress cho LOGIN =
+#  - 4G proxy (nhập ở GUI, IP tự đổi theo thời gian -> KHÔNG cần rotate): VEO3TOP_IMG_LOGIN_4G = "host:port,host:port"
+#  - WARP (Cloudflare socks5 :40000, IP khác IP máy): VEO3TOP_IMG_LOGIN_WARP=1
+# Login CỨ RETRY xoay vòng qua pool tới khi OK. Generate VẪN đi IP máy (nhanh, không đụng).
+IMG_LOGIN_WARP = os.environ.get("VEO3TOP_IMG_LOGIN_WARP", "1") == "1"
+IMG_LOGIN_4G = [p.strip() for p in os.environ.get("VEO3TOP_IMG_LOGIN_4G", "").split(",") if p.strip()]
 # ẨN chrome (mặc định BẬT): đẩy cửa sổ ra ngoài màn hình (vẫn GPU -> ảnh vẫn chạy). Tắt (0) -> hiện cửa sổ. Như video.
 IMG_HIDE = os.environ.get("VEO3TOP_IMG_HIDE", "1") == "1"
+
+_WARP_READY = False
+_WARP_LOCK = threading.Lock()
+def _warp_login_proxy(log=lambda *_: None):
+    """Bật WARP proxy mode (1 lần) + trả socks5 URL. '' nếu WARP lỗi."""
+    global _WARP_READY
+    try:
+        import warp as _warp
+        with _WARP_LOCK:
+            if not _WARP_READY:
+                _warp.ensure_proxy_mode(); _WARP_READY = True
+                log(f"🌐 WARP login proxy BẬT (socks5 :40000) — IP {_warp.current_ip()}")
+        return "socks5://127.0.0.1:40000"
+    except Exception as e:
+        log(f"⚠️ WARP lỗi ({str(e)[:50]})")
+        return ""
+
+def _login_proxy_pool(log=lambda *_: None):
+    """POOL egress cho LOGIN (retry xoay vòng tới khi OK): 4G (IP tự đổi) trước, rồi WARP, cuối cùng IP máy ('')."""
+    pool = []
+    for p in IMG_LOGIN_4G:                       # 4G: nhập ở GUI, IP tự đổi -> dùng thẳng, không rotate
+        pool.append(p if "://" in p else f"socks5://{p}")
+    if IMG_LOGIN_WARP:
+        wp = _warp_login_proxy(log)
+        if wp: pool.append(wp)
+    pool.append("")                              # IP máy (fallback cuối)
+    return pool
 
 
 def _log(msg):
@@ -447,19 +480,19 @@ class Account:
         with login_sem:
             # LOGIN QUA IPv6 (mỗi account 1 IP khác -> đỡ reCAPTCHA challenge). IMG_NATIVE=1 -> IP máy.
             # login_google_chrome cần scheme socks5:// (đổi từ socks5h).
-            _pxy = ""
-            if not IMG_NATIVE:
+            # POOL egress: 4G (IP tự đổi) + WARP + IP máy. RETRY XOAY VÒNG qua pool tới khi login OK -> né
+            # 'Something went wrong' do nhiều login dồn 1 IP. Số lần thử = phủ hết pool (ít nhất LOGIN_RETRIES).
+            _pool = _login_proxy_pool(log) if (IMG_LOGIN_WARP or IMG_LOGIN_4G) else [""]
+            if not (IMG_LOGIN_WARP or IMG_LOGIN_4G) and not IMG_NATIVE:
                 try:
                     self._start_ipv6()
-                    if self.ipv6:
-                        _pxy = self.ipv6.proxy_url().replace("socks5h://", "socks5://")
-                except Exception:
-                    _pxy = ""
-            # RETRY login: Chrome hay RỚT giữa chừng (PageDisconnected — nhất là Chrome hệ thống) -> thử lại
-            # LOGIN_RETRIES lần, MỖI lần profile TRẮNG (session zombie/profile bẩn KẸT login). KHÔNG đánh DEAD ngay.
-            # login_sem giữ tối đa LOGIN_CONCURRENCY (5) chrome/lúc; account thứ 6+ tự XẾP HÀNG đợi ở semaphore.
+                    if self.ipv6: _pool = [self.ipv6.proxy_url().replace("socks5h://", "socks5://")]
+                except Exception: pass
             ok = False
-            for _try in range(LOGIN_RETRIES):
+            n_try = max(LOGIN_RETRIES, len(_pool))
+            for _try in range(n_try):
+                _pxy = _pool[_try % len(_pool)]
+                _tag = _pxy.split("//")[-1] if _pxy else "IP máy"
                 self._wipe_profile(log); time.sleep(2)
                 try:
                     ok = login_fn({"id": self.email, "password": self.password, "totp_secret": self.totp},
@@ -469,8 +502,8 @@ class Account:
                 self._kill_profile_chrome()
                 if ok:
                     break
-                if _try < LOGIN_RETRIES - 1:
-                    log(f"↻ {self.email}: login fail (lần {_try+1}/{LOGIN_RETRIES}) -> retry (Chrome rớt?)")
+                if _try < n_try - 1:
+                    log(f"↻ {self.email}: login fail qua [{_tag}] (lần {_try+1}/{n_try}) -> retry egress khác")
                     time.sleep(3)
             if not ok:
                 # RETRY hết vẫn fail -> NGHỈ NGẮN rồi THỬ LẠI (resting, KHÔNG dead 3h). Slot nhả cho account khác.

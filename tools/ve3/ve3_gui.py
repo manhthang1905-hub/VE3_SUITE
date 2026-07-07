@@ -1812,9 +1812,15 @@ class SettingsPage(ctk.CTkScrollableFrame):
         self.opt_image_backend.grid(row=5, column=1, columnspan=2, sticky="w", pady=(0,4))
         self.sw_music_workspace = ctk.CTkSwitch(gc, text="Music Chrome mo lech man hinh", progress_color=OK, button_color="#FFF", button_hover_color="#EEE")
         self.sw_music_workspace.grid(row=6, column=0, columnspan=3, padx=10, pady=(0,8), sticky="w")
-        # AN chrome TAO ANH (generation/reuse offscreen; mac dinh BAT). Login Google PHAI hien (offscreen pha login) -> chi 1 lan/account.
-        self.sw_img_hide = ctk.CTkSwitch(gc, text="An Chrome tao anh (login van hien de dang nhap - chi 1 lan/acc)", progress_color=OK, button_color="#FFF", button_hover_color="#EEE")
+        # AN chrome anh + video (mac dinh BAT = offscreen; gom ca login vi loi login la IP, da fix bang 4G/WARP).
+        self.sw_img_hide = ctk.CTkSwitch(gc, text="An Chrome anh + video (mac dinh bat)", progress_color=OK, button_color="#FFF", button_hover_color="#EEE")
         self.sw_img_hide.grid(row=7, column=0, columnspan=3, padx=10, pady=(0,8), sticky="w")
+        # LOGIN EGRESS: 4G proxy (moi dong 1 cai: host:port) -> IP tu doi, retry xoay vong -> khoi 'Something went wrong'.
+        ctk.CTkLabel(gc, text="4G login (host:port):", font=("",11), text_color=T2).grid(row=8, column=0, padx=(10,6), sticky="ne")
+        self.txt_login_4g = ctk.CTkTextbox(gc, height=48, corner_radius=4, font=("Consolas",9), fg_color=EN, border_color=BD, border_width=1, wrap="none")
+        self.txt_login_4g.grid(row=8, column=1, columnspan=2, sticky="ew", padx=(0,10), pady=(0,4))
+        self.sw_login_warp = ctk.CTkSwitch(gc, text="Dung WARP cho login (Cloudflare, IP khac IP may)", progress_color=OK, button_color="#FFF", button_hover_color="#EEE")
+        self.sw_login_warp.grid(row=9, column=0, columnspan=3, padx=10, pady=(0,8), sticky="w")
         # NUM TINH CHINH NHA MAY ANH (toi uu toc do, chong 403). Tat ca so nguyen.
         knob = ctk.CTkFrame(gc, fg_color="transparent")
         knob.grid(row=8, column=0, columnspan=3, padx=10, pady=(0,6), sticky="w")
@@ -2406,6 +2412,16 @@ class SettingsPage(ctk.CTkScrollableFrame):
             self.sw_img_hide.select()
         else:
             self.sw_img_hide.deselect()
+        # LOGIN egress: 4G proxies (list) + WARP
+        try:
+            _g4 = cfg.get("login_4g_proxies") or []
+            if isinstance(_g4, str): _g4 = [x.strip() for x in _g4.replace("\n", ",").split(",") if x.strip()]
+            self.txt_login_4g.delete("1.0", "end")
+            if _g4: self.txt_login_4g.insert("1.0", "\n".join(str(x).strip() for x in _g4))
+            if cfg.get("login_use_warp", True): self.sw_login_warp.select()
+            else: self.sw_login_warp.deselect()
+        except Exception:
+            pass
         try:
             for _ent, _key, _def in ((self.ent_img_accounts, "image_pool_accounts", 24),
                                      (self.ent_img_tokchrome, "image_token_chromes", 6),
@@ -2525,6 +2541,8 @@ class SettingsPage(ctk.CTkScrollableFrame):
         cfg["music_workspace_mode_enabled"] = bool(self.sw_music_workspace.get())
         cfg["use_local_token_for_image"] = bool(self.sw_use_local_token.get())
         cfg["image_hide_chrome"] = bool(self.sw_img_hide.get())
+        cfg["login_4g_proxies"] = [ln.strip() for ln in self.txt_login_4g.get("1.0", "end").splitlines() if ln.strip()]
+        cfg["login_use_warp"] = bool(self.sw_login_warp.get())
         def _knob(ent, key, default, lo, hi):
             try:
                 cfg[key] = max(lo, min(hi, int((ent.get() or str(default)).strip())))
