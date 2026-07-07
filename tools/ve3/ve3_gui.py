@@ -1828,14 +1828,15 @@ class SettingsPage(ctk.CTkScrollableFrame):
         prox = ctk.CTkFrame(ai, fg_color="transparent")
         prox.grid(row=4, column=1, sticky="ew", padx=(0,10), pady=2)
         prox.columnconfigure(1, weight=1)
-        self.ent_claude_proxy_url = ctk.CTkEntry(prox, width=175, height=28, corner_radius=4, font=("Consolas",10), fg_color=EN, border_color=BD, placeholder_text="https://vip.digishop.work")
-        self.ent_claude_proxy_url.grid(row=0, column=0, padx=(0,4))
-        self.ent_claude_proxy_key = ctk.CTkEntry(prox, height=28, corner_radius=4, font=("Consolas",10), fg_color=EN, border_color=BD, placeholder_text="sk-... key card (de trong = dung Max ca nhan)")
-        self.ent_claude_proxy_key.grid(row=0, column=1, sticky="ew")
+        self.ent_claude_proxy_url = ctk.CTkEntry(prox, height=28, corner_radius=4, font=("Consolas",10), fg_color=EN, border_color=BD, placeholder_text="https://vip.digishop.work")
+        self.ent_claude_proxy_url.grid(row=0, column=0, columnspan=2, sticky="ew", padx=(0,4))
         self.btn_proxy_test = ctk.CTkButton(prox, text="Test", width=56, height=28, corner_radius=4, fg_color=RN, hover_color="#1565C0", text_color="#FFF", font=("",10,"bold"), command=self._check_claude_proxy)
         self.btn_proxy_test.grid(row=0, column=2, padx=(4,0))
-        self.lbl_proxy_status = ctk.CTkLabel(prox, text="", font=("",10,"bold"), text_color=T3)
-        self.lbl_proxy_status.grid(row=1, column=0, columnspan=3, sticky="w", pady=(2,0))
+        # NHIEU KEY digishop: MOI DONG 1 KEY -> xoay vong chia tai giua cac chunk song song (de trong = dung Max ca nhan)
+        self.txt_claude_proxy_keys = ctk.CTkTextbox(prox, height=52, corner_radius=4, font=("Consolas",9), fg_color=EN, border_color=BD, border_width=1, wrap="none")
+        self.txt_claude_proxy_keys.grid(row=1, column=0, columnspan=3, sticky="ew", pady=(3,0))
+        self.lbl_proxy_status = ctk.CTkLabel(prox, text="moi dong 1 key (sk-...) -> xoay vong nhieu key card", font=("",9), text_color=T3)
+        self.lbl_proxy_status.grid(row=2, column=0, columnspan=3, sticky="w", pady=(2,0))
 
         ctk.CTkLabel(ai, text="DeepSeek model:", font=("",11), text_color=T2).grid(row=5, column=0, padx=(10,6), sticky="e")
         self.ent_deepseek_model = ctk.CTkEntry(ai, height=28, corner_radius=4, font=("Consolas",10), fg_color=EN, border_color=BD)
@@ -2081,51 +2082,51 @@ class SettingsPage(ctk.CTkScrollableFrame):
     def _check_claude_proxy(self):
         """Kiem tra key proxy Claude: quota (con bao nhieu token, han dung) + ping
         chat that su de chac chan chay duoc truoc khi chay chinh thuc."""
-        key = self.ent_claude_proxy_key.get().strip()
+        keys = [ln.strip() for ln in self.txt_claude_proxy_keys.get("1.0", "end").splitlines() if ln.strip()]
         url = (self.ent_claude_proxy_url.get().strip().rstrip("/") or "https://vip.digishop.work")
-        if not key:
+        if not keys:
             self.lbl_proxy_status.configure(text="⚠ Chua nhap key", text_color=ER)
             return
         self.btn_proxy_test.configure(text="...", state="disabled")
-        self.lbl_proxy_status.configure(text="Dang kiem tra...", text_color=T3)
+        self.lbl_proxy_status.configure(text=f"Dang kiem tra {len(keys)} key...", text_color=T3)
 
         def _do():
             import urllib.request, json as _json
-            quota_txt = ""
-            # 1) quota
-            try:
-                req = urllib.request.Request("https://token-quota.digishop.work",
-                                             headers={"Authorization": f"Bearer {key}"})
-                with urllib.request.urlopen(req, timeout=12) as resp:
-                    q = (_json.loads(resp.read()) or {}).get("quota", {})
-                try:
-                    rem = int(q.get("remaining", 0) or 0)
-                except Exception:
-                    rem = q.get("remaining", "?")
-                status = q.get("status", "?")
-                exp = str(q.get("expires_at_iso") or "khong han")[:10]
-                if q.get("is_expired"):
-                    quota_txt = f"❌ HET HAN | {status} | con {rem:,}"
-                else:
-                    quota_txt = f"con {rem:,} token | {status} | han {exp}"
-            except Exception as e:
-                quota_txt = f"quota loi: {str(e)[:50]}"
-            # 2) ping chat that
-            # 2) ping chat that — phan biet ro: OK / server qua tai / key loi
             ORANGE = "#FF8C00"
+            # 1) quota TUNG key (biet key nao het han / con bao nhieu)
+            ok_n = exp_n = err_n = 0
+            total_rem = 0
+            first_ok_key = ""
+            for k in keys:
+                try:
+                    req = urllib.request.Request("https://token-quota.digishop.work",
+                                                 headers={"Authorization": f"Bearer {k}"})
+                    with urllib.request.urlopen(req, timeout=12) as resp:
+                        q = (_json.loads(resp.read()) or {}).get("quota", {})
+                    try: rem = int(q.get("remaining", 0) or 0)
+                    except Exception: rem = 0
+                    if q.get("is_expired"):
+                        exp_n += 1
+                    else:
+                        ok_n += 1; total_rem += rem
+                        if not first_ok_key: first_ok_key = k
+                except Exception:
+                    err_n += 1
+            quota_txt = f"{ok_n}/{len(keys)} key OK | tong con {total_rem:,} token"
+            if exp_n: quota_txt += f" | {exp_n} het han"
+            if err_n: quota_txt += f" | {err_n} loi"
+            # 2) ping chat that bang 1 key con song -> chac chan proxy chay
+            ping_key = first_ok_key or keys[0]
             head, color = "", ER
             try:
                 body = _json.dumps({"model": "claude-sonnet-4-6", "max_tokens": 20,
                                     "messages": [{"role": "user", "content": "PONG"}]}).encode()
                 req = urllib.request.Request(f"{url}/v1/messages", data=body, method="POST",
-                                             headers={"x-api-key": key, "anthropic-version": "2023-06-01",
+                                             headers={"x-api-key": ping_key, "anthropic-version": "2023-06-01",
                                                       "Content-Type": "application/json"})
                 with urllib.request.urlopen(req, timeout=40) as resp:
                     d = _json.loads(resp.read())
-                if d.get("content"):
-                    head, color = "✓ PROXY OK", OK
-                else:
-                    head, color = "⚠ Tra ve rong", ORANGE
+                head, color = ("✓ PROXY OK", OK) if d.get("content") else ("⚠ Tra ve rong", ORANGE)
             except urllib.error.HTTPError as he:
                 code = he.code
                 if code in (429, 500, 502, 503, 504, 529):
@@ -2138,6 +2139,8 @@ class SettingsPage(ctk.CTkScrollableFrame):
                     head, color = f"✗ Loi HTTP {code}", ER
             except Exception as e:
                 head, color = f"✗ Khong ket noi duoc proxy ({str(e)[:30]})", ER
+            if ok_n == 0 and color == OK:
+                color = ORANGE   # ping OK nhung khong key nao con quota -> canh bao
             msg = f"{head} | {quota_txt}"
             self.after(0, lambda: self.lbl_proxy_status.configure(text=msg, text_color=color))
             self.after(0, lambda: self.btn_proxy_test.configure(text="Test", state="normal"))
@@ -2248,8 +2251,15 @@ class SettingsPage(ctk.CTkScrollableFrame):
         self.ent_deepseek_model.insert(0, str(cfg.get("deepseek_model", "") or "deepseek-v4-pro"))
         self.ent_claude_proxy_url.delete(0, "end")
         self.ent_claude_proxy_url.insert(0, str(cfg.get("claude_cli_anthropic_base_url", "") or "https://vip.digishop.work"))
-        self.ent_claude_proxy_key.delete(0, "end")
-        self.ent_claude_proxy_key.insert(0, str(cfg.get("claude_cli_anthropic_key", "") or ""))
+        # NHIEU KEY digishop: gom claude_cli_anthropic_keys (list) + key don cu -> textbox moi dong 1 key
+        _ck = []
+        _main_ck = str(cfg.get("claude_cli_anthropic_key", "") or "").strip()
+        if _main_ck: _ck.append(_main_ck)
+        for k in (cfg.get("claude_cli_anthropic_keys", []) or []):
+            k = str(k).strip()
+            if k and k not in _ck: _ck.append(k)
+        self.txt_claude_proxy_keys.delete("1.0", "end")
+        if _ck: self.txt_claude_proxy_keys.insert("1.0", "\n".join(_ck))
         self.ent_deepseek_thinking.delete(0, "end")
         self.ent_deepseek_thinking.insert(0, str(cfg.get("deepseek_thinking_type", "") or "disabled"))
         self.ent_vov_direct_url.delete(0, "end")
@@ -2479,7 +2489,13 @@ class SettingsPage(ctk.CTkScrollableFrame):
         cfg["deepseek_api_keys"] = ds_keys
         cfg["deepseek_model"] = self.ent_deepseek_model.get().strip() or "deepseek-v4-pro"
         cfg["claude_cli_anthropic_base_url"] = self.ent_claude_proxy_url.get().strip()
-        cfg["claude_cli_anthropic_key"] = self.ent_claude_proxy_key.get().strip()
+        # NHIEU KEY digishop: moi dong 1 key -> list. Key don cu = key dau (tuong thich nguoc engine cu).
+        _ck_keys = []
+        for ln in self.txt_claude_proxy_keys.get("1.0", "end").splitlines():
+            ln = ln.strip()
+            if ln and ln not in _ck_keys: _ck_keys.append(ln)
+        cfg["claude_cli_anthropic_key"] = _ck_keys[0] if _ck_keys else ""
+        cfg["claude_cli_anthropic_keys"] = _ck_keys
         cfg["deepseek_thinking_type"] = self.ent_deepseek_thinking.get().strip() or "disabled"
         cfg["vov_direct_base_url"] = self.ent_vov_direct_url.get().strip() or "https://routerapi.vovantin.online/v1"
         cfg["vov_direct_api_key"] = self.ent_vov_direct_key.get().strip() or "sk-6m5lfOmA6GdmbkZfWKXNYLtB6ouLfyfvf06obd7g3kZKdljB"

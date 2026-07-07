@@ -99,6 +99,21 @@ class ClaudeCliEngine:
         except Exception:
             self.timeout_seconds = 1800
 
+        # DIGISHOP NHIEU KEY: xoay vong (round-robin) qua cac key -> chia tai giua cac chunk chay song song,
+        # tranh 1 key het quota chan het. Nhan ca list moi (claude_cli_anthropic_keys) LAN key don cu
+        # (claude_cli_anthropic_key) -> tuong thich nguoc.
+        _keys = []
+        for _k in (self.config.get("claude_cli_anthropic_keys", []) or []):
+            _k = str(_k).strip()
+            if _k and _k not in _keys:
+                _keys.append(_k)
+        _single = str(self.config.get("claude_cli_anthropic_key", "") or "").strip()
+        if _single and _single not in _keys:
+            _keys.insert(0, _single)
+        self._proxy_keys = _keys
+        self._proxy_key_i = 0
+        self._proxy_key_lock = threading.Lock()
+
         # Transport backend:
         #   "cli"        — spawn the local claude.exe (Claude Max)
         #   "api"        — POST the prompt to the VOV router (claude-sonnet-4-6)
@@ -207,6 +222,18 @@ class ClaudeCliEngine:
             )
         except Exception:
             pass
+
+    def _next_proxy_key(self) -> str:
+        """Lay key digishop ke tiep (round-robin) -> chia tai giua nhieu key. '' neu chua co key nao."""
+        keys = getattr(self, "_proxy_keys", None) or []
+        if not keys:
+            return ""
+        if len(keys) == 1:
+            return keys[0]
+        with self._proxy_key_lock:
+            k = keys[self._proxy_key_i % len(keys)]
+            self._proxy_key_i += 1
+        return k
 
     @staticmethod
     def _resolve_claude_path(explicit: str) -> str:
@@ -658,7 +685,7 @@ JSON RULES:
         # account — lets you run on a big shared quota when Max tokens run low.
         env = None
         proxy_url = str(self.config.get("claude_cli_anthropic_base_url", "") or "").strip().rstrip("/")
-        proxy_key = str(self.config.get("claude_cli_anthropic_key", "") or "").strip()
+        proxy_key = self._next_proxy_key()   # xoay vong qua nhieu key digishop (chia tai)
         if proxy_url and proxy_key:
             env = dict(os.environ)
             env["ANTHROPIC_BASE_URL"] = proxy_url
@@ -666,7 +693,8 @@ JSON RULES:
             env["ANTHROPIC_API_KEY"] = proxy_key
             if self.model:
                 env["ANTHROPIC_MODEL"] = self.model
-            self._log(f"     (qua proxy Anthropic: {proxy_url})")
+            _ndigi = len(self._proxy_keys)
+            self._log(f"     (qua proxy Anthropic: {proxy_url}{f' | {_ndigi} key xoay vong' if _ndigi > 1 else ''})")
 
         hb = threading.Thread(target=_heartbeat, daemon=True)
         hb.start()
