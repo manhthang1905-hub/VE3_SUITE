@@ -193,14 +193,18 @@ class ClaudeCliEngine:
         # Long SRTs can't be done in ONE Claude call (one output is too big and slow).
         # Like the VS Code flow (which builds the file gradually), we split a long SRT
         # into batches, generate each, and merge — fast + no truncation.
+        # DEFAULT THÔNG MINH: qua PROXY (digishop) -> output BỊ CAP ~9k token -> SRT dài (1 lần) bị CẮT CỤT -> JSON hỏng
+        # -> 'thieu scenes' loop. Nên proxy -> chia NHỎ (30) để mỗi khúc gọn dưới cap, gộp lại ĐỦ. API thật (no cap) -> 100.
+        _has_proxy = bool(str(self.config.get("claude_cli_anthropic_base_url", "") or "").strip())
+        _def_thr, _def_sz = (30, 30) if _has_proxy else (100, 55)
         try:
-            self.chunk_threshold = int(self.config.get("claude_cli_chunk_threshold", 100) or 100)
+            self.chunk_threshold = int(self.config.get("claude_cli_chunk_threshold", _def_thr) or _def_thr)
         except Exception:
-            self.chunk_threshold = 100
+            self.chunk_threshold = _def_thr
         try:
-            self.chunk_size = int(self.config.get("claude_cli_chunk_size", 55) or 55)
+            self.chunk_size = int(self.config.get("claude_cli_chunk_size", _def_sz) or _def_sz)
         except Exception:
-            self.chunk_size = 55
+            self.chunk_size = _def_sz
         # Chunks of one video run in PARALLEL (each its own claude.exe) so a long
         # video finishes ~3x faster. Capped low so total concurrent claude stays
         # safe even when the queue runs 2 codes at once.
