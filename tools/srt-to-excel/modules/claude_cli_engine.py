@@ -733,11 +733,14 @@ JSON RULES:
             while not stop_heartbeat.wait(20):
                 self._log(f"  ... Claude still working ({int(time.time() - t0)}s)")
 
-        # Visible window (so the user sees it working) + its OWN process group so
-        # we can kill the WHOLE claude.exe tree on timeout/error — never orphan it.
+        # ẨN cửa sổ claude.exe (nhiều chunk song song -> nhảy loạn màn hình). CREATE_NO_WINDOW = không cửa sổ
+        # console; vẫn giữ OWN process group để kill CẢ CÂY claude.exe khi timeout/lỗi — không orphan.
+        # Muốn HIỆN lại để debug: đặt claude_cli_show_window: true trong settings.
         creationflags = 0
         if sys.platform == "win32":
             creationflags = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
+            if not bool(self.config.get("claude_cli_show_window", False)):
+                creationflags |= getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000)
 
         # Optional: route claude.exe through a custom Anthropic-compatible endpoint
         # (e.g. a bought "Claude card" proxy) instead of the personal Claude Max
