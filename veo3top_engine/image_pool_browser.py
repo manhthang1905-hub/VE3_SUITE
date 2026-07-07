@@ -87,7 +87,7 @@ GOOD_REST = int(os.environ.get("VEO3TOP_IMG_GOOD_REST", "600") or "600")        
 # TRẦN ẢNH/ACCOUNT (tái lập, có kiểm soát): fresh account ~15 ảnh RỒI đâm vách 403. Đặt trần DƯỚI vách (12) -> account
 # dừng khi còn "nông" (chưa đốt sâu) -> hồi NHANH. Đủ trần -> xoay account TƯƠI vào slot + account cũ nghỉ CAP_REST.
 # => 6-10 browser (máy nhẹ) nhưng LUÂN PHIÊN qua cả ~100 account, mỗi cái làm nhẹ. 0 = TẮT trần (khai thác tới lì như cũ).
-MAX_PER_ACCT = int(os.environ.get("VEO3TOP_IMG_MAX_PER_ACCT", "12") or "12")
+MAX_PER_ACCT = int(os.environ.get("VEO3TOP_IMG_MAX_PER_ACCT", "0") or "0")   # 0 = KHÔNG trần: account chạy tới hết quota THẬT (429 -> đổi model -> 3 model cạn -> Ultra). Bỏ giới hạn nhân tạo.
 CAP_REST = int(os.environ.get("VEO3TOP_IMG_CAP_REST", "1800") or "1800")   # 30': account đủ trần nghỉ dài hồi reputation (nông nên hồi nhanh); 119 acc / 6-10 slot đủ nuôi, không cạn pool
 # HÂM NÓNG PHIÊN (như veo3top phiên WebView2 ấm): pool mở chrome LẠNH rồi mint ngay -> điểm reCAPTCHA thấp -> cold-403.
 # Warm-up: di chuột (CDP trusted) + cuộn + prime grecaptcha + đợi vài giây -> phiên trông 'người thật/đã dùng' -> điểm CAO hơn.
@@ -1171,12 +1171,19 @@ class ImagePoolBrowser:
         bad = sum(1 for v in self._state.values() if v.get("state") == "bad")
         resting = sum(1 for v in self._state.values() if v.get("state") == "resting")
         dead = sum(1 for v in self._state.values() if v.get("state") == "dead")
+        # TÁCH LÝ DO nghỉ (known_resting gộp hết -> gây hiểu nhầm '429'): 'trần' = đủ hạn mức/lượt (KHỎE, xoay account
+        # tươi) · 'quota' = HẾT QUOTA THẬT cả 3 model (nghỉ dài) · còn lại = reCAPTCHA/403/login (khác).
+        def _rs(v): return str(v.get("reason", "")).lower()
+        rest_cap = sum(1 for v in self._state.values() if v.get("state") == "resting" and ("trần" in _rs(v) or "tran" in _rs(v) or "đủ trần" in _rs(v)))
+        rest_quota = sum(1 for v in self._state.values() if v.get("state") == "resting" and "quota" in _rs(v))
+        rest_other = max(0, resting - rest_cap - rest_quota)
         return {
             "slots": self.n_slots, "candidates": len(self.candidates),
             "configured": getattr(self, "n_configured", len(self.candidates)),   # tổng gmail cấu hình
             "not_logged_in": getattr(self, "n_not_logged", 0),                   # số CHƯA LOGIN lúc khởi động
             "logged_in": len(getattr(self, "_ever_ready", set())),               # số ĐÃ login/ready (LIVE, tăng dần)
             "known_good": good, "known_bad": bad, "known_resting": resting, "known_dead": dead,
+            "resting_quota": rest_quota, "resting_cap": rest_cap, "resting_other": rest_other,   # tách lý do nghỉ
             "active": [{"email": a.email, "state": a.state, "good": a.good, "busy": a.busy,
                         "wins": a.wins, "fails": a.fails, "model_wins": a.model_wins} for a in act],
             "models": IMG_MODELS, "queue": self.q.qsize(), "done": self.total_done, "fail": self.total_fail,

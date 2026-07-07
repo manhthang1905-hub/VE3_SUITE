@@ -119,6 +119,8 @@ def _spawn_service(log=print):
             env["VEO3TOP_IMG_TOKEN_CHROMES"] = str(int(cfg.get("image_token_chromes")))
         if cfg.get("image_login_concurrency"):   # SỐ CHROME LOGIN đồng thời tối đa (mặc định 5); máy yếu -> hạ xuống
             env["VEO3TOP_IMG_LOGIN_CONCURRENCY"] = str(int(cfg.get("image_login_concurrency")))
+        # TRẦN ảnh/lượt/account: 0 = KHÔNG giới hạn (chạy tới hết quota thật -> đổi model -> Ultra). Luôn truyền (kể cả 0).
+        env["VEO3TOP_IMG_MAX_PER_ACCT"] = str(int(cfg.get("image_max_per_account", 0) or 0))
         if cfg.get("image_token_recycle"):
             env["VEO3TOP_TOKEN_RECYCLE"] = str(int(cfg.get("image_token_recycle")))
         if cfg.get("mint_interval"):
