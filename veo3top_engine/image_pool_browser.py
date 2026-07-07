@@ -729,6 +729,7 @@ class ImagePoolBrowser:
         self.q = queue.Queue()
         self.n_slots = n_slots
         self.candidates = []            # tất cả Account ứng viên
+        self._ever_ready = set()        # email đã login/ready >=1 lần -> đếm LIVE "đã login" (khỏi đọc sqlite 96 acc)
         self._cand_lock = threading.Lock()
         self._cand_i = 0
         self.active = {}                # email -> Account đang được slot dùng
@@ -831,11 +832,20 @@ class ImagePoolBrowser:
         gmails = load_gmail_accounts()
         # CHỈ DÙNG ACCOUNT ĐÃ LOGIN (no-login mode): lọc bỏ account chưa có cookie google -> pool KHÔNG phí slot mở
         # chrome cho gmail chưa login (fail rồi nghỉ). User login thêm ở GUI -> RESTART tool để nạp thêm.
-        if IMG_NO_LOGIN:
-            _before = len(gmails)
+        # ĐẾM tổng + số CHƯA LOGIN (cho /health + GUI hiển thị)
+        self.n_configured = len(gmails)                                          # tổng gmail cấu hình (vd 96)
+        self.n_not_logged = sum(1 for a in gmails if not _profile_logged_in(a["email"]))
+        if IMG_NO_LOGIN and not POOL_LOGIN:
+            # KHÔNG auto-login -> LỌC BỎ account chưa cookie (khỏi phí slot mở chrome fail rồi nghỉ).
             gmails = [a for a in gmails if _profile_logged_in(a["email"])]
-            self.log(f"🔐 chỉ dùng account ĐÃ LOGIN: {len(gmails)}/{_before} "
-                     f"(bỏ {_before - len(gmails)} account chưa login/không cookie)")
+            self.log(f"🔐 chỉ dùng account ĐÃ LOGIN: {len(gmails)}/{self.n_configured} "
+                     f"(bỏ {self.n_not_logged} chưa login; POOL_LOGIN tắt)")
+        elif self.n_not_logged:
+            # AUTO-LOGIN (POOL_LOGIN=1): GIỮ TẤT CẢ account -> slot TỰ login account thiếu cookie (login_sem=5 chrome/lúc,
+            # cái thứ 6 xếp hàng) -> nhà máy TỰ FIX, tối đa hóa số acc khai thác dần theo thời gian. GOOD xếp đầu -> tạo
+            # ảnh trước, un-logged login xen kẽ khi slot rảnh -> không chặn sản lượng.
+            self.log(f"🔐 nhà máy TỰ LOGIN {self.n_not_logged}/{self.n_configured} account chưa cookie "
+                     f"(5 chrome/lúc, xếp hàng) -> tối đa hóa acc, không bỏ phí")
         # DỌN RÁC TRẠNG THÁI khi khởi động (no-login mode): "dead"=login-fail từ code CŨ (giờ pool KHÔNG login nữa nên
         # vô nghĩa) + "bad"/"resting"=403 reCAPTCHA (account vẫn login OK ở Flow). -> XOÁ hết để TẤT CẢ account có cookie
         # quay lại pool thử reuse. Nếu account thật sự chưa login -> prepare tự đánh dấu 'nologin' (thử lại sau).
@@ -958,6 +968,7 @@ class ImagePoolBrowser:
                     reason = "chưa login (reuse cookie)" if a.state == "nologin" else "login/warm fail"
                     self._mark(a.email, state=a.state, reason=reason)
                     a.close(); continue
+                self._ever_ready.add(a.email)   # login/reuse OK -> đếm vào "đã login" (live)
                 self._mark(a.email, state="ready", project=a.project, cookie="alive")
                 a.stint = 0                       # lượt active mới -> đếm lại số ảnh cho trần MAX_PER_ACCT
                 # SẢN XUẤT tới khi account đủ trần (MAX_PER_ACCT) hoặc BẮT ĐẦU FAIL (reCAPTCHA lì) -> xoay account khác
@@ -1162,6 +1173,9 @@ class ImagePoolBrowser:
         dead = sum(1 for v in self._state.values() if v.get("state") == "dead")
         return {
             "slots": self.n_slots, "candidates": len(self.candidates),
+            "configured": getattr(self, "n_configured", len(self.candidates)),   # tổng gmail cấu hình
+            "not_logged_in": getattr(self, "n_not_logged", 0),                   # số CHƯA LOGIN lúc khởi động
+            "logged_in": len(getattr(self, "_ever_ready", set())),               # số ĐÃ login/ready (LIVE, tăng dần)
             "known_good": good, "known_bad": bad, "known_resting": resting, "known_dead": dead,
             "active": [{"email": a.email, "state": a.state, "good": a.good, "busy": a.busy,
                         "wins": a.wins, "fails": a.fails, "model_wins": a.model_wins} for a in act],

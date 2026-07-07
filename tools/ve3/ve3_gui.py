@@ -705,9 +705,12 @@ class HomePage(ctk.CTkScrollableFrame):
                             mw[m] = mw.get(m, 0) + n
                     top_model = max(mw.items(), key=lambda x: x[1])[0] if mw else "-"
                     _tot = int(h.get('candidates', 0) or 0); _rest = int(h.get('known_resting', 0) or 0); _dead = int(h.get('known_dead', 0) or 0)
-                    _work_n = max(0, _tot - _rest - _dead)
                     _rate = h.get('image_per_hour', 0); _qb = h.get("quota_blocked"); _done = h.get('done', 0)
-                    vals["img_acc"] = f"{_work_n}/{_tot}"
+                    _cfg = int(h.get('configured', _tot) or _tot)
+                    _login_done = int(h.get('logged_in', _tot) or 0)     # số ĐÃ login (live, tăng dần)
+                    _login_gap = max(0, _cfg - _login_done)              # còn chưa login (live)
+                    _usable = max(0, _login_done - _rest - _dead)        # đã login & KHÔNG cách ly/chết -> đang khai thác
+                    vals["img_acc"] = f"{_usable}/{_cfg}"                # KHAI THÁC / TỔNG cấu hình (vd /96)
                     vals["img_rest"] = _rest
                     vals["img_dead"] = _dead
                     vals["img_quota"] = "⛔ cạn" if _qb else "✅ còn"
@@ -718,16 +721,18 @@ class HomePage(ctk.CTkScrollableFrame):
                     # CHẨN ĐOÁN: vì sao ảnh/giờ chậm
                     if _qb:
                         _iss = ("⛔ Quota reCAPTCHA ảnh CẠN toàn cục — ngừng đốt, tự chạy lại khi Google mở", RED)
-                    elif _work_n == 0:
+                    elif _usable == 0 and _login_done > 0:
                         _iss = (f"⛔ 0 acc khai thác — {_rest} cách ly 429 + {_dead} chết đang login lại", RED)
-                    elif _tot and _rest >= max(3, _tot * 0.3):
-                        _iss = (f"⚠️ {_rest}/{_tot} acc cách ly 429 (hết quota model, nghỉ 6h) — chờ hồi", ORANGE)
-                    elif _tot and _dead >= max(3, _tot * 0.3):
-                        _iss = (f"⚠️ {_dead}/{_tot} acc chết (cookie hết hạn) — đang login lại (tối đa 5 chrome/lúc)", ORANGE)
+                    elif _cfg and _rest >= max(3, _cfg * 0.3):
+                        _iss = (f"⚠️ {_rest}/{_cfg} acc cách ly 429 (hết quota model, nghỉ 6h) — chờ hồi", ORANGE)
+                    elif _cfg and _dead >= max(3, _cfg * 0.3):
+                        _iss = (f"⚠️ {_dead}/{_cfg} acc chết (cookie hết hạn) — đang login lại (tối đa 5 chrome/lúc)", ORANGE)
+                    elif _login_gap > 0:
+                        _iss = (f"🔐 đã login {_login_done}/{_cfg} acc — nhà máy TỰ login thêm {_login_gap} (5 chrome/lúc, xếp hàng) để tối đa hóa", ORANGE)
                     elif not _rate:
                         _iss = ("⏳ Đang khởi động / chờ job ảnh (chưa ra ảnh)", GRAY)
                     else:
-                        _iss = (f"✅ Chạy tốt — {_work_n}/{_tot} acc, {_rate} ảnh/giờ, model {top_model}", GREEN)
+                        _iss = (f"✅ Chạy tốt — {_usable}/{_cfg} acc, {_rate} ảnh/giờ, model {top_model}", GREEN)
                     vals["img_issue"] = _iss
                     status.append(f"🖼️ Pool ảnh: ra {_done} | model {top_model} | quota {'⛔ cạn' if _qb else '✅ còn'} | chết {_dead}")
                 except Exception:
