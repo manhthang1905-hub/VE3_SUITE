@@ -141,10 +141,14 @@ class VE3Worker:
         # AUTO (pool mode): = số chrome pool / số mã song song -> luôn làm ĐẦY pool (không chrome nào ngồi không),
         # không over-thread. Tự tính theo thực tế, KHÔNG cần chỉnh tay ở GUI. Backend khác -> giữ config cũ.
         if str(config.get("generation_backend", "") or "").strip() == "veo3top_b_pool":
-            _pool_n = int(config.get("image_pool_accounts", 10) or 10)
-            _codes = int(config.get("max_concurrent_codes", 0) or 0)
-            _codes = _codes if _codes > 0 else 3          # 0 = không giới hạn -> giả định ~3 mã để chia
-            self.max_concurrent = max(1, min(_pool_n, -(-_pool_n // _codes)))   # ceil(pool/codes), cận trên = pool
+            _override = int(config.get("run_max_concurrent", 0) or 0)   # GUI TỰ TÍNH số luồng/mã theo tài nguyên thực -> dùng thẳng
+            if _override > 0:
+                self.max_concurrent = _override
+            else:
+                _pool_n = int(config.get("image_pool_accounts", 10) or 10)
+                _codes = int(config.get("max_concurrent_codes", 0) or 0)
+                _codes = _codes if _codes > 0 else 3          # 0 -> giả định ~3 mã để chia
+                self.max_concurrent = max(1, min(_pool_n, -(-_pool_n // _codes)))   # ceil(pool/codes)
         else:
             self.max_concurrent = config.get("max_concurrent", 1)
         self.final_full_rerun = config.get("final_full_rerun", False)

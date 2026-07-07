@@ -632,6 +632,23 @@ class HomePage(ctk.CTkScrollableFrame):
                 return None
 
         L = []
+        # ---------- 🏭 NHÀ MÁY TỰ TÍNH (linh hoạt theo nhân sự thực) ----------
+        try:
+            cap = self._compute_pool_capacity()
+            cfgd = getattr(self, "config_data", {}) or {}
+            _ic = int(cfgd.get("max_concurrent_image_codes", 0) or 0)
+            _vc = int(cfgd.get("max_concurrent_video_codes", 0) or 0)
+            _img_codes = _ic if _ic > 0 else cap["img_codes"]
+            _vid_codes = _vc if _vc > 0 else cap["vid_codes"]
+            L.append("┏━━━ 🏭 NHÀ MÁY (tự tính theo nhân sự đang khai thác) ━━━━")
+            L.append(f"┃ 🖼️  Trạm ẢNH: {_img_codes} mã × ~{cap['img_per']} luồng"
+                     f"  (nhân sự {cap['img_cap']}/{cap['img_total']} account){'' if _ic<=0 else ' [cố định]'}")
+            L.append(f"┃ 🎬 Trạm VIDEO: {_vid_codes} mã"
+                     f"  (Ultra {cap['vid_cap']}/{cap['vid_total']}){'' if _vc<=0 else ' [cố định]'}")
+            L.append("┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+            L.append("")
+        except Exception:
+            pass
         # ---------- ẢNH ----------
         h = _get(8789)
         if h:
@@ -1705,6 +1722,9 @@ class SettingsPage(ctk.CTkScrollableFrame):
         self.ent_img_recycle   = _mk_knob(1, "Recycle token:", width=44, row=1)
         self.ent_vid_tokchrome = _mk_knob(2, "Token chrome video:", width=44, row=1)
         self.ent_vid_workers   = _mk_knob(3, "Luong/acc video:", width=44, row=1)
+        # HANG 3: TACH 2 TRAM (backend pool) - so MA song song moi tram (anh nhieu de day pool 96, video it theo 10 Ultra)
+        self.ent_img_codes = _mk_knob(0, "Ma ANH (0=tu tinh):", width=40, row=3)
+        self.ent_vid_codes = _mk_knob(1, "Ma VIDEO (0=tu tinh):", width=40, row=3)
         # CHU THICH y nghia (chinh theo may -> restart de ap) — dat trong frame knob, hang 2
         ctk.CTkLabel(knob, justify="left", font=("",9), text_color=T2, anchor="w", wraplength=360,
                      text=("Slot anh=so account song song (nhe, cookie-based). Token chrome=so chrome-trang de token "
@@ -2273,7 +2293,9 @@ class SettingsPage(ctk.CTkScrollableFrame):
                                      (self.ent_img_recycle, "image_token_recycle", 10),
                                      (self.ent_vid_tokchrome, "video_token_chromes", 3),
                                      (self.ent_vid_workers, "video_workers_per_account", 7),
-                                     (self.ent_iso_hours, "pool_isolation_hours", 6)):
+                                     (self.ent_iso_hours, "pool_isolation_hours", 6),
+                                     (self.ent_img_codes, "max_concurrent_image_codes", 0),
+                                     (self.ent_vid_codes, "max_concurrent_video_codes", 0)):
                 _ent.delete(0, "end"); _ent.insert(0, str(cfg.get(_key, _def)))
         except Exception:
             pass
@@ -2397,6 +2419,8 @@ class SettingsPage(ctk.CTkScrollableFrame):
         _knob(self.ent_vid_tokchrome, "video_token_chromes", 3, 1, 16)   # token chrome video
         _knob(self.ent_vid_workers,   "video_workers_per_account", 7, 1, 30)  # luong/account ultra
         _knob(self.ent_iso_hours,     "pool_isolation_hours", 6, 1, 48)   # cach ly account 429 het quota ngay (anh+video), gio
+        _knob(self.ent_img_codes,     "max_concurrent_image_codes", 0, 0, 50)   # tram ANH: 0 = TU TINH; >0 co dinh
+        _knob(self.ent_vid_codes,     "max_concurrent_video_codes", 0, 0, 20)   # tram VIDEO: 0 = TU TINH; >0 co dinh
         cfg["veo3top_image_mode"] = self.image_backend_options.get(self.opt_image_backend.get().strip(), "")
         selected_provider_label = self.opt_excel_ai_provider.get().strip() or "DeepSeek"
         cfg["excel_ai_provider"] = self.excel_ai_provider_options.get(selected_provider_label, "deepseek")
@@ -2919,6 +2943,8 @@ Write-Output $kill.Count
         self.config_data.setdefault("image_swap_giveup", 2)      # swap mấy lượt thì cách ly account đốt
         self.config_data.setdefault("max_concurrent_codes", 0)   # số mã (video) chạy song song; 0 = không giới hạn
         self.config_data.setdefault("pool_isolation_hours", 6)   # cách ly account 429 (hết quota ngày) nghỉ N giờ - ảnh+video
+        self.config_data.setdefault("max_concurrent_image_codes", 0)   # trạm ẢNH: 0 = TỰ TÍNH theo nhân sự; >0 = cố định
+        self.config_data.setdefault("max_concurrent_video_codes", 0)   # trạm VIDEO: 0 = TỰ TÍNH theo Ultra; >0 = cố định
         self.config_data.setdefault("image_token_chromes", 6)    # chrome-trắng đẻ token ảnh (CPU là trần)
         self.config_data.setdefault("image_token_recycle", 10)   # đẻ N token/chrome rồi làm mới
         self.config_data.setdefault("video_token_chromes", 3)    # chrome đẻ token video (async cần ít)
@@ -7199,6 +7225,53 @@ Get-CimInstance Win32_Process |
         except Exception:
             return False
 
+    def _compute_pool_capacity(self):
+        """NHÀ MÁY THÔNG MINH: đọc /health 2 pool -> đếm 'nhân sự' đang KHAI THÁC thực tế -> TỰ TÍNH số MÃ mỗi trạm
+        + số LUỒNG mỗi mã (linh hoạt: ít account -> ít mã; nhiều account -> nhiều mã). Cache 8s. Fallback config nếu pool tắt."""
+        now = _time.time()
+        c = getattr(self, "_pool_cap_cache", None)
+        if c and (now - c.get("ts", 0)) < 8:
+            return c
+        import urllib.request, json as _json
+
+        def _get(port):
+            try:
+                r = urllib.request.urlopen(f"http://127.0.0.1:{port}/health", timeout=1.5)
+                return _json.loads(r.read().decode("utf-8", "replace"))
+            except Exception:
+                return None
+
+        cfgd = getattr(self, "config_data", {}) or {}
+        # ẢNH (8789): capacity = account KHAI THÁC ĐƯỢC (tổng - cách ly 429 - chết)
+        h = _get(8789)
+        if h:
+            img_total = int(h.get("candidates", 0) or 0)
+            img_cap = max(0, img_total - int(h.get("known_resting", 0) or 0) - int(h.get("known_dead", 0) or 0))
+            img_up = True
+        else:
+            img_total = int(cfgd.get("image_pool_accounts", 96) or 96); img_cap = img_total; img_up = False
+        # VIDEO (8788): capacity = Ultra không đang nghỉ
+        v = _get(8788)
+        if v:
+            vaccs = v.get("accounts") or []
+            vid_total = len(vaccs)
+            vid_cap = sum(1 for a in vaccs if (a.get("resting_in") or 0) <= 1)
+            vid_up = True
+        else:
+            vid_total = 10; vid_cap = 10; vid_up = False
+        # TỰ TÍNH: PER = số nhân sự / 1 mã. Ảnh 12 acc/mã (mỗi mã ~12 luồng, đầy pool). Video 4 Ultra/mã.
+        IMG_PER = 12; VID_PER = 4
+        base_img = img_cap if img_cap > 0 else img_total
+        base_vid = vid_cap if vid_cap > 0 else vid_total
+        img_codes = max(1, min(20, round(base_img / IMG_PER)))
+        vid_codes = max(1, min(8, round(base_vid / VID_PER)))
+        img_per = max(1, -(-base_img // img_codes))   # luồng/mã ảnh = ceil(capacity/codes)
+        res = {"ts": now, "img_up": img_up, "vid_up": vid_up,
+               "img_total": img_total, "img_cap": img_cap, "img_codes": img_codes, "img_per": img_per,
+               "vid_total": vid_total, "vid_cap": vid_cap, "vid_codes": vid_codes}
+        self._pool_cap_cache = res
+        return res
+
     def _project_ready_for_endpoint_by_files(self, project_dir):
         """Ground-truth completion check from folders, not Excel status flags."""
         ep = self._project_excel_path(project_dir)
@@ -7324,6 +7397,12 @@ Get-CimInstance Win32_Process |
                 pair_cfg["psychology_reference_image"] = nguon_meta["psychology_reference_image"]
             if nguon_meta.get("topic"):
                 pair_cfg.setdefault("topic", nguon_meta["topic"])
+            # TRẠM ẢNH: truyền số LUỒNG/mã TỰ TÍNH (theo nhân sự thực) -> worker gửi đúng số ảnh song song để đầy pool.
+            if mode == "image-only":
+                try:
+                    pair_cfg["run_max_concurrent"] = int(self._compute_pool_capacity().get("img_per", 0) or 0)
+                except Exception:
+                    pass
             config_file = pd / ".ve3_run_config.json"
             with open(config_file, "w", encoding="utf-8") as f:
                 json.dump(pair_cfg, f, ensure_ascii=False, indent=2)
@@ -7578,9 +7657,11 @@ Get-CimInstance Win32_Process |
                     # GIỚI HẠN SỐ MÃ SONG SONG — TÁCH theo trạm: trạm ẢNH nhiều (đầy pool 96), trạm VIDEO ít (10 Ultra).
                     # max_concurrent_codes (mode all) = 0 -> không giới hạn. Đếm active THEO ĐÚNG trạm (queue_ve3_stage).
                     if _stage == "image":
-                        _maxcodes = int(cfg.get("max_concurrent_image_codes", 8) or 8)
+                        _ic = int(cfg.get("max_concurrent_image_codes", 0) or 0)
+                        _maxcodes = _ic if _ic > 0 else self._compute_pool_capacity()["img_codes"]   # 0 = TỰ TÍNH theo nhân sự
                     elif _stage == "video":
-                        _maxcodes = int(cfg.get("max_concurrent_video_codes", 3) or 3)
+                        _vc = int(cfg.get("max_concurrent_video_codes", 0) or 0)
+                        _maxcodes = _vc if _vc > 0 else self._compute_pool_capacity()["vid_codes"]
                     else:
                         _maxcodes = int(cfg.get("max_concurrent_codes", 0) or 0)
                     if _maxcodes > 0:
