@@ -39,6 +39,10 @@ GEN_ATTEMPTS = 40          # số lần bắn token MỚI/1 lượt lease (kiên
 BYPASS_RETRY = int(os.environ.get("VEO3TOP_BYPASS_RETRY", "5") or "5")  # bypass trượt liên tiếp bao nhiêu lần mới mint WEB token fallback
 JOB_MAX_CYCLES = 40        # 1 job được chuyền/thử tối đa bao nhiêu lượt trước khi bỏ
 REST_SOFT = 8              # sau 1 lượt 40 lần vẫn chưa qua -> nghỉ NGẮN 8s cho account thở rồi worker pull tiếp
+# 429 recaptcha_quota = HẾT QUOTA VIDEO của account (per-account) -> grind token VÔ ÍCH. Thử VID_QUOTA_GIVEUP lần
+# (phòng thoáng qua), chắc chắn 429 -> NGHỈ 3h + đổi account (chỉ 10 account Ultra -> nghỉ dài, khỏi đốt token factory).
+VID_QUOTA_GIVEUP = int(os.environ.get("VEO3TOP_VID_QUOTA_GIVEUP", "5") or "5")
+VID_QUOTA_REST = int(os.environ.get("VEO3TOP_VID_QUOTA_REST", "10800") or "10800")   # 3h
 REST_BASE = 20             # (chỉ dùng cho lỗi per-IP/account thật sự)
 REST_MAX = 180
 BACKOFF = 2.0              # chờ giữa 2 lần thử generate (nhẹ, + jitter)
@@ -330,6 +334,7 @@ class VideoFactory:
         #    -> cứ bắn token mới, backoff NGẮN, KHÔNG nghỉ account. Xoay egress phòng lỗi per-IP.
         auth_fails = 0
         bypass_fails = 0
+        quota_streak = 0   # số lần 429 (recaptcha_quota) LIÊN TIẾP -> đủ ngưỡng thì nghỉ 3h + đổi account
         for attempt in range(GEN_ATTEMPTS):
             # Submit qua IPv6 RIÊNG của account này (như veo3top-b) -> IP độc lập, quota reCAPTCHA không chung.
             # KHÔNG xoay ở đây; chỉ xoay khi 429 per-IP thật (nhánh ratelimit).
@@ -400,6 +405,7 @@ class VideoFactory:
                 account.last_kind = f"{kind}@{ename}"
                 if kind in ("ratelimit", "ip_block"):
                     # per-IP -> xoay IPv6 RIÊNG của account này rồi bắn lại
+                    quota_streak = 0
                     if ename == "ipv6" and account.ipv6:
                         try: account.ipv6.rotate()
                         except Exception: pass
@@ -409,8 +415,18 @@ class VideoFactory:
                     # TỐT + upload reference lại đúng project). KHÔNG grind token (không phải lỗi token). Self-heal 24/7.
                     account.mark_project_bad(project)
                     return "retry_soft"
+                elif kind == "recaptcha_quota":
+                    # 429 RESOURCE_EXHAUSTED = HẾT QUOTA VIDEO của account (per-account) -> grind token VÔ ÍCH.
+                    # Thử vài lần (phòng thoáng qua), CHẮC CHẮN 429 -> NGHỈ 3h + ĐỔI ACCOUNT (retry_soft).
+                    quota_streak += 1
+                    if quota_streak >= VID_QUOTA_GIVEUP:
+                        account.rest(VID_QUOTA_REST)
+                        self.log(f"VIDEO: {account.email} 429 hết quota {quota_streak} lần -> nghỉ {VID_QUOTA_REST//3600}h, đổi account khác")
+                        return "retry_soft"
+                    time.sleep(1.0 + random.uniform(0, 0.8))
                 else:
-                    # recaptcha_quota/unusual = token trượt reCAPTCHA -> bắn TOKEN MỚI nhanh (kiên nhẫn như veo3top)
+                    # unusual = token trượt reCAPTCHA THẬT -> bắn TOKEN MỚI nhanh (fresh token điểm cao hơn, như veo3top)
+                    quota_streak = 0
                     try:
                         if self.factory: self.factory.note_error()   # tích lỗi -> reset chrome fresh (chỉ khi WEB fallback đang chạy)
                     except Exception: pass
