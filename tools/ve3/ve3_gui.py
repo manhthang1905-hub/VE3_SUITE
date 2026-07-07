@@ -2094,7 +2094,7 @@ class SettingsPage(ctk.CTkScrollableFrame):
             import urllib.request, json as _json
             ORANGE = "#FF8C00"
             # 1) quota TUNG key (biet key nao het han / con bao nhieu)
-            ok_n = exp_n = err_n = 0
+            ok_n = exp_n = drained_n = err_n = 0
             total_rem = 0
             first_ok_key = ""
             for k in keys:
@@ -2107,12 +2107,15 @@ class SettingsPage(ctk.CTkScrollableFrame):
                     except Exception: rem = 0
                     if q.get("is_expired"):
                         exp_n += 1
+                    elif rem <= 0:
+                        drained_n += 1          # con han NGAY nhung HET TOKEN (remaining<=0) -> proxy tra 401; se TU HOI
                     else:
                         ok_n += 1; total_rem += rem
                         if not first_ok_key: first_ok_key = k
                 except Exception:
                     err_n += 1
-            quota_txt = f"{ok_n}/{len(keys)} key OK | tong con {total_rem:,} token"
+            quota_txt = f"{ok_n}/{len(keys)} key song | tong con {total_rem:,} token"
+            if drained_n: quota_txt += f" | {drained_n} het token (cho hoi)"
             if exp_n: quota_txt += f" | {exp_n} het han"
             if err_n: quota_txt += f" | {err_n} loi"
             # 2) ping chat that bang 1 key con song -> chac chan proxy chay

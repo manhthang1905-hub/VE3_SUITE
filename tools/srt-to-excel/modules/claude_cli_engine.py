@@ -113,6 +113,13 @@ class ClaudeCliEngine:
         self._proxy_keys = _keys
         self._proxy_key_i = 0
         self._proxy_key_lock = threading.Lock()
+        # Key het token (401) -> NGHI TAM 60' roi TU DONG quay lai vong khi da hoi (quota nap lai).
+        # KHONG bo vinh vien (key tu hoi). Het cooldown -> 1 chunk se tham do lai; con song thi vao lai.
+        self._key_cooldown = {}   # key -> epoch het cooldown
+        try:
+            self._key_cd_secs = int(self.config.get("claude_cli_key_cooldown_secs", 3600) or 3600)
+        except Exception:
+            self._key_cd_secs = 3600
 
         # Transport backend:
         #   "cli"        — spawn the local claude.exe (Claude Max)
@@ -224,16 +231,30 @@ class ClaudeCliEngine:
             pass
 
     def _next_proxy_key(self) -> str:
-        """Lay key digishop ke tiep (round-robin) -> chia tai giua nhieu key. '' neu chua co key nao."""
+        """Lay key digishop ke tiep (round-robin) -> chia tai giua nhieu key. Bo qua key dang COOLDOWN
+        (het token, dang cho hoi). Tat ca cooldown -> chon key sap hoi som nhat (fail-open). '' neu chua co key."""
         keys = getattr(self, "_proxy_keys", None) or []
         if not keys:
             return ""
         if len(keys) == 1:
             return keys[0]
+        now = time.time()
+        n = len(keys)
         with self._proxy_key_lock:
-            k = keys[self._proxy_key_i % len(keys)]
-            self._proxy_key_i += 1
-        return k
+            for _ in range(n):   # thu toi da n key theo vong tron, bo qua cai dang cooldown
+                k = keys[self._proxy_key_i % n]
+                self._proxy_key_i += 1
+                if self._key_cooldown.get(k, 0) <= now:
+                    return k
+            # tat ca dang cooldown -> chon cai sap hoi som nhat (do nhat) de van chay, khong dung han
+            return min(keys, key=lambda kk: self._key_cooldown.get(kk, 0))
+
+    def _mark_key_cooldown(self, key: str) -> None:
+        """Key vua bao 401/het token -> cho NGHI cooldown (mac dinh 60') roi tu quay lai vong khi hoi."""
+        if not key:
+            return
+        with self._proxy_key_lock:
+            self._key_cooldown[key] = time.time() + self._key_cd_secs
 
     @staticmethod
     def _resolve_claude_path(explicit: str) -> str:
@@ -717,6 +738,14 @@ JSON RULES:
         if proc.returncode != 0:
             self._kill_proc_tree(proc)  # ensure no surviving children on error
             msg = (err or out or "").strip()
+            # Key digishop HET TOKEN / loi auth (401) -> cho key nay NGHI cooldown 60' roi tu quay lai vong
+            # (key tu hoi). Chunk nay se retry -> _next_proxy_key nhay sang key con song.
+            if proxy_key and len(self._proxy_keys) > 1:
+                _low = msg.lower()
+                if any(s in _low for s in ("401", "invalid token", "unauthorized",
+                                           "authentication", "invalid api key", "invalid x-api-key")):
+                    self._mark_key_cooldown(proxy_key)
+                    self._log(f"     (key ...{proxy_key[-6:]} het token/loi auth -> nghi {self._key_cd_secs//60}' cho hoi, xoay key khac)", "WARN")
             raise RuntimeError(f"Claude CLI exited {proc.returncode}: {msg[:500]}")
 
         out = (out or "").strip()
