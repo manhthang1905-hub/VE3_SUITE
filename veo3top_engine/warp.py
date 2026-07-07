@@ -23,12 +23,18 @@ def _cli(*args, timeout=30):
 
 
 def ensure_proxy_mode():
-    """Đảm bảo WARP đang ở mode proxy port 40000 + connected."""
+    """Đảm bảo WARP đang ở mode proxy port 40000 + connected. Máy MỚI (chưa đăng ký) -> TỰ đăng ký (free) rồi thử lại
+    -> plug-and-play, chỉ cần CÀI Cloudflare WARP, không cần mở GUI."""
     _cli("mode", "proxy")
     _cli("proxy", "port", str(PROXY_PORT))
     _cli("connect")
     time.sleep(4)
-    return current_ip()
+    ip = current_ip()
+    if not ip:   # connect fail (thường do CHƯA đăng ký) -> đăng ký mới (WARP free, --accept-tos) rồi thử lại
+        _cli("registration", "new"); time.sleep(2)
+        _cli("mode", "proxy"); _cli("proxy", "port", str(PROXY_PORT)); _cli("connect"); time.sleep(4)
+        ip = current_ip()
+    return ip
 
 
 def current_ip():
