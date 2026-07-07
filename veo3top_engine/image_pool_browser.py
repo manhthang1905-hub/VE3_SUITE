@@ -441,19 +441,32 @@ class Account:
         except Exception:
             pass
 
+    def _cookie_alive(self):
+        """Cookie account CÒN SỐNG không (mint được bearer)? -> phân biệt 'còn session THẬT' (giữ) vs 'present nhưng
+        CHẾT' (phải login mới). Dùng ở guard _wipe_profile: sống -> giữ; chết -> xóa để login lấy cookie tươi."""
+        try:
+            d = _AUTHCACHE._load(self.email) if _AUTHCACHE is not None else None
+            ck = (d or {}).get("cookie")
+            if not ck:
+                return False
+            b, _ = fc.bearer_from_cookie(ck)
+            return bool(b)
+        except Exception:
+            return False
+
     def _wipe_profile(self, log=None):
         """XÓA SẠCH dữ liệu profile Chrome cho account bị OUT/session zombie. Google hay giữ 1 session-zombie
         (redirect khỏi trang signin) khiến login đè lên profile bẩn bị KẸT/thất bại -> phải để Chrome TRẮNG mới
         login lại được. Kill chrome giữ profile -> rmtree retry (Windows lock) -> tạo lại rỗng.
-        BẢO VỆ COOKIE (chống 'out oan'): nếu profile VẪN CÒN cookie login (SAPISID) -> KHÔNG full-wipe (account còn
-        logged-in, chỉ là chrome kẹt/glitch 1 nhịp) -> chỉ clear LOCK để chrome mở lại được, GIỮ session. Chỉ xóa
-        sạch khi cookie THẬT SỰ mất (không còn gì để giữ)."""
+        BẢO VỆ COOKIE (chống 'out oan') NHƯNG check SỐNG (không chỉ present): cookie CÒN SỐNG (mint được bearer) ->
+        chỉ glitch chrome -> KHÔNG xóa, giữ session. Cookie CHẾT/present-but-dead -> XÓA để login MỚI lấy cookie tươi
+        (đúng ý user: 'cookie dead -> Chuẩn bị lấy cookie mới'). Cookie hết hạn (_force_login) -> BỎ guard, xóa luôn."""
         self._kill_profile_chrome()
         time.sleep(1.5)
-        if _profile_logged_in(self.email):
-            _clear_profile_lock(self.profile)   # còn cookie -> chỉ mở khoá, GIỮ cookie (đừng phá session)
+        if not self._force_login and self._cookie_alive():
+            _clear_profile_lock(self.profile)   # cookie CÒN SỐNG -> chỉ mở khoá, GIỮ (đừng phá session tốt)
             if log:
-                try: log(f"🛡️ {self.email}: profile CÒN cookie login -> KHÔNG xóa (chỉ clear lock, giữ session)")
+                try: log(f"🛡️ {self.email}: cookie CÒN SỐNG -> KHÔNG xóa (giữ session, chỉ clear lock)")
                 except Exception: pass
             return
         try:
