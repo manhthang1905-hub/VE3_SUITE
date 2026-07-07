@@ -47,6 +47,10 @@ ALL_MODEL_REST_SECS = int(os.environ.get("VEO3TOP_IMG_ALLMODEL_REST", "43200") o
 # = 24 submit song song (per-account tải thấp -> né throttle tốt hơn ít-account-nhiều-luồng). Trải trên 96 account.
 N_SLOTS = int(os.environ.get("VEO3TOP_IMG_POOL_ACCOUNTS", "24") or "24")
 LOGIN_CONCURRENCY = int(os.environ.get("VEO3TOP_IMG_LOGIN_CONCURRENCY", "5") or "5")
+# Login fail (Chrome rớt / PageDisconnected / warm-project lỗi) -> RETRY N lần rồi nghỉ NGẮN thử lại,
+# KHÔNG đánh DEAD 3h (churn account oan). Vẫn giữ 5 chrome/lúc (login_sem); account thứ 6+ tự xếp hàng đợi.
+LOGIN_RETRIES = int(os.environ.get("VEO3TOP_IMG_LOGIN_RETRIES", "3") or "3")
+LOGIN_FAIL_REST = int(os.environ.get("VEO3TOP_IMG_LOGIN_FAIL_REST", "300") or "300")   # 5' rồi thử lại
 # CHỈ REUSE COOKIE (mặc định BẬT): pool KHÔNG tự login (login hàng loạt cùng 1 IP -> Google bắt reCAPTCHA challenge
 # -> gãy hết -> DEAD). User login riêng ở GUI (rải chậm) để profile có cookie; pool chỉ MỞ profile đã login sẵn +
 # generate. Account chưa có cookie -> đánh dấu 'nologin' (bỏ qua nhẹ, KHÔNG dead, thử lại sau khi user login).
@@ -440,11 +444,8 @@ class Account:
         if not login_fn:
             self.state = "dead"; return False
         with login_sem:
-            # Tới nhánh này = reuse-session đã fail (email() None sau 4 lần) HOẶC _force_login (401 runtime) -> session
-            # CHẾT/zombie. Profile bẩn hay KẸT login -> XÓA SẠCH cho Chrome TRẮNG rồi mới login (profile mới toanh -> no-op).
-            self._wipe_profile(log); time.sleep(2)
-            # LOGIN QUA IPv6 (mỗi account 1 IP khác -> giảm 'cùng 1 IP nhiều login' -> đỡ reCAPTCHA challenge khi hồi
-            # hàng loạt). IMG_NATIVE=1 -> IP máy. login_google_chrome cần scheme socks5:// (đổi từ socks5h).
+            # LOGIN QUA IPv6 (mỗi account 1 IP khác -> đỡ reCAPTCHA challenge). IMG_NATIVE=1 -> IP máy.
+            # login_google_chrome cần scheme socks5:// (đổi từ socks5h).
             _pxy = ""
             if not IMG_NATIVE:
                 try:
@@ -453,23 +454,33 @@ class Account:
                         _pxy = self.ipv6.proxy_url().replace("socks5h://", "socks5://")
                 except Exception:
                     _pxy = ""
-            try:
-                ok = login_fn({"id": self.email, "password": self.password, "totp_secret": self.totp},
-                              chrome_portable=_CHROME, profile_dir=self.profile, worker_id=200 + self.idx, proxy_arg=_pxy)
-            except Exception as e:
-                log(f"{self.email}: login lỗi {e}"); ok = False
-            if not ok:
-                # QUAN TRỌNG: login FAIL (thường reCAPTCHA-challenge) -> ĐÓNG chrome login NGAY, đừng để hở.
-                # Trước đây return luôn không kill -> mỗi account fail để lại 1 chrome -> tích đống (rò rỉ) -> đơ máy.
+            # RETRY login: Chrome hay RỚT giữa chừng (PageDisconnected — nhất là Chrome hệ thống) -> thử lại
+            # LOGIN_RETRIES lần, MỖI lần profile TRẮNG (session zombie/profile bẩn KẸT login). KHÔNG đánh DEAD ngay.
+            # login_sem giữ tối đa LOGIN_CONCURRENCY (5) chrome/lúc; account thứ 6+ tự XẾP HÀNG đợi ở semaphore.
+            ok = False
+            for _try in range(LOGIN_RETRIES):
+                self._wipe_profile(log); time.sleep(2)
+                try:
+                    ok = login_fn({"id": self.email, "password": self.password, "totp_secret": self.totp},
+                                  chrome_portable=_CHROME, profile_dir=self.profile, worker_id=200 + self.idx, proxy_arg=_pxy)
+                except Exception as e:
+                    log(f"{self.email}: login lỗi {e}"); ok = False
                 self._kill_profile_chrome()
-                self.state = "dead"; log(f"✗ {self.email}: login/warm THẤT BẠI -> DEAD (đã đóng chrome)"); return False
-            self._kill_profile_chrome(); time.sleep(3)
+                if ok:
+                    break
+                if _try < LOGIN_RETRIES - 1:
+                    log(f"↻ {self.email}: login fail (lần {_try+1}/{LOGIN_RETRIES}) -> retry (Chrome rớt?)")
+                    time.sleep(3)
+            if not ok:
+                # RETRY hết vẫn fail -> NGHỈ NGẮN rồi THỬ LẠI (resting, KHÔNG dead 3h). Slot nhả cho account khác.
+                self.state = "resting"; log(f"↻ {self.email}: login fail {LOGIN_RETRIES} lần -> nghỉ ngắn thử lại (KHÔNG dead)"); return False
+            time.sleep(3)
             # CDP chrome (warm+project) PHẢI TRONG semaphore (nối tiếp login_fn, cùng 1 `with login_sem`) -> tối đa
             # LOGIN_CONCURRENCY chrome/lúc THẬT SỰ. Trước đây _open_cdp + warm (~20s) NẰM NGOÀI sem -> account qua
             # login_fn (giới hạn 5) rồi trickle vào phase warm CÙNG LÚC không giới hạn -> flood 90 chrome, đơ máy.
             c = self._open_cdp()
             if not c:
-                self.state = "dead"; return False
+                self.state = "resting"; log(f"↻ {self.email}: mở CDP sau login lỗi -> nghỉ ngắn thử lại"); return False
             # ĐỢI session load THẬT (như nhánh reuse: email() OK) TRƯỚC khi tạo project — chrome mới mở sau login chưa có
             # bearer ngay -> fresh_project() gọi sớm sẽ FAIL (đó là lý do 'không tạo được project' hàng loạt).
             for _t in range(6):
@@ -489,7 +500,7 @@ class Account:
             if not self.project:
                 try: c.close(kill=True)
                 except Exception: pass
-                self.state = "dead"; log(f"✗ {self.email}: không tạo được project sau login (egress?) -> DEAD"); return False
+                self.state = "resting"; log(f"↻ {self.email}: không tạo được project sau login -> nghỉ ngắn thử lại"); return False
             self.cdp = c; self.state = "ready"
             self._save_cookie()   # lưu cookie+bearer ra auth_cache (như veo3top) -> tái dùng
             self._force_login = False   # login OK -> cookie tươi -> cho fast-path lại
