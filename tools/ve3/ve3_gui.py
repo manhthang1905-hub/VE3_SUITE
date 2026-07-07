@@ -1823,7 +1823,7 @@ class SettingsPage(ctk.CTkScrollableFrame):
         self.sw_login_warp.grid(row=9, column=0, columnspan=3, padx=10, pady=(0,8), sticky="w")
         # NUM TINH CHINH NHA MAY ANH (toi uu toc do, chong 403). Tat ca so nguyen.
         knob = ctk.CTkFrame(gc, fg_color="transparent")
-        knob.grid(row=8, column=0, columnspan=3, padx=10, pady=(0,6), sticky="w")
+        knob.grid(row=10, column=0, columnspan=3, padx=10, pady=(0,6), sticky="w")
         def _mk_knob(col, label, width=52, row=0):
             ctk.CTkLabel(knob, text=label, font=("",10), text_color=T2).grid(row=row, column=col*2, padx=(0 if col==0 else 10, 4), pady=(0,3), sticky="e")
             e = ctk.CTkEntry(knob, width=width, height=28, corner_radius=4, font=("",11), fg_color=EN, border_color=BD, justify="center")
@@ -1845,14 +1845,14 @@ class SettingsPage(ctk.CTkScrollableFrame):
                            "Account pool anh = tran so account nap. Token chrome = so chrome-trang de token (CPU la tran ~6-8). "
                            "Recycle = N token/chrome roi lam moi. Luong/acc video = submit/account ultra. Restart de ap.")
                      ).grid(row=2, column=0, columnspan=8, padx=(0,4), pady=(4,0), sticky="w")
-        ctk.CTkButton(gc, text="⚙ Auto Setup (theo máy)", width=180, height=30, fg_color="#00897B", hover_color="#00695C", text_color="#FFF", font=("",11,"bold"), corner_radius=6, command=self._auto_setup).grid(row=8, column=0, columnspan=3, padx=10, pady=(6,2))
-        ctk.CTkButton(gc, text="Save settings", width=120, height=30, fg_color=AC, hover_color=AC2, text_color="#FFF", font=("",11,"bold"), corner_radius=6, command=self._save).grid(row=9, column=0, columnspan=3, padx=10, pady=(4,4))
+        ctk.CTkButton(gc, text="⚙ Auto Setup (theo máy)", width=180, height=30, fg_color="#00897B", hover_color="#00695C", text_color="#FFF", font=("",11,"bold"), corner_radius=6, command=self._auto_setup).grid(row=10, column=0, columnspan=3, padx=10, pady=(6,2))
+        ctk.CTkButton(gc, text="Save settings", width=120, height=30, fg_color=AC, hover_color=AC2, text_color="#FFF", font=("",11,"bold"), corner_radius=6, command=self._save).grid(row=11, column=0, columnspan=3, padx=10, pady=(4,4))
         self.lbl_saved = ctk.CTkLabel(gc, text="", font=("",9), text_color=OK)
-        self.lbl_saved.grid(row=10, column=0, columnspan=3, padx=10, pady=(0,4))
+        self.lbl_saved.grid(row=12, column=0, columnspan=3, padx=10, pady=(0,4))
         # QUẢN LÝ account nhà máy ảnh/video (GUI riêng: trạng thái good/bad/dead + Prepare/Probe/Check/Reset)
         ctk.CTkButton(gc, text="Quan ly account anh/video", width=200, height=30, fg_color=RN,
                       hover_color="#1565C0", text_color="#FFF", font=("",11,"bold"), corner_radius=6,
-                      command=app._open_pool_manager).grid(row=11, column=0, columnspan=3, padx=10, pady=(0,10))
+                      command=app._open_pool_manager).grid(row=13, column=0, columnspan=3, padx=10, pady=(0,10))
 
         # Excel AI
         ai = ctk.CTkFrame(self, fg_color=CD, corner_radius=8, border_width=1, border_color=BD)
