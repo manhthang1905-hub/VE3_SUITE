@@ -1812,8 +1812,8 @@ class SettingsPage(ctk.CTkScrollableFrame):
         self.opt_image_backend.grid(row=5, column=1, columnspan=2, sticky="w", pady=(0,4))
         self.sw_music_workspace = ctk.CTkSwitch(gc, text="Music Chrome mo lech man hinh", progress_color=OK, button_color="#FFF", button_hover_color="#EEE")
         self.sw_music_workspace.grid(row=6, column=0, columnspan=3, padx=10, pady=(0,8), sticky="w")
-        # AN chrome nha may ANH (mac dinh BAT = an, day cua so ra ngoai man hinh; van ra anh). Tat -> hien cua so.
-        self.sw_img_hide = ctk.CTkSwitch(gc, text="An chrome tao anh (mac dinh bat)", progress_color=OK, button_color="#FFF", button_hover_color="#EEE")
+        # AN chrome ca ANH + VIDEO (mac dinh BAT = an offscreen; van login/tao anh binh thuong). Tat -> hien de debug.
+        self.sw_img_hide = ctk.CTkSwitch(gc, text="An Chrome anh + video (mac dinh bat - d8 khi chay khoi nhay ra)", progress_color=OK, button_color="#FFF", button_hover_color="#EEE")
         self.sw_img_hide.grid(row=7, column=0, columnspan=3, padx=10, pady=(0,8), sticky="w")
         # NUM TINH CHINH NHA MAY ANH (toi uu toc do, chong 403). Tat ca so nguyen.
         knob = ctk.CTkFrame(gc, fg_color="transparent")

@@ -115,6 +115,7 @@ def _spawn_service(log=print):
         cfgp = os.path.join(_SUITE, "tools", "ve3", "config", "settings.yaml")
         cfg = yaml.safe_load(open(cfgp, encoding="utf-8")) or {}
         env["VEO3TOP_IMG_HIDE"] = "1" if cfg.get("image_hide_chrome", True) else "0"
+        env["VEO3TOP_HIDE_CHROME"] = env["VEO3TOP_IMG_HIDE"]   # đồng bộ: ẩn cả login chrome (google_login đọc env này)
         if cfg.get("image_token_chromes"):   # cho phép chỉnh số token chrome ẢNH qua settings.yaml
             env["VEO3TOP_IMG_TOKEN_CHROMES"] = str(int(cfg.get("image_token_chromes")))
         if cfg.get("image_login_concurrency"):   # SỐ CHROME LOGIN đồng thời tối đa (mặc định 5); máy yếu -> hạ xuống
@@ -131,7 +132,9 @@ def _spawn_service(log=print):
         env["VEO3TOP_IMG_ALLMODEL_REST"] = str(int(float(cfg.get("pool_isolation_hours", 6) or 6) * 3600))
         # EGRESS ẢNH: 'direct' = IP máy + Fake DNS Google (đúng veo3top: điểm reCAPTCHA cao, hết IPv6 403+treo);
         # 'ipv6' = pool IPv6 (hợp VIDEO chống 429, nhưng ẢNH bị 403 flood). Mặc định direct. Đổi ở settings.yaml.
-        _egress = str(cfg.get("image_egress", "ipv6")).strip().lower()   # mặc định IPv6 (pool) — direct bị 429 khi 10 slot dồn 1 IP
+        # MẶC ĐỊNH 'direct' = IP MÁY (bỏ IPv6): android_bypass KHÔNG reCAPTCHA + quota 429 theo MODEL/account (không theo IP)
+        # -> IPv6 hết tác dụng, chỉ gây churn 'tạo project lỗi'/PageDisconnected khi login. 'ipv6' = giữ pool IPv6 (cũ).
+        _egress = str(cfg.get("image_egress", "direct")).strip().lower()
         env["VEO3TOP_IMG_NATIVE"] = "1" if _egress == "direct" else "0"
         env["VEO3TOP_DOH"] = "1" if cfg.get("image_fake_dns_google", True) else "0"  # Fake DNS Google (bí quyết veo3top)
     except Exception:
