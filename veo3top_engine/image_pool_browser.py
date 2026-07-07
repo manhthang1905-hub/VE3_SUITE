@@ -444,10 +444,18 @@ class Account:
     def _wipe_profile(self, log=None):
         """XÓA SẠCH dữ liệu profile Chrome cho account bị OUT/session zombie. Google hay giữ 1 session-zombie
         (redirect khỏi trang signin) khiến login đè lên profile bẩn bị KẸT/thất bại -> phải để Chrome TRẮNG mới
-        login lại được (yêu cầu người dùng). Kill chrome giữ profile -> rmtree retry (Windows lock) -> tạo lại rỗng.
-        CHỈ gọi ở nhánh LOGIN của prepare() (đã xác định session chết) -> KHÔNG đụng account đang ready/reuse-cookie."""
+        login lại được. Kill chrome giữ profile -> rmtree retry (Windows lock) -> tạo lại rỗng.
+        BẢO VỆ COOKIE (chống 'out oan'): nếu profile VẪN CÒN cookie login (SAPISID) -> KHÔNG full-wipe (account còn
+        logged-in, chỉ là chrome kẹt/glitch 1 nhịp) -> chỉ clear LOCK để chrome mở lại được, GIỮ session. Chỉ xóa
+        sạch khi cookie THẬT SỰ mất (không còn gì để giữ)."""
         self._kill_profile_chrome()
         time.sleep(1.5)
+        if _profile_logged_in(self.email):
+            _clear_profile_lock(self.profile)   # còn cookie -> chỉ mở khoá, GIỮ cookie (đừng phá session)
+            if log:
+                try: log(f"🛡️ {self.email}: profile CÒN cookie login -> KHÔNG xóa (chỉ clear lock, giữ session)")
+                except Exception: pass
+            return
         try:
             tf._rmtree_hard(self.profile, tries=5)
         except Exception:
@@ -457,7 +465,7 @@ class Account:
         except Exception:
             pass
         if log:
-            try: log(f"🧹 {self.email}: đã XÓA profile bẩn (session out) -> Chrome trắng để login lại")
+            try: log(f"🧹 {self.email}: profile MẤT cookie (out thật) -> xoá sạch, Chrome trắng login lại")
             except Exception: pass
 
     def prepare(self, login_fn, login_sem, log, allow_login=False):
