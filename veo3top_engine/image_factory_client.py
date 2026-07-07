@@ -117,6 +117,8 @@ def _spawn_service(log=print):
         env["VEO3TOP_IMG_HIDE"] = "1" if cfg.get("image_hide_chrome", True) else "0"
         if cfg.get("image_token_chromes"):   # cho phép chỉnh số token chrome ẢNH qua settings.yaml
             env["VEO3TOP_IMG_TOKEN_CHROMES"] = str(int(cfg.get("image_token_chromes")))
+        if cfg.get("image_login_concurrency"):   # SỐ CHROME LOGIN đồng thời tối đa (mặc định 5); máy yếu -> hạ xuống
+            env["VEO3TOP_IMG_LOGIN_CONCURRENCY"] = str(int(cfg.get("image_login_concurrency")))
         if cfg.get("image_token_recycle"):
             env["VEO3TOP_TOKEN_RECYCLE"] = str(int(cfg.get("image_token_recycle")))
         if cfg.get("mint_interval"):
