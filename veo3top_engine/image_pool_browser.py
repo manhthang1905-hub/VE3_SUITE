@@ -130,11 +130,36 @@ def _warp_login_proxy(log=lambda *_: None):
         log(f"⚠️ WARP lỗi ({str(e)[:50]})")
         return ""
 
+_4G_HEALTH = {}          # url -> (alive_bool, ts) — cache sức khỏe SOCKS5 4G (khỏi test mỗi login)
+_4G_HEALTH_TTL = 300     # 5' — 4G IP tự đổi nhưng proxy sống/chết ổn định trong ~5'
+def _socks_alive(url, log=lambda *_: None):
+    """Test SOCKS5 SỐNG THẬT: fetch qua proxy (timeout ngắn 5s) — bắt cả cổng-mở-nhưng-SOCKS5-chết (.254/.183).
+    Cache 5' -> không phí mỗi login. Port mở nhưng SOCKS5 timeout/reset -> coi CHẾT."""
+    import time as _t
+    now = _t.time()
+    c = _4G_HEALTH.get(url)
+    if c and now - c[1] < _4G_HEALTH_TTL:
+        return c[0]
+    alive = False
+    try:
+        from curl_cffi import requests as _cffi
+        r = _cffi.get("https://api.ipify.org", proxies={"http": url, "https": url}, timeout=5)
+        alive = bool((r.text or "").strip())
+    except Exception:
+        alive = False
+    _4G_HEALTH[url] = (alive, now)
+    return alive
+
 def _login_proxy_pool(log=lambda *_: None):
-    """POOL egress cho LOGIN (retry xoay vòng tới khi OK): 4G (IP tự đổi) trước, rồi WARP, cuối cùng IP máy ('')."""
+    """POOL egress cho LOGIN (retry xoay vòng tới khi OK): 4G SỐNG (IP tự đổi) trước, rồi WARP, cuối cùng IP máy ('').
+    Lọc bỏ 4G chết (test SOCKS5 thật, cache 5') -> không phí ~25s timeout mỗi lần login."""
     pool = []
     for p in IMG_LOGIN_4G:                       # 4G: nhập ở GUI, IP tự đổi -> dùng thẳng, không rotate
-        pool.append(p if "://" in p else f"socks5://{p}")
+        url = p if "://" in p else f"socks5://{p}"
+        if _socks_alive(url, log):
+            pool.append(url)
+        else:
+            log(f"⏭️ 4G {url.split('//')[-1]} chết (SOCKS5 không phản hồi) -> bỏ khỏi pool login")
     if IMG_LOGIN_WARP:
         wp = _warp_login_proxy(log)
         if wp: pool.append(wp)
