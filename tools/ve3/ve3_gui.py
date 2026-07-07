@@ -2482,6 +2482,7 @@ class VE3App(ctk.CTk):
         self.queue_ve3_tasks = {}
         self.queue_ve3_workers = {}
         self.queue_ve3_procs = {}      # {code: subprocess.Popen} - VE3 worker subprocesses
+        self.queue_ve3_stage = {}      # {code: "image"|"video"|"all"} - trạm đang chạy mã (tách concurrency ảnh/video)
         self.queue_music_procs = {}    # {code: subprocess.Popen} - Music worker subprocesses
         self.queue_progress_owner_code = None
         self.queue_progress_owner_pair = "-"
@@ -3794,6 +3795,7 @@ Get-CimInstance Win32_Process |
             for code in dead_tasks:
                 self.queue_ve3_tasks.pop(code, None)
                 self.queue_active_ve3.discard(code)
+                self.queue_ve3_stage.pop(code, None)   # dọn stage khi task chết (tránh stale chặn concurrency)
 
         # 3. Prune caches (keep max 200 entries, remove oldest)
         for cache_name in ('_project_state_cache', '_project_binding_cache', '_ve3_priority_cache', 'project_progress_cache'):
@@ -6296,6 +6298,7 @@ Get-CimInstance Win32_Process |
         with self.queue_lock:
             self.queue_active_excel.clear()
             self.queue_active_ve3.clear()
+            self.queue_ve3_stage.clear()
             self.queue_active_pairs.clear()
             self.queue_excel_tasks.clear()
             self.queue_ve3_tasks.clear()
@@ -7292,8 +7295,9 @@ Get-CimInstance Win32_Process |
             self.pages["home"].lbl_active_project.configure(text="Ma dang chay: -")
             self.pages["home"].lbl_running_pair.configure(text="-")
 
-    def _run_single_project_ve3(self, pd, pair, cfg):
-        """Run VE3 worker + music as subprocesses. Kill = instant stop."""
+    def _run_single_project_ve3(self, pd, pair, cfg, mode="all"):
+        """Run VE3 worker + music as subprocesses. Kill = instant stop.
+        mode: 'all' (ảnh+video), 'image-only' (trạm ảnh), 'video-only' (trạm video)."""
         code = pd.name
         ve3_proc = None
         music_proc = None
@@ -7331,7 +7335,7 @@ Get-CimInstance Win32_Process |
             # Launch VE3 worker subprocess
             worker_script = str(VE3_DIR / "ve3_worker.py")
             ve3_proc = subprocess.Popen(
-                [sys.executable, worker_script, str(pd), "--config", str(config_file)],
+                [sys.executable, worker_script, str(pd), "--config", str(config_file), "--mode", str(mode)],
                 stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                 encoding="utf-8", errors="replace",
                 creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
@@ -7416,8 +7420,13 @@ Get-CimInstance Win32_Process |
                 self.queue_ve3_workers.pop(code, None)
                 self.queue_ve3_procs.pop(code, None)
                 self.queue_music_procs.pop(code, None)
+                self.queue_ve3_stage.pop(code, None)
+            # TRẠM ẢNH (image-only): xong ẢNH thì KHÔNG chốt endpoint (video CHƯA làm; res.success của ảnh=True sẽ
+            # chốt OAN). Vòng loop kế sẽ thấy mã cần VIDEO -> trạm video làm video + finalize + chốt endpoint.
+            if mode == "image-only":
+                self._log(f"[QUEUE] {code}: [ẢNH] xong ảnh -> chuyển trạm VIDEO (chưa chốt endpoint)", "INFO", "ve3")
             # Endpoint check - skip if already completed (e.g. by _manual_complete_project)
-            if pd.exists() and not self._is_project_endpoint_complete(pd):
+            elif pd.exists() and not self._is_project_endpoint_complete(pd):
                 endpoint_reason = None
                 if res and res.get("success"):
                     endpoint_reason = "queue_success"
@@ -7555,14 +7564,31 @@ Get-CimInstance Win32_Process |
                             detail = "no_pending_units" if not has_pending else "blocked_by_lock_or_hold"
                         self._queue_ve3_skip_log(pd.name, "not_ready", detail)
                         continue
-                    # GIỚI HẠN SỐ MÃ CHẠY SONG SONG (dồn tài nguyên cho ít mã -> xong nhanh trước).
-                    # max_concurrent_codes = 0 -> không giới hạn (cũ). >0 -> chỉ chạy tối đa N mã cùng lúc.
-                    _maxcodes = int(cfg.get("max_concurrent_codes", 0) or 0)
+                    # === TÁCH 2 TRẠM (chỉ backend pool): mã cần ẢNH -> image-only (nhả slot sớm, làm đầy pool 96);
+                    #     ảnh XONG cần VIDEO -> video-only (finalize). Backend khác -> 'all' (nguyên khối như cũ). ===
+                    _run_mode = "all"; _stage = "all"
+                    if _pool_mode:
+                        if self._project_needs_image(pd):
+                            _run_mode = "image-only"; _stage = "image"
+                        elif self._project_needs_video(pd):
+                            _run_mode = "video-only"; _stage = "video"
+                        else:
+                            self._queue_ve3_skip_log(pd.name, "no_stage")
+                            continue
+                    # GIỚI HẠN SỐ MÃ SONG SONG — TÁCH theo trạm: trạm ẢNH nhiều (đầy pool 96), trạm VIDEO ít (10 Ultra).
+                    # max_concurrent_codes (mode all) = 0 -> không giới hạn. Đếm active THEO ĐÚNG trạm (queue_ve3_stage).
+                    if _stage == "image":
+                        _maxcodes = int(cfg.get("max_concurrent_image_codes", 8) or 8)
+                    elif _stage == "video":
+                        _maxcodes = int(cfg.get("max_concurrent_video_codes", 3) or 3)
+                    else:
+                        _maxcodes = int(cfg.get("max_concurrent_codes", 0) or 0)
                     if _maxcodes > 0:
                         with self.queue_lock:
-                            _active = sum(1 for _t in self.queue_ve3_tasks.values() if _t.is_alive())
+                            _active = sum(1 for _c, _t in self.queue_ve3_tasks.items()
+                                          if _t.is_alive() and self.queue_ve3_stage.get(_c, "all") == _stage)
                         if _active >= _maxcodes and pd.name not in self.queue_active_ve3:
-                            self._queue_ve3_skip_log(pd.name, "max_codes", f"{_active}/{_maxcodes} mã đang chạy")
+                            self._queue_ve3_skip_log(pd.name, "max_codes", f"{_stage} {_active}/{_maxcodes} mã")
                             continue
                     if not free_pairs:
                         self._queue_ve3_skip_log(pd.name, "no_free_pair")
@@ -7580,11 +7606,12 @@ Get-CimInstance Win32_Process |
                         if existing_proc and existing_proc.poll() is None:
                             continue
                         self.queue_active_ve3.add(pd.name)
+                        self.queue_ve3_stage[pd.name] = _stage   # trạm đang chạy mã (image/video/all) -> đếm concurrency đúng trạm
                         self.queue_active_pairs[pair["pair_id"]] = pd.name
                         self.queue_pair_use_seq += 1
                         self.queue_pair_last_used[pair["pair_id"]] = self.queue_pair_use_seq
-                    self._write_queue_marker(pd, "ve3", f"VE3 worker using pair {pair['server_name']} / {pair['flow_account_name']}")
-                    task = threading.Thread(target=self._run_single_project_ve3, args=(pd, pair, cfg), daemon=True)
+                    self._write_queue_marker(pd, "ve3", f"VE3 [{_stage}] using pair {pair['server_name']} / {pair['flow_account_name']}")
+                    task = threading.Thread(target=self._run_single_project_ve3, args=(pd, pair, cfg, _run_mode), daemon=True)
                     with self.queue_lock:
                         self.queue_ve3_tasks[pd.name] = task
                     task.start()
@@ -7615,6 +7642,7 @@ Get-CimInstance Win32_Process |
             with self.queue_lock:
                 self.queue_active_excel.clear()
                 self.queue_active_ve3.clear()
+                self.queue_ve3_stage.clear()
                 self.queue_active_pairs.clear()
                 self.queue_excel_tasks.clear()
                 self.queue_ve3_tasks.clear()
