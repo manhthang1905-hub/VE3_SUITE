@@ -56,6 +56,7 @@ ER = "#D22"
 RN = "#17C"           # running blue
 TW, TH = 110, 74     # thumb
 SW = 175              # sidebar width
+POOL_POLL_MS = int(os.environ.get("VE3_POOL_POLL_MS", "15000") or "15000")   # nhịp poll /health tiles (15s) - giãn cho đỡ đơ
 
 BADGES = {
     "pending": (T3, "#F0F0F0",  "i"),
@@ -515,7 +516,7 @@ class HomePage(ctk.CTkScrollableFrame):
         self.pool_status_lbl = ctk.CTkLabel(c, text="Đang đọc pool...", font=("",10), text_color=T2, anchor="w", justify="left")
         self.pool_status_lbl.grid(row=3, column=0, padx=12, pady=(0,4), sticky="w")
 
-        self.projects_list = ctk.CTkScrollableFrame(c, height=600, fg_color="#F3F5F7", corner_radius=6, border_width=1, border_color=BD2)
+        self.projects_list = ctk.CTkScrollableFrame(c, height=320, fg_color="#F3F5F7", corner_radius=6, border_width=1, border_color=BD2)   # thấp gọn -> log hiện luôn không phải kéo (list tự cuộn trong nó)
         self.projects_list.grid(row=4, column=0, padx=8, pady=(0,8), sticky="nsew")
         self.projects_list.grid_columnconfigure(0, weight=1)
         self.projects_box = None
@@ -638,86 +639,103 @@ class HomePage(ctk.CTkScrollableFrame):
             except Exception: pass
 
     def _poll_pool_health(self):
-        """Poll /health pool ẢNH (8789) + VIDEO (8788) -> cập nhật TILES + dòng trạng thái. Mỗi 5s."""
-        import urllib.request, json as _json
+        """Poll /health pool ẢNH (8789) + VIDEO (8788) -> cập nhật TILES + dòng trạng thái. Mỗi 5s.
+        FETCH CHẠY NỀN (thread): urlopen tới 2s x2 + _compute_pool_capacity -> KHÔNG được chặn main thread (gây ĐƠ GUI).
+        Widget chỉ cập nhật qua self.after(0, ...) trên main thread."""
+        import threading
 
-        def _get(port):
+        # GUARD: thread poll trước chưa xong (pool chậm) -> KHÔNG spawn thêm (chống chồng chất thread) -> lên lịch lại
+        if getattr(self, "_pool_poll_busy", False):
+            try: self.after(POOL_POLL_MS, self._poll_pool_health)
+            except Exception: pass
+            return
+        self._pool_poll_busy = True
+
+        def _work():
+            import urllib.request, json as _json
+
+            def _get(port):
+                try:
+                    r = urllib.request.urlopen(f"http://127.0.0.1:{port}/health", timeout=2)
+                    return _json.loads(r.read().decode("utf-8", "replace"))
+                except Exception:
+                    return None
+
+            vals = {}     # key tile -> text (áp trên main thread)
+            status = []
+            # nhà máy tự tính (số mã + luồng) — cũng đọc /health nên chạy trong thread luôn
             try:
-                r = urllib.request.urlopen(f"http://127.0.0.1:{port}/health", timeout=2)
-                return _json.loads(r.read().decode("utf-8", "replace"))
+                cap = self.app._compute_pool_capacity()
+                cfgd = getattr(self.app, "config_data", {}) or {}
+                _ic = int(cfgd.get("max_concurrent_image_codes", 0) or 0)
+                _vc = int(cfgd.get("max_concurrent_video_codes", 0) or 0)
+                img_codes = _ic if _ic > 0 else cap.get("img_codes", "-")
+                vid_codes = _vc if _vc > 0 else cap.get("vid_codes", "-")
             except Exception:
-                return None
+                cap = {}; img_codes = "-"; vid_codes = "-"
 
-        def _set(key, val):
-            lb = getattr(self, "pool_tiles", {}).get(key)
+            # ---------- ẢNH ----------
+            h = _get(8789)
+            if h:
+                try:
+                    act = h.get("active") or []
+                    mw = {}
+                    for a in act:
+                        if not isinstance(a, dict): continue
+                        for m, n in (a.get("model_wins") or {}).items():
+                            mw[m] = mw.get(m, 0) + n
+                    top_model = max(mw.items(), key=lambda x: x[1])[0] if mw else "-"
+                    _tot = int(h.get('candidates', 0) or 0); _rest = int(h.get('known_resting', 0) or 0); _dead = int(h.get('known_dead', 0) or 0)
+                    _work_n = max(0, _tot - _rest - _dead)
+                    vals["img_tram"] = f"{img_codes}×{cap.get('img_per', '?')}"
+                    vals["img_acc"] = f"{_work_n}/{_tot}"
+                    vals["img_rest"] = _rest
+                    vals["img_rate"] = h.get('image_per_hour', 0)
+                    _qb = h.get("quota_blocked")
+                    status.append(f"🖼️ Pool ảnh: ra {h.get('done',0)} | model {top_model} | quota {'⛔ cạn' if _qb else '✅ còn'} | chết {_dead}")
+                except Exception:
+                    status.append("🖼️ Pool ảnh: ⚠️ /health dữ liệu lạ")
+            else:
+                for k in ("img_tram", "img_acc", "img_rest", "img_rate"): vals[k] = "⏸"
+                status.append("🖼️ Pool ảnh: ⏸ chưa chạy (chưa tới phase ảnh / pool tắt)")
+            # ---------- VIDEO ----------
+            v = _get(8788)
+            if v:
+                try:
+                    accs = [a for a in (v.get("accounts") or []) if isinstance(a, dict)]
+                    resting = [a for a in accs if (a.get("resting_in") or 0) > 1]
+                    q429 = sum(1 for a in resting if "quota" in str(a.get("last_kind", "")).lower())
+                    _vtot = len(accs); _vwork = max(0, _vtot - len(resting))
+                    vals["vid_tram"] = f"{vid_codes} mã"
+                    vals["vid_acc"] = f"{_vwork}/{_vtot}"
+                    vals["vid_rest"] = q429
+                    vals["vid_rate"] = v.get('video_per_hour', 0)
+                    status.append(f"🎬 Pool video: ra {v.get('done',0)} | hàng đợi {v.get('queue',0)}")
+                except Exception:
+                    status.append("🎬 Pool video: ⚠️ /health dữ liệu lạ")
+            else:
+                for k in ("vid_tram", "vid_acc", "vid_rest", "vid_rate"): vals[k] = "⏸"
+                status.append("🎬 Pool video: ⏸ chưa chạy (chưa tới phase video)")
+            status.append(f"⟳ {_time.strftime('%H:%M:%S')}")
+            self._pool_poll_busy = False   # xong -> mở cờ cho lượt sau (đặt TRƯỚC reschedule)
+            # ÁP KẾT QUẢ + LÊN LỊCH LẦN SAU trên MAIN THREAD (widget chỉ đụng từ main thread)
+            try: self.after(0, lambda vv=vals, st="     ".join(status): self._apply_pool_health(vv, st))
+            except Exception: pass
+            try: self.after(POOL_POLL_MS, self._poll_pool_health)   # giãn nhịp (mặc định 15s) -> nhẹ, đỡ đơ
+            except Exception: pass
+
+        threading.Thread(target=_work, daemon=True, name="pool-health").start()
+
+    def _apply_pool_health(self, vals, status_text):
+        """Áp số liệu pool lên tiles + dòng trạng thái. CHẠY TRÊN MAIN THREAD (gọi qua self.after)."""
+        tiles = getattr(self, "pool_tiles", {})
+        for k, val in vals.items():
+            lb = tiles.get(k)
             if lb is not None:
                 try: lb.configure(text=str(val))
                 except Exception: pass
-
-        # nhà máy tự tính (số mã + luồng)
-        try:
-            cap = self.app._compute_pool_capacity()
-            cfgd = getattr(self.app, "config_data", {}) or {}
-            _ic = int(cfgd.get("max_concurrent_image_codes", 0) or 0)
-            _vc = int(cfgd.get("max_concurrent_video_codes", 0) or 0)
-            img_codes = _ic if _ic > 0 else cap.get("img_codes", "-")
-            vid_codes = _vc if _vc > 0 else cap.get("vid_codes", "-")
-        except Exception:
-            cap = {}; img_codes = "-"; vid_codes = "-"
-
-        status = []
-        # ---------- ẢNH ----------
-        h = _get(8789)
-        if h:
-          try:
-            act = h.get("active") or []
-            mw = {}
-            for a in act:
-                if not isinstance(a, dict): continue
-                for m, n in (a.get("model_wins") or {}).items():
-                    mw[m] = mw.get(m, 0) + n
-            top_model = max(mw.items(), key=lambda x: x[1])[0] if mw else "-"
-            _tot = int(h.get('candidates', 0) or 0); _rest = int(h.get('known_resting', 0) or 0); _dead = int(h.get('known_dead', 0) or 0)
-            _work = max(0, _tot - _rest - _dead)
-            _set("img_tram", f"{img_codes}×{cap.get('img_per', '?')}")
-            _set("img_acc", f"{_work}/{_tot}")
-            _set("img_rest", _rest)
-            _set("img_rate", h.get('image_per_hour', 0))
-            _qb = h.get("quota_blocked")
-            status.append(f"🖼️ Pool ảnh: ra {h.get('done',0)} | model {top_model} | quota {'⛔ cạn' if _qb else '✅ còn'} | chết {_dead}")
-          except Exception:
-            status.append("🖼️ Pool ảnh: ⚠️ /health dữ liệu lạ")
-        else:
-            for k in ("img_tram", "img_acc", "img_rest", "img_rate"): _set(k, "⏸")
-            status.append("🖼️ Pool ảnh: ⏸ chưa chạy (chưa tới phase ảnh / pool tắt)")
-        # ---------- VIDEO ----------
-        v = _get(8788)
-        if v:
-          try:
-            accs = v.get("accounts") or []
-            accs = [a for a in accs if isinstance(a, dict)]
-            resting = [a for a in accs if (a.get("resting_in") or 0) > 1]
-            q429 = sum(1 for a in resting if "quota" in str(a.get("last_kind", "")).lower())
-            _vtot = len(accs); _vwork = max(0, _vtot - len(resting))
-            _set("vid_tram", f"{vid_codes} mã")
-            _set("vid_acc", f"{_vwork}/{_vtot}")
-            _set("vid_rest", q429)
-            _set("vid_rate", v.get('video_per_hour', 0))
-            status.append(f"🎬 Pool video: ra {v.get('done',0)} | hàng đợi {v.get('queue',0)}")
-          except Exception:
-            status.append("🎬 Pool video: ⚠️ /health dữ liệu lạ")
-        else:
-            for k in ("vid_tram", "vid_acc", "vid_rest", "vid_rate"): _set(k, "⏸")
-            status.append("🎬 Pool video: ⏸ chưa chạy (chưa tới phase video)")
-        status.append(f"⟳ {_time.strftime('%H:%M:%S')}")
-        try:
-            self.pool_status_lbl.configure(text="     ".join(status))
-        except Exception:
-            pass
-        try:
-            self.after(5000, self._poll_pool_health)
-        except Exception:
-            pass
+        try: self.pool_status_lbl.configure(text=status_text)
+        except Exception: pass
 
     def _mk_process_monitor(self):
         c = self._card(3, "Process Monitor")
