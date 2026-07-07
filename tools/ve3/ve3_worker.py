@@ -83,6 +83,12 @@ class VE3Worker:
         self.thumb_dir = self.project_dir / "thumb"
         self.reference_root = SUITE_ROOT / "tools" / "srt-to-excel" / "reference_characters"
 
+        # RUN MODE: 'all' (ảnh+video, mặc định), 'image-only' (chỉ PHASE 1-3), 'video-only' (chỉ PHASE 4-5).
+        # Tách 2 trạm: trạm ảnh chạy image-only (nhả slot sớm), trạm video chạy video-only (finalize).
+        self.run_mode = str(config.get("run_mode", "all") or "all").strip().lower()
+        if self.run_mode not in ("all", "image-only", "video-only"):
+            self.run_mode = "all"
+
         # Generation backend config
         self.generation_backend = str(config.get("generation_backend") or config.get("generation_mode") or "server").strip().lower()
         if self.generation_backend not in {"server", "nanopic", "flowkit", "combined", "veo3top", "veo3top_b", "veo3top_b_ultra", "veo3top_b_pool"}:
@@ -1240,21 +1246,31 @@ Generator/context error:
         self.img_dir.mkdir(parents=True, exist_ok=True)
         self.vid_dir.mkdir(parents=True, exist_ok=True)
 
+        # MODE tách trạm: image-only làm PHASE 1-3 rồi nhả; video-only bỏ PHASE 1-3, chỉ PHASE 4-5 (finalize).
+        _do_image = self.run_mode in ("all", "image-only")
+        _do_video = self.run_mode in ("all", "video-only")
+        ref_result = {"total": 0, "completed": 0, "failed": 0}
+        scene_result = {"total": 0, "completed": 0, "failed": 0}
+        vid_result = {"total": 0, "completed": 0, "failed": 0}
+        validate_result = {"total": 0, "validated": 0, "regenerated": 0, "failed": 0}
+        if self.run_mode != "all":
+            self.log(f"[MODE] worker chạy CHỈ phần: {self.run_mode}")
+
         # === PHASE 1: References ===
         self.log("=" * 50)
         self.log("PHASE 1: Táº¡o áº£nh nhÃ¢n váº­t & Ä‘á»‹a Ä‘iá»ƒm")
         self.log("=" * 50)
-        if not self._prepare_psychology_reference_media(wb):
-            result["errors"].append("Psychology reference media_id upload failed")
-            return result
-        ref_result = self._generate_references(wb)
-        validate_result = {"total": 0, "validated": 0, "regenerated": 0, "failed": 0}
+        if _do_image:
+            if not self._prepare_psychology_reference_media(wb):
+                result["errors"].append("Psychology reference media_id upload failed")
+                return result
+            ref_result = self._generate_references(wb)
         if self._stop_flag:
             result["errors"].append("ÄÃ£ dá»«ng bá»Ÿi user")
             return result
 
         # POOL: media_id VO DUNG (embed base64 per-account) -> KHONG validate media_id (tranh repair qua ExtAuth).
-        if self.reference_media_validation_enabled and self.generation_backend != "veo3top_b_pool":
+        if _do_image and self.reference_media_validation_enabled and self.generation_backend != "veo3top_b_pool":
             self.log("")
             self.log("=" * 50)
             self.log("PHASE 1B: Validate media_id cua reference")
@@ -1285,20 +1301,31 @@ Generator/context error:
                 pass
 
         # === PHASE 2: Thumbnail ===
-        self.log("")
-        self.log("=" * 50)
-        self.log("PHASE 2: Tạo Thumbnail")
-        self.log("=" * 50)
-        self._generate_thumbnail(wb)
+        if _do_image:
+            self.log("")
+            self.log("=" * 50)
+            self.log("PHASE 2: Tạo Thumbnail")
+            self.log("=" * 50)
+            self._generate_thumbnail(wb)
 
         # === PHASE 3: Scene Images ===
-        self.log("")
-        self.log("=" * 50)
-        self.log("PHASE 3: Tạo ảnh các cảnh")
-        self.log("=" * 50)
-        scene_result = self._generate_scenes(wb)
-        if self._stop_flag:
-            result["errors"].append("Đã dừng bởi user")
+        if _do_image:
+            self.log("")
+            self.log("=" * 50)
+            self.log("PHASE 3: Tạo ảnh các cảnh")
+            self.log("=" * 50)
+            scene_result = self._generate_scenes(wb)
+            if self._stop_flag:
+                result["errors"].append("Đã dừng bởi user")
+                return result
+
+        # MODE image-only: xong ảnh -> trả kết quả ảnh, KHÔNG finalize (trạm video sẽ làm video + finalize sau)
+        if self.run_mode == "image-only":
+            result["total"] = ref_result["total"] + scene_result["total"]
+            result["completed"] = ref_result["completed"] + scene_result["completed"]
+            result["failed"] = ref_result["failed"] + scene_result["failed"]
+            result["success"] = result["failed"] == 0 and result["completed"] > 0
+            self.log(f"[MODE image-only] xong ảnh {result['completed']}/{result['total']} -> nhả cho trạm video")
             return result
 
         # === PHASE 4: Videos (Image-to-Video) ===
@@ -1312,7 +1339,7 @@ Generator/context error:
             return result
 
         # Tá»•ng káº¿t
-        if self.final_full_rerun:
+        if self.final_full_rerun and self.run_mode == "all":   # rerun chạy cả ảnh+video -> chỉ khi mode 'all'
             ref_rerun, scene_rerun, vid_rerun = self._run_full_rerun_pass(wb)
             if self._stop_flag:
                 result["errors"].append("Ã„ÂÃƒÂ£ dÃ¡Â»Â«ng bÃ¡Â»Å¸i user")
@@ -1354,7 +1381,7 @@ Generator/context error:
         # da on dinh (vua xong scenes + video). get_pending_thumbnails() chi tra ve
         # thumb chua "done" nen cac thumb da co anh se tu skip.
         try:
-            if not self._stop_flag:
+            if _do_image and not self._stop_flag:   # thumbnail là việc ẢNH -> chỉ mode all/image (video-only bỏ qua)
                 pending_thumbs = wb.get_pending_thumbnails()
                 if pending_thumbs:
                     self.log("")
@@ -4854,6 +4881,9 @@ def main():
     parser.add_argument("project_dir", help="Project directory")
     parser.add_argument("--config", dest="config_file", default=None,
                         help="Path to JSON config file (subprocess mode)")
+    parser.add_argument("--mode", dest="run_mode", default="all",
+                        choices=["all", "image-only", "video-only"],
+                        help="all=ảnh+video (mặc định); image-only=chỉ PHASE 1-3; video-only=chỉ PHASE 4-5 (tách 2 trạm)")
     args = parser.parse_args()
 
     if args.config_file:
@@ -4871,6 +4901,12 @@ def main():
         log_func = None
         progress_func = None
         item_func = None
+
+    # --mode (CLI) ưu tiên; nếu config có run_mode thì tôn trọng khi --mode không được truyền
+    if args.run_mode and args.run_mode != "all":
+        config["run_mode"] = args.run_mode
+    elif "run_mode" not in config:
+        config["run_mode"] = args.run_mode
 
     worker = VE3Worker(
         project_dir=args.project_dir, config=config,
