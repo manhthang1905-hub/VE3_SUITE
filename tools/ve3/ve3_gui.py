@@ -566,6 +566,16 @@ class HomePage(ctk.CTkScrollableFrame):
             try: _sz0 = os.path.getsize(_p) if os.path.exists(_p) else 0
             except Exception: _sz0 = 0
             self._pool_log_files[_name] = [_p, _box, _sz0]  # [path, box, last_size]
+
+        # Tab SỐ LIỆU pool: poll /health (ảnh 8789 + video 8788) -> nắm tình hình TRỰC TIẾP
+        # (ra ảnh/video, model nào chạy, quota cạn?, bao nhiêu account 429/nghỉ/chết). Refresh mỗi 5s.
+        _stab = self.log_tabs.add("📊 Số liệu")
+        _stab.grid_columnconfigure(0, weight=1); _stab.grid_rowconfigure(0, weight=1)
+        self.pool_stat_box = ctk.CTkTextbox(_stab, font=("Consolas", 13), fg_color="#0d1117",
+                                            text_color="#c9d1d9", corner_radius=4, wrap="none")
+        self.pool_stat_box.grid(row=0, column=0, sticky="nsew"); self.pool_stat_box.configure(state="disabled")
+        self._poll_pool_health()
+
         self._tail_pool_logs()
 
         # Dictionary to store log boxes for each project code
@@ -609,6 +619,69 @@ class HomePage(ctk.CTkScrollableFrame):
         finally:
             try: self.after(2000, self._tail_pool_logs)
             except Exception: pass
+
+    def _poll_pool_health(self):
+        """Poll /health pool ẢNH (8789) + VIDEO (8788) -> hiện số liệu để nắm tình hình pool trực tiếp. Mỗi 5s."""
+        import urllib.request, json as _json
+
+        def _get(port):
+            try:
+                r = urllib.request.urlopen(f"http://127.0.0.1:{port}/health", timeout=2)
+                return _json.loads(r.read().decode("utf-8", "replace"))
+            except Exception:
+                return None
+
+        L = []
+        # ---------- ẢNH ----------
+        h = _get(8789)
+        if h:
+            act = h.get("active") or []
+            mw = {}
+            for a in act:
+                for m, n in (a.get("model_wins") or {}).items():
+                    mw[m] = mw.get(m, 0) + n
+            model_str = "  ".join(f"{m}={n}" for m, n in sorted(mw.items(), key=lambda x: -x[1])) or "(chưa có)"
+            qb = h.get("quota_blocked")
+            quota_str = (f"⛔ CẠN (mở lại sau {h.get('quota_block_remaining_s',0)}s)" if qb else "✅ còn quota")
+            L.append("┏━━━ 🖼️  POOL ẢNH  (cổng 8789) ━━━━━━━━━━━━━━━━━━━")
+            L.append(f"┃ 🎨 Ra ảnh: {h.get('done',0):<6} Lỗi: {h.get('fail',0):<5} Tốc độ: ~{h.get('image_per_hour',0)}/giờ   Hàng đợi: {h.get('queue',0)}")
+            L.append(f"┃ 👤 Account: {h.get('candidates',0)} tổng | ✅tốt {h.get('known_good',0)} | 😴nghỉ {h.get('known_resting',0)} | ⛔chết {h.get('known_dead',0)} | đang bận {sum(1 for a in act if a.get('busy'))}")
+            L.append(f"┃ 🧬 Model đang ra ảnh: {model_str}")
+            L.append(f"┃ 📊 Quota ảnh: {quota_str}   | reCAPTCHA liên tiếp: {h.get('consec_recaptcha',0)}")
+            L.append("┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+        else:
+            L.append("🖼️  POOL ẢNH (8789): ⏸️  chưa chạy / không kết nối được (pool chưa bật hoặc project chưa tới phase ảnh)")
+        L.append("")
+        # ---------- VIDEO ----------
+        v = _get(8788)
+        if v:
+            accs = v.get("accounts") or []
+            resting = [a for a in accs if (a.get("resting_in") or 0) > 1]
+            q429 = sum(1 for a in resting if "quota" in str(a.get("last_kind", "")).lower())
+            busy = sum(1 for a in accs if a.get("busy"))
+            L.append("┏━━━ 🎬 POOL VIDEO  (cổng 8788) ━━━━━━━━━━━━━━━━━━")
+            L.append(f"┃ 🎥 Ra video: {v.get('done',0):<5} Lỗi: {v.get('fail',0):<4} Tốc độ: ~{v.get('video_per_hour',0)}/giờ   Hàng đợi: {v.get('queue',0)}")
+            L.append(f"┃ 👤 Account Ultra: {len(accs)} tổng | đang bận {busy} | 😴nghỉ {len(resting)} | trong đó 429(nghỉ 3h): {q429}")
+            if resting:
+                _pre = ", ".join(f"{a.get('email','?')[:16]}({int(a.get('resting_in',0)//60)}p)" for a in resting[:6])
+                L.append(f"┃ 😴 Account nghỉ: {_pre}")
+            L.append("┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+        else:
+            L.append("🎬 POOL VIDEO (8788): ⏸️  chưa chạy / không kết nối được (chưa tới phase video)")
+        L.append("")
+        L.append(f"⟳ tự cập nhật mỗi 5s — {_time.strftime('%H:%M:%S')}")
+
+        try:
+            self.pool_stat_box.configure(state="normal")
+            self.pool_stat_box.delete("1.0", "end")
+            self.pool_stat_box.insert("1.0", "\n".join(L))
+            self.pool_stat_box.configure(state="disabled")
+        except Exception:
+            pass
+        try:
+            self.after(5000, self._poll_pool_health)
+        except Exception:
+            pass
 
     def _mk_process_monitor(self):
         c = self._card(3, "Process Monitor")

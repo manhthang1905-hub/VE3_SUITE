@@ -1134,9 +1134,11 @@ class ImagePoolBrowser:
         act = list(self.active.values())
         good = sum(1 for v in self._state.values() if v.get("state") == "good")
         bad = sum(1 for v in self._state.values() if v.get("state") == "bad")
+        resting = sum(1 for v in self._state.values() if v.get("state") == "resting")
+        dead = sum(1 for v in self._state.values() if v.get("state") == "dead")
         return {
             "slots": self.n_slots, "candidates": len(self.candidates),
-            "known_good": good, "known_bad": bad,
+            "known_good": good, "known_bad": bad, "known_resting": resting, "known_dead": dead,
             "active": [{"email": a.email, "state": a.state, "good": a.good, "busy": a.busy,
                         "wins": a.wins, "fails": a.fails, "model_wins": a.model_wins} for a in act],
             "models": IMG_MODELS, "queue": self.q.qsize(), "done": self.total_done, "fail": self.total_fail,

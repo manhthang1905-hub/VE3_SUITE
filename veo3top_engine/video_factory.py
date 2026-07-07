@@ -487,7 +487,8 @@ class VideoFactory:
         return {
             "accounts": [
                 {"name": a.name, "email": a.email, "resting_in": round(a.rest_remaining(), 1),
-                 "busy": a.busy, "wins": a.wins, "fails": a.fails, "egress_wins": a.egress_wins}
+                 "busy": a.busy, "wins": a.wins, "fails": a.fails, "egress_wins": a.egress_wins,
+                 "last_kind": getattr(a, "last_kind", "")}
                 for a in self.accounts
             ],
             "egress": [e[0] for e in self.egress],
