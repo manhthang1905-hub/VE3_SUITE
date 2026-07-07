@@ -58,8 +58,8 @@ def _spawn_service(log=print):
             _env["VEO3TOP_MINT_INTERVAL"] = str(float(_cfg["mint_interval"]))   # sustainable: mint chậm -> đốt quota reCAPTCHA chậm
         # CÁCH LY 429 (hết quota ngày account) -> nghỉ N giờ. Chỉnh qua GUI settings (pool_isolation_hours). Mặc định 6h.
         _env["VEO3TOP_VID_QUOTA_REST"] = str(int(float(_cfg.get("pool_isolation_hours", 6) or 6) * 3600))
-        # ẨN CHROME (login video offscreen): mặc định ẨN. Chỉnh nút GUI (image_hide_chrome dùng chung cả ảnh+video).
-        _env["VEO3TOP_HIDE_CHROME"] = "1" if _cfg.get("image_hide_chrome", True) else "0"
+        # KHÔNG ẩn login video: offscreen (-32000) phá login Google thật (DrissionPage không thấy trang password,
+        # đo 0/17). Video CHỈ mở chrome lúc login (hiếm, 1 lần/account) -> để HIỆN cho login chạy được rồi thôi.
     except Exception:
         pass
     CF = 0x08000000  # CREATE_NO_WINDOW

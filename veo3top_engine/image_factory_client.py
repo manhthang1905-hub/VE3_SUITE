@@ -115,7 +115,9 @@ def _spawn_service(log=print):
         cfgp = os.path.join(_SUITE, "tools", "ve3", "config", "settings.yaml")
         cfg = yaml.safe_load(open(cfgp, encoding="utf-8")) or {}
         env["VEO3TOP_IMG_HIDE"] = "1" if cfg.get("image_hide_chrome", True) else "0"
-        env["VEO3TOP_HIDE_CHROME"] = env["VEO3TOP_IMG_HIDE"]   # đồng bộ: ẩn cả login chrome (google_login đọc env này)
+        # LƯU Ý: KHÔNG set VEO3TOP_HIDE_CHROME cho LOGIN — offscreen (-32000) làm DrissionPage KHÔNG thấy trang
+        # password -> login Google THẤT BẠI (đã đo 0/17). Login phải HIỆN (chỉ 1 lần/account rồi thôi). _open_cdp
+        # (generation/reuse) vẫn ẩn qua IMG_HIDE (offscreen OK cho CDP, không cần thao tác trang như login).
         if cfg.get("image_token_chromes"):   # cho phép chỉnh số token chrome ẢNH qua settings.yaml
             env["VEO3TOP_IMG_TOKEN_CHROMES"] = str(int(cfg.get("image_token_chromes")))
         if cfg.get("image_login_concurrency"):   # SỐ CHROME LOGIN đồng thời tối đa (mặc định 5); máy yếu -> hạ xuống
