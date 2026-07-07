@@ -6698,17 +6698,17 @@ Get-CimInstance Win32_Process |
             pass
 
     def _excel_is_locked(self, excel_path):
+        # KHOA OS (mo file de GHI) LA CHUAN DUY NHAT. Marker ~$/.lock/.tmp CO THE STALE (sot lai tu lan
+        # crash truoc) -> KHONG duoc tin marker MOT MINH: file mo ghi duoc nhung tool tuong bi khoa ->
+        # KET VINH VIEN ca 5 ma (worker skip read + dispatcher skip). Da tung gap tren may khac.
         if not excel_path.exists():
+            # File chinh CHUA CO -> co the dang duoc tao do dang (tmp/lock) => coi nhu ban, cho.
             lock_path = excel_path.with_suffix(".xlsx.lock")
             temp_path = excel_path.with_suffix(".xlsx.tmp")
             return lock_path.exists() or temp_path.exists()
-        lock_path = excel_path.with_name(f"~${excel_path.name}")
-        internal_lock = excel_path.with_suffix(".xlsx.lock")
-        temp_path = excel_path.with_suffix(".xlsx.tmp")
-        if internal_lock.exists() or temp_path.exists():
-            return True
-        if lock_path.exists():
-            return True
+        # File TON TAI: thu mo GHI. Mo duoc = KHONG bi OS khoa (Excel da dong, khong process nao giu handle)
+        # -> marker con sot lai chi la STALE, KHONG tinh la khoa. Mo khong duoc = OS khoa THAT (Excel dang
+        # mo / process khac dang giu) -> khoa.
         try:
             with open(excel_path, "a+b"):
                 return False
@@ -7657,6 +7657,17 @@ Get-CimInstance Win32_Process |
                             self._queue_ve3_skip_log(pd.name, "excel_locked")
                             # Don't block the loop - just skip this iteration and check again in 30s
                             continue
+                        # File mo GHI duoc (khong bi OS khoa) nhung con marker ~$/.lock/.tmp -> STALE (sot lai tu
+                        # crash) -> DON de khoi ket va khoi ban Excel. Worker Excel khong chay -> an toan xoa.
+                        if ep.exists():
+                            for _stale in (ep.with_name(f"~${ep.name}"),
+                                           ep.with_suffix(".xlsx.lock"), ep.with_suffix(".xlsx.tmp")):
+                                try:
+                                    if _stale.exists():
+                                        _stale.unlink()
+                                        self._log(f"[QUEUE/EXCEL] {pd.name}: xoa marker khoa STALE {_stale.name} (file mo duoc)", "WARN", "excel")
+                                except Exception:
+                                    pass
 
                     needs_ve3 = self._project_needs_ve3(pd)
                     if not needs_ve3:
