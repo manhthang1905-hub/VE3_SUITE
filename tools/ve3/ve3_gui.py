@@ -493,26 +493,44 @@ class HomePage(ctk.CTkScrollableFrame):
         self.lbl_overview_vid_today = ctk.CTkLabel(f8, text="0", font=("",20,"bold"), text_color="#E60")
         self.lbl_overview_vid_today.pack(pady=(0,6))
 
-        # ===== SỐ LIỆU POOL — hàng tiles NGAY DƯỚI hàng thống kê trên (đồng bộ style), tự cập nhật 5s =====
-        ov2 = ctk.CTkFrame(c, fg_color=CD, corner_radius=8, border_width=1, border_color=BD)
+        # ===== SỐ LIỆU POOL — 2 TRẠM: TRÁI = ẢNH (acc Pro), PHẢI = VIDEO (acc Ultra). Mỗi trạm 8 ô chỉ số, tự cập nhật =====
+        ov2 = ctk.CTkFrame(c, fg_color=CD, corner_radius=8, border_width=0)
         ov2.grid(row=2, column=0, padx=8, pady=(0,2), sticky="ew")
-        ov2.grid_columnconfigure((0,1,2,3,4,5,6,7), weight=1)
+        ov2.grid_columnconfigure((0, 1), weight=1, uniform="pool")
         self.pool_tiles = {}
-        for i, (key, label, color, bg) in enumerate([
-                ("img_tram", "TRẠM ẢNH",      "#1a73e8", "#EAF4FF"),
-                ("img_acc",  "ACC KHAI THÁC", "#0A7",    "#F5F5F5"),
-                ("img_rest", "CÁCH LY 429",   "#F90",    "#F5F5F5"),
-                ("img_rate", "ẢNH / GIỜ",     "#0A7",    "#EAF4FF"),
-                ("vid_tram", "TRẠM VIDEO",    "#E60",    "#FFF0E6"),
-                ("vid_acc",  "ULTRA SỐNG",    "#0A7",    "#F5F5F5"),
-                ("vid_rest", "CÁCH LY VID",   "#F90",    "#F5F5F5"),
-                ("vid_rate", "VIDEO / GIỜ",   "#E60",    "#FFF0E6")]):
-            f = ctk.CTkFrame(ov2, fg_color=bg, corner_radius=6, border_width=1, border_color=BD)
-            f.grid(row=0, column=i, padx=4, pady=6, sticky="ew")
-            ctk.CTkLabel(f, text=label, font=("",9,"bold"), text_color=T2).pack(pady=(6,2))
-            lb = ctk.CTkLabel(f, text="-", font=("",18,"bold"), text_color=color)
-            lb.pack(pady=(0,6))
-            self.pool_tiles[key] = lb
+
+        def _mk_pool_panel(col, title, accent, headbg, cells, issue_key):
+            panel = ctk.CTkFrame(ov2, fg_color=CD, corner_radius=8, border_width=1, border_color=accent)
+            panel.grid(row=0, column=col, padx=(0, 4) if col == 0 else (4, 0), pady=4, sticky="nsew")
+            for cc in range(4):
+                panel.grid_columnconfigure(cc, weight=1, uniform="cell")
+            head = ctk.CTkFrame(panel, fg_color=headbg, corner_radius=6)
+            head.grid(row=0, column=0, columnspan=4, sticky="ew", padx=4, pady=(4, 2))
+            ctk.CTkLabel(head, text=title, font=("", 12, "bold"), text_color=accent).pack(side="left", padx=8, pady=3)
+            for i, (key, label) in enumerate(cells):
+                r, cc = 1 + i // 4, i % 4
+                cell = ctk.CTkFrame(panel, fg_color="#F7F8FA", corner_radius=6, border_width=1, border_color=BD2)
+                cell.grid(row=r, column=cc, padx=3, pady=3, sticky="nsew")
+                ctk.CTkLabel(cell, text=label, font=("", 8, "bold"), text_color=T3).pack(pady=(5, 0))
+                lb = ctk.CTkLabel(cell, text="-", font=("", 15, "bold"), text_color=accent)
+                lb.pack(pady=(0, 5))
+                self.pool_tiles[key] = lb
+            # THANH VẤN ĐỀ: vì sao ảnh/video/giờ đang chậm -> để fix ngay
+            issue_r = 1 + (len(cells) + 3) // 4
+            issue = ctk.CTkLabel(panel, text="…", font=("", 10, "bold"), text_color=T3,
+                                 anchor="w", justify="left", wraplength=430)
+            issue.grid(row=issue_r, column=0, columnspan=4, sticky="ew", padx=8, pady=(1, 6))
+            self.pool_tiles[issue_key] = issue
+
+        _mk_pool_panel(0, "🖼️ TRẠM ẢNH · acc Pro", "#1a73e8", "#EAF4FF", [
+            ("img_acc", "KHAI THÁC"), ("img_rest", "CÁCH LY 429"), ("img_dead", "CHẾT"), ("img_quota", "QUOTA"),
+            ("img_model", "MODEL"), ("img_rate", "ẢNH / GIỜ"), ("img_done", "TỔNG ẢNH"), ("img_codes", "MÃ × LUỒNG")],
+            "img_issue")
+        _mk_pool_panel(1, "🎬 TRẠM VIDEO · acc Ultra", "#E60", "#FFF0E6", [
+            ("vid_acc", "KHAI THÁC"), ("vid_rest", "CÁCH LY 429"), ("vid_heal", "ĐANG CHỮA"), ("vid_queue", "HÀNG ĐỢI"),
+            ("vid_submit", "SUBMIT/ACC"), ("vid_rate", "VIDEO / GIỜ"), ("vid_done", "TỔNG VIDEO"), ("vid_codes", "MÃ CHẠY")],
+            "vid_issue")
+
         self.pool_status_lbl = ctk.CTkLabel(c, text="Đang đọc pool...", font=("",10), text_color=T2, anchor="w", justify="left")
         self.pool_status_lbl.grid(row=3, column=0, padx=12, pady=(0,4), sticky="w")
 
@@ -674,6 +692,7 @@ class HomePage(ctk.CTkScrollableFrame):
             except Exception:
                 cap = {}; img_codes = "-"; vid_codes = "-"
 
+            GREEN, ORANGE, RED, GRAY = "#0A7", "#FF8C00", "#D22", T3
             # ---------- ẢNH ----------
             h = _get(8789)
             if h:
@@ -687,16 +706,35 @@ class HomePage(ctk.CTkScrollableFrame):
                     top_model = max(mw.items(), key=lambda x: x[1])[0] if mw else "-"
                     _tot = int(h.get('candidates', 0) or 0); _rest = int(h.get('known_resting', 0) or 0); _dead = int(h.get('known_dead', 0) or 0)
                     _work_n = max(0, _tot - _rest - _dead)
-                    vals["img_tram"] = f"{img_codes}×{cap.get('img_per', '?')}"
+                    _rate = h.get('image_per_hour', 0); _qb = h.get("quota_blocked"); _done = h.get('done', 0)
                     vals["img_acc"] = f"{_work_n}/{_tot}"
                     vals["img_rest"] = _rest
-                    vals["img_rate"] = h.get('image_per_hour', 0)
-                    _qb = h.get("quota_blocked")
-                    status.append(f"🖼️ Pool ảnh: ra {h.get('done',0)} | model {top_model} | quota {'⛔ cạn' if _qb else '✅ còn'} | chết {_dead}")
+                    vals["img_dead"] = _dead
+                    vals["img_quota"] = "⛔ cạn" if _qb else "✅ còn"
+                    vals["img_model"] = top_model
+                    vals["img_rate"] = _rate
+                    vals["img_done"] = _done
+                    vals["img_codes"] = f"{img_codes}×{cap.get('img_per', '?')}"
+                    # CHẨN ĐOÁN: vì sao ảnh/giờ chậm
+                    if _qb:
+                        _iss = ("⛔ Quota reCAPTCHA ảnh CẠN toàn cục — ngừng đốt, tự chạy lại khi Google mở", RED)
+                    elif _work_n == 0:
+                        _iss = (f"⛔ 0 acc khai thác — {_rest} cách ly 429 + {_dead} chết đang login lại", RED)
+                    elif _tot and _rest >= max(3, _tot * 0.3):
+                        _iss = (f"⚠️ {_rest}/{_tot} acc cách ly 429 (hết quota model, nghỉ 6h) — chờ hồi", ORANGE)
+                    elif _tot and _dead >= max(3, _tot * 0.3):
+                        _iss = (f"⚠️ {_dead}/{_tot} acc chết (cookie hết hạn) — đang login lại (tối đa 5 chrome/lúc)", ORANGE)
+                    elif not _rate:
+                        _iss = ("⏳ Đang khởi động / chờ job ảnh (chưa ra ảnh)", GRAY)
+                    else:
+                        _iss = (f"✅ Chạy tốt — {_work_n}/{_tot} acc, {_rate} ảnh/giờ, model {top_model}", GREEN)
+                    vals["img_issue"] = _iss
+                    status.append(f"🖼️ Pool ảnh: ra {_done} | model {top_model} | quota {'⛔ cạn' if _qb else '✅ còn'} | chết {_dead}")
                 except Exception:
                     status.append("🖼️ Pool ảnh: ⚠️ /health dữ liệu lạ")
             else:
-                for k in ("img_tram", "img_acc", "img_rest", "img_rate"): vals[k] = "⏸"
+                for k in ("img_acc", "img_rest", "img_dead", "img_quota", "img_model", "img_rate", "img_done", "img_codes"): vals[k] = "⏸"
+                vals["img_issue"] = ("⏸ Pool ảnh chưa chạy (chưa tới phase ảnh / pool tắt)", GRAY)
                 status.append("🖼️ Pool ảnh: ⏸ chưa chạy (chưa tới phase ảnh / pool tắt)")
             # ---------- VIDEO ----------
             v = _get(8788)
@@ -705,16 +743,40 @@ class HomePage(ctk.CTkScrollableFrame):
                     accs = [a for a in (v.get("accounts") or []) if isinstance(a, dict)]
                     resting = [a for a in accs if (a.get("resting_in") or 0) > 1]
                     q429 = sum(1 for a in resting if "quota" in str(a.get("last_kind", "")).lower())
+                    _heal = max(0, len(resting) - q429)   # nghỉ nhưng KHÔNG do quota -> đang chữa login/khác
+                    _thr = sum(1 for a in accs if "throttle" in str(a.get("last_kind", "")).lower())
                     _vtot = len(accs); _vwork = max(0, _vtot - len(resting))
-                    vals["vid_tram"] = f"{vid_codes} mã"
+                    _lims = [int(a.get("submit_limit", 0) or 0) for a in accs if a.get("submit_limit")]
+                    _submit_avg = round(sum(_lims) / len(_lims), 1) if _lims else "-"
+                    _vq = int(v.get('queue', 0) or 0); _vrate = v.get('video_per_hour', 0); _vdone = v.get('done', 0)
                     vals["vid_acc"] = f"{_vwork}/{_vtot}"
                     vals["vid_rest"] = q429
-                    vals["vid_rate"] = v.get('video_per_hour', 0)
-                    status.append(f"🎬 Pool video: ra {v.get('done',0)} | hàng đợi {v.get('queue',0)}")
+                    vals["vid_heal"] = _heal
+                    vals["vid_queue"] = _vq
+                    vals["vid_submit"] = _submit_avg
+                    vals["vid_rate"] = _vrate
+                    vals["vid_done"] = _vdone
+                    vals["vid_codes"] = f"{vid_codes} mã"
+                    # CHẨN ĐOÁN: vì sao video/giờ chậm
+                    if _vwork == 0:
+                        _iss = (f"⛔ 0 Ultra khai thác — {q429} cách ly 429 + {_heal} đang chữa", RED)
+                    elif q429 >= 1:
+                        _iss = (f"⛔ {q429}/{_vtot} Ultra hết quota (nghỉ 6h) — còn {_vwork} chạy, video/giờ giảm", ORANGE)
+                    elif _vq == 0 and not _vrate:
+                        _iss = ("⏳ Hàng đợi trống — CHỜ trạm ảnh xong mới có video (không phải lỗi)", GRAY)
+                    elif _thr >= max(2, _vtot * 0.3):
+                        _iss = (f"⚠️ {_thr} acc bị throttle (bắn nhanh quá) — submit tự giảm (AIMD), sẽ hồi", ORANGE)
+                    elif _heal >= 1:
+                        _iss = (f"⚠️ {_heal} acc đang chữa login (401/cookie) — nền, không chặn", ORANGE)
+                    else:
+                        _iss = (f"✅ Chạy tốt — {_vwork}/{_vtot} Ultra, {_vrate} video/giờ, hàng đợi {_vq}", GREEN)
+                    vals["vid_issue"] = _iss
+                    status.append(f"🎬 Pool video: ra {_vdone} | hàng đợi {_vq}")
                 except Exception:
                     status.append("🎬 Pool video: ⚠️ /health dữ liệu lạ")
             else:
-                for k in ("vid_tram", "vid_acc", "vid_rest", "vid_rate"): vals[k] = "⏸"
+                for k in ("vid_acc", "vid_rest", "vid_heal", "vid_queue", "vid_submit", "vid_rate", "vid_done", "vid_codes"): vals[k] = "⏸"
+                vals["vid_issue"] = ("⏸ Pool video chưa chạy (chưa tới phase video)", GRAY)
                 status.append("🎬 Pool video: ⏸ chưa chạy (chưa tới phase video)")
             status.append(f"⟳ {_time.strftime('%H:%M:%S')}")
             self._pool_poll_busy = False   # xong -> mở cờ cho lượt sau (đặt TRƯỚC reschedule)
@@ -731,9 +793,15 @@ class HomePage(ctk.CTkScrollableFrame):
         tiles = getattr(self, "pool_tiles", {})
         for k, val in vals.items():
             lb = tiles.get(k)
-            if lb is not None:
-                try: lb.configure(text=str(val))
-                except Exception: pass
+            if lb is None:
+                continue
+            try:
+                if isinstance(val, tuple):   # ô VẤN ĐỀ: (text, color)
+                    lb.configure(text=str(val[0]), text_color=val[1])
+                else:
+                    lb.configure(text=str(val))
+            except Exception:
+                pass
         try: self.pool_status_lbl.configure(text=status_text)
         except Exception: pass
 
