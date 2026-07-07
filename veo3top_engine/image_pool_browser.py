@@ -550,7 +550,12 @@ class Account:
             for _try in range(n_try):
                 _pxy = _pool[_try % len(_pool)]
                 _tag = _pxy.split("//")[-1] if _pxy else "IP máy"
-                self._wipe_profile(log); time.sleep(2)
+                # LẦN ĐẦU: KHÔNG xóa profile -> GIỮ cookie (reuse-check có thể fail THOÁNG QUA do CDP chậm/lỗi, mà
+                # account VẪN logged-in -> login sẽ thấy 'Already logged in' luôn, khỏi out oan). Chỉ XÓA từ retry
+                # (login đầu fail thật -> profile bẩn/kẹt -> chrome trắng làm lại). -> hết 'bị out nhiều' do tự phá cookie.
+                if _try > 0:
+                    self._wipe_profile(log)
+                time.sleep(2)
                 try:
                     ok = login_fn({"id": self.email, "password": self.password, "totp_secret": self.totp},
                                   chrome_portable=_CHROME, profile_dir=self.profile, worker_id=200 + self.idx, proxy_arg=_pxy)
