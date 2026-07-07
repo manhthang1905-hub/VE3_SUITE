@@ -324,6 +324,7 @@ class HomePage(ctk.CTkScrollableFrame):
         self._ui_progress_cache = {}
         self.grid_columnconfigure(0, weight=1)
         self._mk_projects()      # 1. Danh sch m
+        self._mk_pool_stats()    # 1b. So lieu pool (hien duoi Projects)
         self._mk_queue_state()   # 2. Tin
         self._mk_log()           # 3. Nht k
         self._mk_process_monitor()
@@ -425,6 +426,14 @@ class HomePage(ctk.CTkScrollableFrame):
     def _ensure_progress_cards(self, count):
         # Progress cards removed - this method is now a no-op
         pass
+
+    def _mk_pool_stats(self):
+        """Panel SỐ LIỆU POOL hiện NGAY dưới Projects (luôn thấy, không cần mở Logs)."""
+        c = self._card(1, "📊 Số liệu Pool (ảnh + video) — tự cập nhật 5s")
+        self.pool_overview_box = ctk.CTkTextbox(c, height=190, font=("Consolas", 12), fg_color="#0d1117",
+                                                text_color="#c9d1d9", corner_radius=4, wrap="none")
+        self.pool_overview_box.grid(row=1, column=0, sticky="ew", padx=8, pady=(0, 6))
+        self.pool_overview_box.configure(state="disabled")
 
     def _mk_projects(self):
         c = self._card(0, "Projects")
@@ -634,8 +643,8 @@ class HomePage(ctk.CTkScrollableFrame):
         L = []
         # ---------- 🏭 NHÀ MÁY TỰ TÍNH (linh hoạt theo nhân sự thực) ----------
         try:
-            cap = self._compute_pool_capacity()
-            cfgd = getattr(self, "config_data", {}) or {}
+            cap = self.app._compute_pool_capacity()
+            cfgd = getattr(self.app, "config_data", {}) or {}
             _ic = int(cfgd.get("max_concurrent_image_codes", 0) or 0)
             _vc = int(cfgd.get("max_concurrent_video_codes", 0) or 0)
             _img_codes = _ic if _ic > 0 else cap["img_codes"]
@@ -693,13 +702,17 @@ class HomePage(ctk.CTkScrollableFrame):
         L.append("")
         L.append(f"⟳ tự cập nhật mỗi 5s — {_time.strftime('%H:%M:%S')}")
 
-        try:
-            self.pool_stat_box.configure(state="normal")
-            self.pool_stat_box.delete("1.0", "end")
-            self.pool_stat_box.insert("1.0", "\n".join(L))
-            self.pool_stat_box.configure(state="disabled")
-        except Exception:
-            pass
+        _txt = "\n".join(L)
+        for _box in (getattr(self, "pool_overview_box", None), getattr(self, "pool_stat_box", None)):
+            if _box is None:
+                continue
+            try:
+                _box.configure(state="normal")
+                _box.delete("1.0", "end")
+                _box.insert("1.0", _txt)
+                _box.configure(state="disabled")
+            except Exception:
+                pass
         try:
             self.after(5000, self._poll_pool_health)
         except Exception:
@@ -1712,24 +1725,21 @@ class SettingsPage(ctk.CTkScrollableFrame):
             e = ctk.CTkEntry(knob, width=width, height=28, corner_radius=4, font=("",11), fg_color=EN, border_color=BD, justify="center")
             e.grid(row=row, column=col*2+1, pady=(0,3), sticky="w")
             return e
-        # HANG 1: So slot anh (concurrency) | So ma video song song | Cach ly acc dot
-        self.ent_img_accounts = _mk_knob(0, "Slot anh:")
-        self.ent_codes       = _mk_knob(1, "So ma song song:", width=44)
-        self.ent_img_giveup  = _mk_knob(2, "Cach ly:")
-        self.ent_iso_hours   = _mk_knob(3, "Nghi 429 (gio):", width=40)   # cach ly account het quota ngay (anh+video)
+        # HANG 1: account pool anh | so MA moi tram (0=TU TINH theo nhan su) | cach ly 429
+        self.ent_img_accounts = _mk_knob(0, "Account pool anh:", width=44)
+        self.ent_img_codes    = _mk_knob(1, "Ma ANH (0=auto):", width=40)
+        self.ent_vid_codes    = _mk_knob(2, "Ma VIDEO (0=auto):", width=40)
+        self.ent_iso_hours    = _mk_knob(3, "Nghi 429 (gio):", width=40)
         # HANG 2 (TUNE THEO MAY): token chrome anh/video + recycle + luong video
         self.ent_img_tokchrome = _mk_knob(0, "Token chrome anh:", width=44, row=1)
         self.ent_img_recycle   = _mk_knob(1, "Recycle token:", width=44, row=1)
         self.ent_vid_tokchrome = _mk_knob(2, "Token chrome video:", width=44, row=1)
         self.ent_vid_workers   = _mk_knob(3, "Luong/acc video:", width=44, row=1)
-        # HANG 3: TACH 2 TRAM (backend pool) - so MA song song moi tram (anh nhieu de day pool 96, video it theo 10 Ultra)
-        self.ent_img_codes = _mk_knob(0, "Ma ANH (0=tu tinh):", width=40, row=3)
-        self.ent_vid_codes = _mk_knob(1, "Ma VIDEO (0=tu tinh):", width=40, row=3)
         # CHU THICH y nghia (chinh theo may -> restart de ap) — dat trong frame knob, hang 2
         ctk.CTkLabel(knob, justify="left", font=("",9), text_color=T2, anchor="w", wraplength=360,
-                     text=("Slot anh=so account song song (nhe, cookie-based). Token chrome=so chrome-trang de token "
-                           "(CPU la tran ~6-8). Recycle=N token/chrome roi lam moi (cao=nhanh). Token video=video async can it. "
-                           "Luong/acc video=submit/account ultra. Restart de ap.")
+                     text=("Ma ANH/VIDEO = so ma song song moi TRAM; 0 = TU TINH theo nhan su dang khai thac (xem tab '📊 So lieu'). "
+                           "Account pool anh = tran so account nap. Token chrome = so chrome-trang de token (CPU la tran ~6-8). "
+                           "Recycle = N token/chrome roi lam moi. Luong/acc video = submit/account ultra. Restart de ap.")
                      ).grid(row=2, column=0, columnspan=8, padx=(0,4), pady=(4,0), sticky="w")
         ctk.CTkButton(gc, text="⚙ Auto Setup (theo máy)", width=180, height=30, fg_color="#00897B", hover_color="#00695C", text_color="#FFF", font=("",11,"bold"), corner_radius=6, command=self._auto_setup).grid(row=8, column=0, columnspan=3, padx=10, pady=(6,2))
         ctk.CTkButton(gc, text="Save settings", width=120, height=30, fg_color=AC, hover_color=AC2, text_color="#FFF", font=("",11,"bold"), corner_radius=6, command=self._save).grid(row=9, column=0, columnspan=3, padx=10, pady=(4,4))
@@ -2287,8 +2297,6 @@ class SettingsPage(ctk.CTkScrollableFrame):
             self.sw_img_hide.deselect()
         try:
             for _ent, _key, _def in ((self.ent_img_accounts, "image_pool_accounts", 24),
-                                     (self.ent_codes, "max_concurrent_codes", 0),
-                                     (self.ent_img_giveup, "image_swap_giveup", 2),
                                      (self.ent_img_tokchrome, "image_token_chromes", 6),
                                      (self.ent_img_recycle, "image_token_recycle", 10),
                                      (self.ent_vid_tokchrome, "video_token_chromes", 3),
@@ -2374,8 +2382,8 @@ class SettingsPage(ctk.CTkScrollableFrame):
             except Exception:
                 pass
         _set(self.ent_img_accounts, img_slots)
-        _set(self.ent_codes, codes)
-        _set(self.ent_img_giveup, giveup)
+        _set(self.ent_img_codes, 0)     # 0 = TU TINH theo nhan su (khong dien tay)
+        _set(self.ent_vid_codes, 0)
         _set(self.ent_img_tokchrome, tok_img)
         _set(self.ent_img_recycle, recycle)
         _set(self.ent_vid_tokchrome, tok_vid)
@@ -2412,8 +2420,6 @@ class SettingsPage(ctk.CTkScrollableFrame):
             except Exception:
                 cfg[key] = default
         _knob(self.ent_img_accounts, "image_pool_accounts", 24, 1, 100)
-        _knob(self.ent_codes,       "max_concurrent_codes", 0, 0, 100)   # 0 = khong gioi han so ma
-        _knob(self.ent_img_giveup,  "image_swap_giveup", 2, 1, 20)
         _knob(self.ent_img_tokchrome, "image_token_chromes", 6, 1, 16)   # token chrome anh (CPU la tran)
         _knob(self.ent_img_recycle,   "image_token_recycle", 10, 2, 50)  # recycle token
         _knob(self.ent_vid_tokchrome, "video_token_chromes", 3, 1, 16)   # token chrome video
