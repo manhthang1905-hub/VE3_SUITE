@@ -597,6 +597,15 @@ class Account:
                                          image_inputs=image_inputs, app_type=fc.APP_TYPE_ANDROID)
         eproxy = self.ipv6.proxy_url() if self.ipv6 else None
         kind, data = fc.generate_image(bearer, proj, payload, proxy=eproxy, bypass=True)
+        # 401: BEARER hết hạn SỚM (bearer sống ~30' còn COOKIE sống NHIỀU NGÀY) -> REFRESH bearer TỪ COOKIE (rẻ, curl,
+        # KHÔNG mở chrome) rồi thử LẠI 1 lần TRƯỚC khi kết luận cookie chết -> account cookie-OK KHỎI bị login lại OAN.
+        # Cookie THẬT chết -> _refresh_from_cookie trả None -> mới reauth (login chrome). (Đồng bộ với video pool.)
+        if kind == "auth" and _AUTHCACHE is not None and d and d.get("cookie"):
+            nd = _AUTHCACHE._refresh_from_cookie(self.email, d)
+            fresh = (nd or {}).get("bearer")
+            if fresh and fresh != bearer:
+                bearer = fresh
+                kind, data = fc.generate_image(bearer, proj, payload, proxy=eproxy, bypass=True)
         # "other" = lỗi TRANSIENT (mạng/response lạ, ~3%) -> RETRY bypass (rẻ, curl). TUYỆT ĐỐI KHÔNG mở token
         # factory (nặng: 4 chrome mint + recycle -> chrome spike 68, RAM 5GB, CPU 100% — đo được từ monitor).
         # Trước đây fallback cả "other" -> token factory churn liên tục = gốc lag "càng chạy càng nặng".
@@ -1078,8 +1087,9 @@ class ImagePoolBrowser:
                     except Exception:
                         time.sleep(1); continue
                 elif kind == "auth":
-                    self.log(f"🔑 {a.email} [{tag}]: session 401 (bearer chết) -> login lại")
-                    return ("reauth", "session 401")
+                    # tới đây = ĐÃ refresh bearer từ cookie mà VẪN 401 -> cookie THẬT chết -> mới login lại
+                    self.log(f"🔑 {a.email} [{tag}]: cookie hết hạn (đã thử refresh bearer) -> login lại")
+                    return ("reauth", "cookie hết hạn")
                 elif kind == "quota":
                     # quota MODEL that su (RESOURCE_EXHAUSTED khong kem reCAPTCHA) -> DOI MODEL (Pro->Nano2->Lite)
                     a.last_kind = "quota"; a.model_rest[model] = time.time() + MODEL_REST_SECS
