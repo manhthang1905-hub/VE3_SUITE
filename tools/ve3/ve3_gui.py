@@ -3878,7 +3878,22 @@ Get-CimInstance Win32_Process |
                     if code in seen:
                         continue
                     got = False
-                    for sub, do_img in ((pd / "img", True), (pd / "vid", False)):
+                    # ANH hom nay: dem o img_backup (anh GOC day du - copy2 giu mtime goc). img/ sau finalize
+                    # XOA png da thanh video -> dem img/ bi THIEU. Project chua finalize (chua co img_backup) -> fallback img/.
+                    img_src = (pd / "img_backup") if (pd / "img_backup").exists() else (pd / "img")
+                    if img_src.exists():
+                        try:
+                            if img_src.stat().st_mtime >= today_start:
+                                for f in list(img_src.glob("*.png")) + list(img_src.glob("*.jpg")):
+                                    try:
+                                        if f.stat().st_mtime >= today_start:
+                                            imgs += 1; got = True
+                                    except OSError:
+                                        pass
+                        except OSError:
+                            pass
+                    # VIDEO hom nay: mp4 o img/ (I2V merged) + vid/
+                    for sub in (pd / "img", pd / "vid"):
                         if not sub.exists():
                             continue
                         try:
@@ -3886,13 +3901,6 @@ Get-CimInstance Win32_Process |
                                 continue   # prune: khong co file moi hom nay
                         except OSError:
                             continue
-                        if do_img:
-                            for f in list(sub.glob("*.png")) + list(sub.glob("*.jpg")):
-                                try:
-                                    if f.stat().st_mtime >= today_start:
-                                        imgs += 1; got = True
-                                except OSError:
-                                    pass
                         for f in sub.glob("*.mp4"):   # img/{n}.mp4 (I2V) + vid/{n}.mp4 = video
                             try:
                                 if f.stat().st_mtime >= today_start:
