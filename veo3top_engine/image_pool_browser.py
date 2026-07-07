@@ -272,26 +272,19 @@ def _kill_pool_chromes():
 
 
 def _startup_clean_slate(port=8789):
-    """START TỰ DỌN (chống kẹt/chồng instance + profile khoá — khỏi phải kill tay):
-    1) KILL instance image_pool_browser CŨ (khác PID mình) -> free :8789 + hết zombie process (kể cả khi 8789 down).
-    2) KILL chrome pool (account + token factory).
-    3) XOÁ profile lock cũ (Singleton*/lockfile) chrome crash để lại -> hết 'user folder conflict' khi login."""
+    """START TỰ DỌN (an toàn — KHỎI kill tay): kill chrome pool cũ + XOÁ profile lock cũ (Singleton*/lockfile) chrome
+    crash để lại -> hết 'the user folder does not conflict with the open browser' khi login. KHÔNG kill process theo
+    command-line (nguy hiểm: khớp cả shell/GUI có chuỗi 'image_pool_browser' -> kill nhầm). Trùng instance -> singleton
+    guard /health ở dưới lo."""
     import glob
-    me = os.getpid()
-    try:
-        _ps = ("Get-CimInstance Win32_Process | Where-Object { $_.CommandLine -like '*image_pool_browser*' -and "
-               "$_.ProcessId -ne " + str(me) + " } | ForEach-Object { taskkill /F /T /PID $_.ProcessId 2>$null }")
-        subprocess.run(["powershell", "-NoProfile", "-Command", _ps],
-                       capture_output=True, timeout=30, creationflags=0x08000000)
-        _log("startup clean-slate: đã kill instance image_pool cũ (nếu có) + chrome pool + xoá profile lock")
-    except Exception:
-        pass
     _kill_pool_chromes(); time.sleep(1)
     try:
+        n = 0
         for pat in ("SingletonLock", "SingletonCookie", "SingletonSocket", "lockfile"):
             for lk in glob.glob(os.path.join(POOL_PROFILES, "**", pat), recursive=True):
-                try: os.remove(lk)
+                try: os.remove(lk); n += 1
                 except Exception: pass
+        _log(f"startup clean-slate: kill chrome pool + xoá {n} profile lock cũ (chống 'user folder conflict')")
     except Exception:
         pass
 
@@ -1353,6 +1346,19 @@ def main():
     except Exception:
         pass   # chưa ai chạy -> tiếp tục
     _FACTORY = ImagePoolBrowser(n_slots=args.accounts)
+    # SINGLETON AN TOÀN (KHÔNG kill process): bind :port TRƯỚC start() với allow_reuse_address=False -> instance TRÙNG
+    # bind FAIL -> THOÁT ngay (khỏi làm việc nặng start() 2 lần + khỏi chồng đống). Ai bind trước thắng.
+    class _SingletonSrv(ThreadingHTTPServer):
+        allow_reuse_address = False
+    try:
+        srv = _SingletonSrv(("127.0.0.1", args.port), _Handler)
+    except OSError:
+        _log(f"pool ẢNH đã chạy trên :{args.port} (bind fail) -> THOÁT (tránh trùng instance).")
+        return
+    # SERVE /health NGAY (thread) — start() load ~100 account chậm; phục vụ liền -> GUI thấy pool 'lên' sớm (candidates
+    # tăng dần khi start xong) thay vì 'chưa chạy' suốt lúc load.
+    threading.Thread(target=srv.serve_forever, daemon=True, name="imgpool-http").start()
+    _log(f"HTTP ảnh browser nghe 127.0.0.1:{args.port} (đang phục vụ, start account nền)")
     _FACTORY.start()
     # BACKSTOP zombie: dọn chrome khi tiến trình kết thúc kiểu nào (atexit + SIGTERM/SIGINT). taskkill /F thì
     # clean-slate lần START sau lo (đã gồm token factory). -> KHÔNG để chrome zombie khi tắt tool.
@@ -1366,10 +1372,10 @@ def main():
         if _s is not None:
             try: signal.signal(_s, _on_sig)
             except Exception: pass
-    srv = ThreadingHTTPServer(("127.0.0.1", args.port), _Handler)
-    _log(f"HTTP ảnh browser nghe 127.0.0.1:{args.port} (POST /generate_image)")
+    # start() xong -> pool chạy; serve /health ở thread nền. Giữ main sống tới khi tắt.
     try:
-        srv.serve_forever()
+        while True:
+            time.sleep(3600)
     finally:
         _FACTORY.stop()
 
