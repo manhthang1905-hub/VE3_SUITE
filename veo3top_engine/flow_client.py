@@ -145,11 +145,19 @@ def classify(resp):
     #    (PUBLIC_ERROR_UNUSUAL_ACTIVITY_TOO_MUCH_TRAFFIC) -> phải check reCAPTCHA/RESOURCE_EXHAUSTED TRƯỚC.
     #  - TOO_MUCH_TRAFFIC "trần" (không kèm reCAPTCHA) = rate-limit theo IP -> "ratelimit" (đổi egress cứu được).
     if resp.status_code == 429 or "TOO_MUCH_TRAFFIC" in txt or "RESOURCE_EXHAUSTED" in txt:
+        # PHÂN BIỆT bằng REASON (mã 429/RESOURCE_EXHAUSTED giống nhau cho NHIỀU loại — phải đọc reason):
+        #  - USER_REQUESTS_THROTTLED = GIỚI HẠN TỐC ĐỘ/BURST (account-wide, hồi VÀI GIÂY; đã đo ngừng burst 1-2'
+        #    -> submit lại 200 ngay). -> "throttle": nghỉ NGẮN + giảm submit đồng thời, TUYỆT ĐỐI KHÔNG cách ly dài.
+        #  - RESOURCE_EXHAUSTED khác (hết quota MODEL/ngày — per-model, model khác vẫn 200) -> "recaptcha_quota".
+        if "USER_REQUESTS_THROTTLED" in txt:
+            return "throttle", None
         if "RESOURCE_EXHAUSTED" in txt or "reCAPTCHA" in txt or "UNUSUAL_ACTIVITY" in txt:
             return "recaptcha_quota", None
         return "ratelimit", None
     try:
         reason = resp.json()["error"]["details"][0]["reason"]
+        if "USER_REQUESTS_THROTTLED" in reason:
+            return "throttle", None
         if reason == "PUBLIC_ERROR_UNUSUAL_ACTIVITY":
             return "unusual", None
         if "TOO_MUCH_TRAFFIC" in reason:

@@ -41,6 +41,11 @@ JOB_MAX_CYCLES = 40        # 1 job được chuyền/thử tối đa bao nhiêu 
 REST_SOFT = 8              # sau 1 lượt 40 lần vẫn chưa qua -> nghỉ NGẮN 8s cho account thở rồi worker pull tiếp
 # 429 recaptcha_quota = HẾT QUOTA VIDEO của account (per-account) -> grind token VÔ ÍCH. Thử VID_QUOTA_GIVEUP lần
 # (phòng thoáng qua), chắc chắn 429 -> NGHỈ 3h + đổi account (chỉ 10 account Ultra -> nghỉ dài, khỏi đốt token factory).
+# SUBMIT ĐỒNG THỜI/ACCOUNT: bắn dồn > ~4-5 submit cùng lúc/account -> kích THROTTLE (đã đo: 40 dồn -> 5 pass, 35 throttled).
+# Giới hạn ~4 submit đồng thời/account (poll/download vẫn song song thoải mái) -> khai thác mượt, không tự kích throttle.
+SUBMIT_CONCURRENCY = int(os.environ.get("VEO3TOP_VID_SUBMIT_CONCURRENCY", "4") or "4")
+# THROTTLE (USER_REQUESTS_THROTTLED) hồi trong vài giây -> nghỉ NGẮN, KHÔNG cách ly (khác hết-quota).
+VID_THROTTLE_REST = float(os.environ.get("VEO3TOP_VID_THROTTLE_REST", "4") or "4")   # ~4s (+jitter)
 VID_QUOTA_GIVEUP = int(os.environ.get("VEO3TOP_VID_QUOTA_GIVEUP", "5") or "5")
 # Chỉnh qua GUI settings (pool_isolation_hours) -> env. Mặc định 6h (đồng bộ với ảnh).
 VID_QUOTA_REST = int(os.environ.get("VEO3TOP_VID_QUOTA_REST", "21600") or "21600")   # 6h
@@ -65,6 +70,7 @@ class Account:
         self.resume_at = 0.0
         self.rest_streak = 0
         self.busy = False
+        self.submit_sem = threading.Semaphore(SUBMIT_CONCURRENCY)   # giới hạn submit ĐỒNG THỜI/account (chống burst -> throttle)
         self.wins = 0; self.fails = 0
         self.egress_wins = {}     # egress name -> count
         self.last_kind = ""       # loại lỗi gần nhất (ratelimit/recaptcha_quota/unusual...)
@@ -347,7 +353,8 @@ class VideoFactory:
             # (đó là nguồn UNUSUAL). Đã đo video 13/13 submit 200. Token='android_bypass', app_type=ANDROID.
             payload = fc.build_payload(job["prompt"], project, fc.BYPASS_TOKEN, seed,
                                        aspect=aspect, reference_media_id=media_id, app_type=fc.APP_TYPE_ANDROID)
-            kind, data = fc.generate(bearer, payload, url=fc.GEN_I2V, proxy=eproxy, bypass=True)
+            with account.submit_sem:   # giới hạn submit ĐỒNG THỜI/account -> không burst -> không tự kích throttle
+                kind, data = fc.generate(bearer, payload, url=fc.GEN_I2V, proxy=eproxy, bypass=True)
             # bypass trượt (unusual/other) -> RETRY bypass vài lần (rẻ); liên tiếp >= BYPASS_RETRY mới mint WEB
             # token thật fallback. KHÔNG fallback ratelimit/quota/auth/project (xử lý ở nhánh dưới).
             if kind in ("unusual", "other"):
@@ -359,7 +366,8 @@ class VideoFactory:
                 if tok:
                     payload = fc.build_payload(job["prompt"], project, tok, seed,
                                                aspect=aspect, reference_media_id=media_id, app_type=fc.APP_TYPE_WEB)
-                    kind, data = fc.generate(bearer, payload, url=fc.GEN_I2V, proxy=eproxy, cookie=cookie)
+                    with account.submit_sem:
+                        kind, data = fc.generate(bearer, payload, url=fc.GEN_I2V, proxy=eproxy, cookie=cookie)
             if kind == "ok":
                 account.note_egress_win(ename)
                 op = (fc.operation_names(data) or [None])[0]
@@ -416,13 +424,19 @@ class VideoFactory:
                     # TỐT + upload reference lại đúng project). KHÔNG grind token (không phải lỗi token). Self-heal 24/7.
                     account.mark_project_bad(project)
                     return "retry_soft"
+                elif kind == "throttle":
+                    # GIỚI HẠN TỐC ĐỘ/BURST (USER_REQUESTS_THROTTLED) — hồi trong VÀI GIÂY. NGHỈ NGẮN rồi bắn lại
+                    # CÙNG account. KHÔNG tính quota_streak, TUYỆT ĐỐI KHÔNG cách ly (đã đo: ngừng burst 1-2' -> 200 ngay).
+                    quota_streak = 0
+                    account.last_kind = "throttle"
+                    time.sleep(VID_THROTTLE_REST + random.uniform(0, VID_THROTTLE_REST))
                 elif kind == "recaptcha_quota":
-                    # 429 RESOURCE_EXHAUSTED = HẾT QUOTA VIDEO của account (per-account) -> grind token VÔ ÍCH.
-                    # Thử vài lần (phòng thoáng qua), CHẮC CHẮN 429 -> NGHỈ 3h + ĐỔI ACCOUNT (retry_soft).
+                    # HẾT QUOTA THẬT (RESOURCE_EXHAUSTED KHÁC throttle — hết quota model/ngày). Hiếm với video Ultra.
+                    # Thử vài lần (phòng thoáng qua), CHẮC CHẮN -> NGHỈ dài + ĐỔI ACCOUNT (retry_soft).
                     quota_streak += 1
                     if quota_streak >= VID_QUOTA_GIVEUP:
                         account.rest(VID_QUOTA_REST)
-                        self.log(f"VIDEO: {account.email} 429 hết quota {quota_streak} lần -> nghỉ {VID_QUOTA_REST//3600}h, đổi account khác")
+                        self.log(f"VIDEO: {account.email} HẾT QUOTA thật {quota_streak} lần -> nghỉ {VID_QUOTA_REST//3600}h, đổi account khác")
                         return "retry_soft"
                     time.sleep(1.0 + random.uniform(0, 0.8))
                 else:

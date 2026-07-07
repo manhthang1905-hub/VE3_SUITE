@@ -611,6 +611,11 @@ class Account:
         # Trước đây fallback cả "other" -> token factory churn liên tục = gốc lag "càng chạy càng nặng".
         if kind == "other":
             return "retry", {"err": "bypass 'other' transient -> thử lại bypass (KHÔNG mở token factory)"}
+        if kind == "throttle":
+            # GIỚI HẠN TỐC ĐỘ (USER_REQUESTS_THROTTLED) — hồi vài giây. Nghỉ NGẮN rồi thử lại; KHÔNG đổi model,
+            # KHÔNG cách ly, KHÔNG mở token factory. (Ảnh hiếm gặp vì slot serialize account.)
+            time.sleep(1.5 + random.uniform(0, 1.5))
+            return "retry", {"err": "throttle -> nghỉ ngắn thử lại"}
         # CHỈ "unusual" (reCAPTCHA reject thật — cực hiếm với bypass) mới fallback WEB token. Idle >5' tự tắt.
         if kind == "unusual":
             tok = _img_token_factory().get(timeout=40)
