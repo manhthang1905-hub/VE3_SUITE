@@ -443,27 +443,31 @@ class Account:
             pass
 
     def _cookie_alive(self, tries=3):
-        """Cookie account CÒN SỐNG không (mint được bearer)? -> phân biệt 'còn session THẬT' (giữ) vs 'present nhưng
-        CHẾT' (phải login mới). Dùng ở guard _wipe_profile + quyết định reauth: sống -> giữ; chết -> xóa/login.
-        THỬ NHIỀU LẦN: bearer_from_cookie có thể fail THOÁNG QUA (mạng/IPv6 1 nhịp) cho cookie VẪN SỐNG ->
-        đừng kết luận chết vội = chống wipe OAN -> chống 'account out nhiều phải login lại'."""
+        """Cookie account có ĐÁNG GIỮ không? Dùng ở guard _wipe_profile + quyết định reauth.
+        CHỐT chống churn 96->77: CHỈ coi CHẾT khi có BẰNG CHỨNG chết (fc.cookie_liveness == 'dead': session 200 nhưng
+        hết hạn/không token). Lỗi 'transient' (mạng/timeout/429 rate-limit khi 96 account cùng poll session) -> GIỮ,
+        KHÔNG wipe/login OAN. Trả True = GIỮ (sống hoặc chưa chắc), False = CHẾT thật (mới được wipe/login)."""
         try:
             d = _AUTHCACHE._load(self.email) if _AUTHCACHE is not None else None
             ck = (d or {}).get("cookie")
         except Exception:
             ck = None
         if not ck:
-            return False   # KHÔNG có cookie = out thật (không retry)
+            return False   # KHÔNG có cookie = out thật
+        saw_dead = False
         for i in range(max(1, tries)):
             try:
-                b, _ = fc.bearer_from_cookie(ck)
-                if b:
-                    return True
+                st = fc.cookie_liveness(ck)
             except Exception:
-                pass
+                st = "transient"
+            if st == "alive":
+                return True            # SỐNG chắc chắn -> giữ
+            if st == "dead":
+                saw_dead = True        # BẰNG CHỨNG chết (200 hết hạn) — không đổi giữa các lần
             if i < tries - 1:
                 time.sleep(1.5)
-        return False
+        # Hết retry chưa thấy 'alive': chỉ CHẾT nếu có proof 'dead'; toàn 'transient' (429/mạng) -> GIỮ (chống wipe oan)
+        return not saw_dead
 
     def _wipe_profile(self, log=None):
         """XÓA SẠCH dữ liệu profile Chrome cho account bị OUT/session zombie. Google hay giữ 1 session-zombie

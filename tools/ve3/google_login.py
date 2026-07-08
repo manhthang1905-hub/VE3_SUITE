@@ -982,11 +982,16 @@ def login_google_chrome(account_info: dict, chrome_portable: str = None, profile
         options.set_local_port(base_port)  # Dùng set_local_port như drission_flow_api.py
         log(f"Using port: {base_port} (worker_id={worker_id})")
 
-        # ẨN CHROME LOGIN: VEO3TOP_HIDE_CHROME=1 -> THU NHỎ xuống taskbar (--start-minimized), KHÔNG chắn màn hình.
-        # TUYỆT ĐỐI KHÔNG offscreen -32000: ĐO THẬT 2026-07-08 -> -32000 làm Chrome huỷ renderer cửa sổ ẩn ->
-        # PageDisconnectedError/BrowserConnectError NGAY bước password -> login FAIL 1135/309 (qua cả WARP/4G/IP máy)
-        # -> kéo wipe cookie -> churn -> pool chết. Minimized: cửa sổ render BÌNH THƯỜNG (CDP click qua Input event,
-        # không cần thấy) -> login/2FA chạy được mà vẫn ẩn. KHÔNG headless (Google chặn headless login).
+        # CHỐNG THROTTLE RENDERER khi cửa sổ ẩn/nền — ĐÂY LÀ GỐC THẬT làm -32000 & minimize gây
+        # PageDisconnectedError + labs.google 'error=Callback' ("Try signing in with a different account"):
+        # Chrome TREO renderer cửa sổ ẩn giữa chuỗi redirect OAuth -> callback hỏng -> login fail. Bật các cờ này
+        # để renderer cửa sổ ẩn VẪN CHẠY BÌNH THƯỜNG -> OAuth/login hoàn tất mà vẫn ẩn được. (Luôn bật, vô hại khi hiện.)
+        for _af in ("--disable-backgrounding-occluded-windows", "--disable-renderer-backgrounding",
+                    "--disable-background-timer-throttling"):
+            try: options.set_argument(_af)
+            except Exception: pass
+        # ẨN CHROME LOGIN: VEO3TOP_HIDE_CHROME=1 -> --start-minimized (thu nhỏ taskbar). KHÔNG offscreen -32000
+        # (huỷ renderer) và KHÔNG headless (Google chặn). Kèm cờ chống-throttle ở trên -> ẩn mà login vẫn chạy.
         if os.environ.get("VEO3TOP_HIDE_CHROME", "0") == "1":
             try:
                 options.set_argument("--start-minimized")

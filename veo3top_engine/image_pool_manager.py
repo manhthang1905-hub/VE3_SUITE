@@ -41,11 +41,13 @@ def cookie_check(email, sf=None):
     d = _AC._load(email)
     if not d or not d.get("cookie"):
         return "no_cookie"
+    # DÙNG cookie_liveness (phân biệt dead THẬT vs transient 429/mạng) -> KHÔNG báo 'cookie_dead' OAN khi endpoint
+    # rate-limit (96 acc cùng poll). transient/alive -> coi SỐNG (khỏi login lại vô ích); chỉ dead THẬT -> cookie_dead.
     try:
-        bearer, _ = fc.bearer_from_cookie(d["cookie"])
+        st = fc.cookie_liveness(d["cookie"])
     except Exception:
-        bearer = None
-    return "alive" if bearer else "cookie_dead"
+        st = "transient"
+    return "cookie_dead" if st == "dead" else "alive"
 
 
 def checkcookies_parallel(concurrency=12, log=print, on_done=None, sf=None, acct_loader=None):

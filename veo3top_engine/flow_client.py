@@ -296,6 +296,44 @@ def bearer_from_cookie(cookie, timeout=25):
     return None, None
 
 
+def cookie_liveness(cookie, timeout=25):
+    """PHÂN LOẠI cookie (KHÔNG chỉ sống/chết) — dùng để KHỎI wipe/login OAN khi endpoint rate-limit.
+    Trả:
+      'alive'     = 200 + access_token + expires còn hạn (cookie SỐNG chắc chắn).
+      'dead'      = 200 nhưng KHÔNG token / expires quá khứ (BẰNG CHỨNG cookie hết hạn thật).
+      'transient' = lỗi mạng/timeout HOẶC HTTP != 200 (429 rate-limit, 5xx...) -> KHÔNG kết luận chết,
+                    cookie có thể vẫn sống. TUYỆT ĐỐI KHÔNG wipe/login vì cái này (chống churn 96->77 khi
+                    96 account cùng poll session -> Google 429 -> tưởng chết hàng loạt)."""
+    if not cookie:
+        return "dead"   # không có cookie = out thật
+    H = {"Cookie": cookie, "User-Agent": UA, "Referer": "https://labs.google/", "Accept": "application/json"}
+    kw = {"impersonate": IMPERSONATE, "timeout": timeout}
+    if DIRECT_IFACE:
+        kw["interface"] = DIRECT_IFACE
+    try:
+        r = _cffi.get("https://labs.google/fx/api/auth/session", headers=H, **kw)
+    except Exception:
+        return "transient"          # mạng/timeout -> KHÔNG kết luận
+    if r.status_code != 200:
+        return "transient"          # 429 rate-limit / 5xx -> KHÔNG kết luận (cookie có thể vẫn sống)
+    try:
+        j = r.json() or {}
+    except Exception:
+        return "transient"
+    tok = j.get("access_token")
+    if not tok:
+        return "dead"               # 200 nhưng không token = phiên hết -> chết thật
+    exp = j.get("expires")
+    if exp:
+        try:
+            from datetime import datetime
+            if datetime.fromisoformat(str(exp).replace("Z", "+00:00")).timestamp() < time.time() + 120:
+                return "dead"        # 200 + token nhưng expires quá khứ = chết thật
+        except Exception:
+            pass
+    return "alive"
+
+
 def _labs_kw(timeout):
     kw = {"impersonate": IMPERSONATE, "timeout": timeout}
     if DIRECT_IFACE:
