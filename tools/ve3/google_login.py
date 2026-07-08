@@ -982,13 +982,14 @@ def login_google_chrome(account_info: dict, chrome_portable: str = None, profile
         options.set_local_port(base_port)  # Dùng set_local_port như drission_flow_api.py
         log(f"Using port: {base_port} (worker_id={worker_id})")
 
-        # ẨN CHROME LOGIN: VEO3TOP_HIDE_CHROME=1 -> đẩy cửa sổ RA KHỎI màn hình chính (-32000) -> không chắn màn hình.
-        # KHÔNG headless (Google chặn headless login). Login egress (4G/WARP/IP máy retry) lo phần 'Something went wrong'.
-        # Đồng bộ 1 setting: bật ẩn -> login cũng ẩn (như mọi chrome khác của tool).
+        # ẨN CHROME LOGIN: VEO3TOP_HIDE_CHROME=1 -> THU NHỎ xuống taskbar (--start-minimized), KHÔNG chắn màn hình.
+        # TUYỆT ĐỐI KHÔNG offscreen -32000: ĐO THẬT 2026-07-08 -> -32000 làm Chrome huỷ renderer cửa sổ ẩn ->
+        # PageDisconnectedError/BrowserConnectError NGAY bước password -> login FAIL 1135/309 (qua cả WARP/4G/IP máy)
+        # -> kéo wipe cookie -> churn -> pool chết. Minimized: cửa sổ render BÌNH THƯỜNG (CDP click qua Input event,
+        # không cần thấy) -> login/2FA chạy được mà vẫn ẩn. KHÔNG headless (Google chặn headless login).
         if os.environ.get("VEO3TOP_HIDE_CHROME", "0") == "1":
             try:
-                options.set_argument("--window-position=-32000,-32000")
-                options.set_argument("--window-size=500,400")
+                options.set_argument("--start-minimized")
             except Exception:
                 pass
 
