@@ -70,11 +70,12 @@ class PoolTab(tk.Frame):
 
         self.summary = tk.Label(self, text="", anchor="w", font=("Consolas", 10)); self.summary.pack(fill="x", padx=8)
 
-        cols = ("email", "state", "cookie", "reason", "project", "cooldown", "last", "creds")
+        # LY DO + PROJECT BO: logic moi khong cap 12 anh/acc (reason cu stale) + project tao moi moi lan prepare.
+        cols = ("email", "state", "cookie", "cooldown", "last", "creds")
         self.tree = ttk.Treeview(self, columns=cols, show="headings", selectmode="extended")
-        w = {"email": 280, "state": 78, "cookie": 90, "reason": 200, "project": 84, "cooldown": 70, "last": 100, "creds": 70}
-        heads = {"email": "EMAIL", "state": "TRANG THAI", "cookie": "COOKIE", "reason": "LY DO",
-                 "project": "PROJECT", "cooldown": "NGHI", "last": "LAN CUOI", "creds": "PASS/TOTP"}
+        w = {"email": 340, "state": 100, "cookie": 110, "cooldown": 90, "last": 130, "creds": 90}
+        heads = {"email": "EMAIL", "state": "TRANG THAI", "cookie": "COOKIE",
+                 "cooldown": "NGHI", "last": "LAN CUOI", "creds": "PASS/TOTP"}
         for c in cols:
             self.tree.heading(c, text=heads[c]); self.tree.column(c, width=w[c], anchor="w")
         for st, col in _COLOR.items():
@@ -142,8 +143,8 @@ class PoolTab(tk.Frame):
             creds = ("pass" if r["has_pass"] else "-") + "/" + ("totp" if r["has_totp"] else "-")
             cd = f"{r['cooldown_min']}p" if r["cooldown_min"] else ""
             self.tree.insert("", "end", iid=r["email"],
-                             values=(r["email"], r["state"], r.get("cookie", ""), r["reason"],
-                                     r["project"], cd, r["last"], creds), tags=(r["state"],))
+                             values=(r["email"], r["state"], r.get("cookie", ""), cd, r["last"], creds),
+                             tags=(r["state"],))
             shown += 1
         cnt = M.status_summary(self.sf, self.acct_loader); h = self._health(); hs = ""
         if h:
