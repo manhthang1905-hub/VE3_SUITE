@@ -1435,13 +1435,22 @@ def login_google_chrome(account_info: dict, chrome_portable: str = None, profile
         for wait_i in range(max_wait):
             current_url = driver.url.lower()
 
-            # Da roi khoi trang login
+            # Da roi khoi trang login. labs.google CHI tinh SUCCESS khi vao duoc APP THAT (khong phai trang
+            # loi/signin OAuth): 'error=' / '/api/auth/signin' / '/auth/error' = OAuth callback HONG ('Try signing
+            # in with a different account') -> KHONG phai login thanh cong. TRUOC bi nham -> save cookie CHET ->
+            # account OUT NGAY SAU LOGIN (bug 'login xong out nhanh'). Chi nhan khi khong co dau hieu loi.
+            _labs_ok = ("labs.google" in current_url and "error=" not in current_url
+                        and "/api/auth/signin" not in current_url and "/auth/error" not in current_url)
             if "myaccount.google.com" in current_url or \
                "google.com/search" in current_url or \
-               "labs.google" in current_url:
+               _labs_ok:
                 login_success = True
                 log(f"Login SUCCESS - redirected after {wait_i+1}s!", "OK")
                 break
+            # labs.google nhung DINH trang loi OAuth callback -> login CHUA xong (cho redirect tiep / se timeout -> fail)
+            if "labs.google" in current_url and ("error=" in current_url or "/api/auth/signin" in current_url):
+                if (wait_i + 1) % 5 == 0:
+                    log(f"labs.google OAuth callback loi (error=Callback?) - cho redirect... URL={current_url[:60]}", "WARN")
 
             # SPEEDBUMP passkey "Sign in faster" / các interstitial sau login -> BẤM "Not now" (nếu không
             # sẽ kẹt ở đây mãi). CHỈ bấm Not now/Skip (KHÔNG bấm Continue -> tránh tạo passkey).
