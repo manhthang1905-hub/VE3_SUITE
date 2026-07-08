@@ -270,9 +270,48 @@ class ChromeCDP:
             time.sleep(0.6)
         return False
 
+    def session_expires(self):
+        """Trả 'expires' (ISO) của phiên NextAuth Flow, hoặc None. Dùng để biết phiên đã hết hạn chưa."""
+        return self.ev("(async()=>{try{const j=await (await fetch('/fx/api/auth/session',{credentials:'include'})).json();return j.expires||null;}catch(e){return null;}})()")
+
+    def refresh_session(self, wait=30):
+        """PHIÊN Flow (NextAuth) HẾT HẠN nhưng Google SSO (accounts.google) CÒN SỐNG -> NextAuth phục vụ phiên cũ
+        hết hạn (bearer chết) thay vì re-auth -> create_project 401. Ép làm mới: XOÁ cookie labs.google (CHỈ phiên
+        NextAuth; Google SSO ở accounts.google/google.com KHÁC origin nên GIỮ) rồi reload -> re-OAuth IM LẶNG qua
+        SSO -> phiên MỚI (bearer tươi). Trả True nếu sau đó tạo được project (phiên đã tươi thật)."""
+        try:
+            self.cmd("Network.enable")
+            for o in ("https://labs.google", "https://labs.google:443"):
+                try: self.cmd("Storage.clearDataForOrigin", origin=o, storageTypes="cookies")
+                except Exception: pass
+        except Exception:
+            pass
+        try: self.cmd("Page.navigate", url=FLOW_URL)
+        except Exception: pass
+        end = time.time() + wait
+        while time.time() < end:
+            time.sleep(2)
+            try:
+                url = ""
+                try: url = (self.cmd("Target.getTargetInfo").get("result", {}).get("targetInfo", {}) or {}).get("url", "")
+                except Exception: pass
+                if "error=" in url or "/api/auth/signin" in url:
+                    continue   # đang ở trang lỗi OAuth callback -> chờ redirect tiếp
+                if self.email():   # phiên đã lập lại (có email) -> thử tạo project = phép thử THẬT bearer tươi
+                    pid = self.create_project()
+                    if pid and len(str(pid)) == 36 and "-" in str(pid):
+                        self._refreshed_pid = pid
+                        return True
+            except Exception:
+                pass
+        return False
+
     def fresh_project(self):
         """User: MỖI lần dùng chrome nên TẠO project MỚI (KHÔNG dùng project cũ — project cũ có thể dính hoạt động
         bị đốt trước đó). Tạo mới in-page; nếu tạo lỗi -> fallback project sẵn (tránh account chết vô ích)."""
+        if getattr(self, "_refreshed_pid", None):
+            pid = self._refreshed_pid; self._refreshed_pid = None
+            return pid
         pid = self.create_project()
         if pid and len(str(pid)) == 36 and "-" in str(pid):
             return pid

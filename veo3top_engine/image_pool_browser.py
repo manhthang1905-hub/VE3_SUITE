@@ -544,8 +544,25 @@ class Account:
                         except Exception: em = None
                         if em: break
                         time.sleep(2)
+                    if not em:
+                        # Chrome ĐANG Ở LANDING Flow ('Create with Google Flow') -> email() None DÙ Google SSO có thể
+                        # CÒN SỐNG. CLICK vào (warm_flow, tới khi thấy 'Dự án mới') -> OAuth IM LẶNG qua SSO -> vào Flow,
+                        # cookie phiên tươi -> KHỎI password login (WARP). SSO CHẾT thật -> warm_flow fail (redirect
+                        # signin/signup) -> mới xuống nhánh login. (Đây là recovery account 'hết phiên nhưng SSO sống'.)
+                        try: c.warm_flow(attempts=20)
+                        except Exception: pass
+                        for _try in range(3):
+                            try: em = c.email()
+                            except Exception: em = None
+                            if em: break
+                            time.sleep(2)
                     if em:
                         pid = c.fresh_project()    # TẠO project MỚI mỗi lần (user: không dùng project cũ); lỗi -> fallback project sẵn
+                        if not pid:
+                            # email OK nhưng tạo project lỗi = phiên NextAuth hết hạn token -> EP refresh phiên rồi thử lại
+                            try:
+                                if c.refresh_session(): pid = c.fresh_project()
+                            except Exception: pass
                         if pid:
                             self.cdp = c; self.project = pid; self.state = "ready"
                             self._save_cookie()   # lưu cookie tái dùng (như veo3top) -> generate_external dùng cookie này
