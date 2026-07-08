@@ -58,8 +58,9 @@ def _spawn_service(log=print):
             _env["VEO3TOP_MINT_INTERVAL"] = str(float(_cfg["mint_interval"]))   # sustainable: mint chậm -> đốt quota reCAPTCHA chậm
         # CÁCH LY 429 (hết quota ngày account) -> nghỉ N giờ. Chỉnh qua GUI settings (pool_isolation_hours). Mặc định 6h.
         _env["VEO3TOP_VID_QUOTA_REST"] = str(int(float(_cfg.get("pool_isolation_hours", 6) or 6) * 3600))
-        # KHÔNG ẩn login video: ĐO THẬT offscreen phá login ('Password page NOT detected' + PageDisconnected).
-        # Video chỉ mở chrome lúc login (hiếm) -> để hiện cho login chạy được.
+        # ĐỒNG BỘ hide 1 setting cho MỌI chrome (kể cả login video): image_hide_chrome bật -> login video cũng ẩn
+        # (đẩy -32000 ra khỏi màn hình chính). Chung 1 công tắc 'ẩn/hiện chrome' với ảnh.
+        _env["VEO3TOP_HIDE_CHROME"] = "1" if _cfg.get("image_hide_chrome", True) else "0"
     except Exception:
         pass
     CF = 0x08000000  # CREATE_NO_WINDOW

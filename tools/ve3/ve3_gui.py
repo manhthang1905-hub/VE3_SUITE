@@ -1832,7 +1832,7 @@ class SettingsPage(ctk.CTkScrollableFrame):
         self.sw_music_workspace = ctk.CTkSwitch(gc, text="Music Chrome mo lech man hinh", progress_color=OK, button_color="#FFF", button_hover_color="#EEE")
         self.sw_music_workspace.grid(row=6, column=0, columnspan=3, padx=10, pady=(0,8), sticky="w")
         # AN chrome anh + video (mac dinh BAT = offscreen; gom ca login vi loi login la IP, da fix bang 4G/WARP).
-        self.sw_img_hide = ctk.CTkSwitch(gc, text="An Chrome anh + video (mac dinh bat)", progress_color=OK, button_color="#FFF", button_hover_color="#EEE")
+        self.sw_img_hide = ctk.CTkSwitch(gc, text="An TAT CA Chrome cua tool - ke ca login (mac dinh bat; tat = hien het)", progress_color=OK, button_color="#FFF", button_hover_color="#EEE")
         self.sw_img_hide.grid(row=7, column=0, columnspan=3, padx=10, pady=(0,8), sticky="w")
         # LOGIN EGRESS: 4G proxy (moi dong 1 cai: host:port) -> IP tu doi, retry xoay vong -> khoi 'Something went wrong'.
         ctk.CTkLabel(gc, text="4G login (host:port):", font=("",11), text_color=T2).grid(row=8, column=0, padx=(10,6), sticky="ne")

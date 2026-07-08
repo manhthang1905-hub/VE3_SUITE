@@ -508,8 +508,14 @@ class Account:
         if IMG_EXTERNAL_GEN and _AUTHCACHE is not None and not self._force_login:
             d = _AUTHCACHE._load(self.email)
             if d and d.get("cookie"):
-                try: bearer, _ = fc.bearer_from_cookie(d["cookie"])
-                except Exception: bearer = None
+                # RETRY mint bearer: cold-start (mạng/IPv6 chưa ấm) hay fail THOÁNG QUA -> đừng rớt xuống mở chrome/login
+                # OAN cho cookie SỐNG. Cookie chết thật -> 3 lần đều fail -> mới xuống reuse/login.
+                bearer = None
+                for _bt in range(3):
+                    try: bearer, _ = fc.bearer_from_cookie(d["cookie"])
+                    except Exception: bearer = None
+                    if bearer: break
+                    if _bt < 2: time.sleep(1.5)
                 if bearer:
                     projs = fc.list_projects(d["cookie"])
                     proj = (projs[0] if projs else None) or d.get("project") or fc.create_project(d["cookie"])
