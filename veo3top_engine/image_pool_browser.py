@@ -746,6 +746,13 @@ class Account:
             if fresh and fresh != bearer:
                 bearer = fresh
                 kind, data = fc.generate_image(bearer, proj, payload, proxy=eproxy, bypass=True)
+        # NỘI DUNG BỊ CHẶN (content policy): Google từ chối PROMPT (PUBLIC_ERROR_UNSAFE_GENERATION / _MINOR / SAFETY).
+        # KHÔNG phải lỗi account/mạng -> retry hay ĐỔI ACCOUNT VÔ ÍCH (account nào cũng bị y hệt). Trả "policy" + GIỮ
+        # nguyên text -> worker nhận diện (_is_policy_violation_error thấy 'unsafe') -> VIẾT LẠI PROMPT (LLM) -> TẠO LẠI
+        # đúng ảnh này (rồi tầng video tự làm video sau). CHỐT: prompt hỏng thì phải sửa prompt, không phải đổi account.
+        _pbody = str(data or "").upper()
+        if kind == "other" and ("UNSAFE" in _pbody or "PUBLIC_ERROR_MINOR" in _pbody or "SAFETY" in _pbody or "PROHIBITED" in _pbody):
+            return "policy", {"body": str(data or "")[:200]}
         # "other" = lỗi TRANSIENT (mạng/response lạ, ~3%) -> RETRY bypass (rẻ, curl). TUYỆT ĐỐI KHÔNG mở token
         # factory (nặng: 4 chrome mint + recycle -> chrome spike 68, RAM 5GB, CPU 100% — đo được từ monitor).
         # Trước đây fallback cả "other" -> token factory churn liên tục = gốc lag "càng chạy càng nặng".
@@ -1265,6 +1272,12 @@ class ImagePoolBrowser:
                     # tới đây = ĐÃ refresh bearer từ cookie mà VẪN 401 -> cookie THẬT chết -> mới login lại
                     self.log(f"🔑 {a.email} [{tag}]: cookie hết hạn (đã thử refresh bearer) -> login lại")
                     return ("reauth", "cookie hết hạn")
+                elif kind == "policy":
+                    # PROMPT bị Google chặn nội dung (UNSAFE/MINOR) -> account NÀO CŨNG bị -> KHÔNG retry/đổi account.
+                    # Trả THẲNG lỗi (giữ chữ 'unsafe') cho worker -> worker VIẾT LẠI PROMPT (LLM) rồi TẠO LẠI ảnh này.
+                    _pb = (data.get("body") if isinstance(data, dict) else "") or "PUBLIC_ERROR_UNSAFE_GENERATION"
+                    self.log(f"🚫 {a.email} [{tag}]: prompt bị Google chặn nội dung ({_pb[:50]}) -> trả worker VIẾT LẠI PROMPT (khỏi đổi account vô ích)")
+                    return ("policy", _pb)
                 elif kind == "quota":
                     # quota MODEL that su (RESOURCE_EXHAUSTED khong kem reCAPTCHA) -> DOI MODEL (Pro->Nano2->Lite)
                     a.last_kind = "quota"; a.model_rest[model] = time.time() + MODEL_REST_SECS
