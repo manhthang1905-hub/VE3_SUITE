@@ -27,8 +27,15 @@ except Exception:
 
 
 def cookie_check(email, sf=None):
-    """CHECK account bằng COOKIE (curl_cffi, KHÔNG mở chrome) — như video. Trả:
-    'alive' (cookie->bearer OK, dùng được) | 'cookie_dead' | 'no_cookie'."""
+    """CHECK account bằng COOKIE (curl_cffi, KHÔNG mở chrome). Trả:
+    'alive' (cookie->bearer mint OK) | 'cookie_dead' (mint fail = cookie hết hạn) | 'no_cookie'.
+
+    CHỐT (khớp logic pool hiện tại): cookie SỐNG = MINT ĐƯỢC BEARER, THẾ LÀ ĐỦ.
+    KHÔNG validate project cũ nữa vì:
+      - Pool external (android_bypass) chỉ cần cookie->bearer; project được TẠO MỚI mỗi lần prepare
+        (fast-path: list_projects/create_project), nên project cũ stale/đã xoá KHÔNG nghĩa là cookie chết.
+      - validate_auth bắn VIDEO T2V với project cũ -> account ẢNH / project stale hay trả 401 -> 'cookie_dead' OAN
+        (bug cũ: 32 acc cookie SỐNG bị gắn chết -> auto login lại vô ích mỗi lần chạy)."""
     if _AC is None:
         return "no_cookie"
     d = _AC._load(email)
@@ -38,15 +45,7 @@ def cookie_check(email, sf=None):
         bearer, _ = fc.bearer_from_cookie(d["cookie"])
     except Exception:
         bearer = None
-    if not bearer:
-        return "cookie_dead"
-    proj = d.get("project") or _load_state(sf).get(email, {}).get("project")
-    if not proj:
-        return "alive"   # cookie sống (chưa rõ project) — vẫn coi là còn phiên
-    try:
-        return "alive" if am.validate_auth({"bearer": bearer, "project": proj}) else "cookie_dead"
-    except Exception:
-        return "alive"
+    return "alive" if bearer else "cookie_dead"
 
 
 def checkcookies_parallel(concurrency=12, log=print, on_done=None, sf=None, acct_loader=None):
