@@ -442,30 +442,43 @@ class Account:
         except Exception:
             pass
 
-    def _cookie_alive(self):
+    def _cookie_alive(self, tries=3):
         """Cookie account CÒN SỐNG không (mint được bearer)? -> phân biệt 'còn session THẬT' (giữ) vs 'present nhưng
-        CHẾT' (phải login mới). Dùng ở guard _wipe_profile: sống -> giữ; chết -> xóa để login lấy cookie tươi."""
+        CHẾT' (phải login mới). Dùng ở guard _wipe_profile + quyết định reauth: sống -> giữ; chết -> xóa/login.
+        THỬ NHIỀU LẦN: bearer_from_cookie có thể fail THOÁNG QUA (mạng/IPv6 1 nhịp) cho cookie VẪN SỐNG ->
+        đừng kết luận chết vội = chống wipe OAN -> chống 'account out nhiều phải login lại'."""
         try:
             d = _AUTHCACHE._load(self.email) if _AUTHCACHE is not None else None
             ck = (d or {}).get("cookie")
-            if not ck:
-                return False
-            b, _ = fc.bearer_from_cookie(ck)
-            return bool(b)
         except Exception:
-            return False
+            ck = None
+        if not ck:
+            return False   # KHÔNG có cookie = out thật (không retry)
+        for i in range(max(1, tries)):
+            try:
+                b, _ = fc.bearer_from_cookie(ck)
+                if b:
+                    return True
+            except Exception:
+                pass
+            if i < tries - 1:
+                time.sleep(1.5)
+        return False
 
     def _wipe_profile(self, log=None):
         """XÓA SẠCH dữ liệu profile Chrome cho account bị OUT/session zombie. Google hay giữ 1 session-zombie
         (redirect khỏi trang signin) khiến login đè lên profile bẩn bị KẸT/thất bại -> phải để Chrome TRẮNG mới
         login lại được. Kill chrome giữ profile -> rmtree retry (Windows lock) -> tạo lại rỗng.
         BẢO VỆ COOKIE (chống 'out oan') NHƯNG check SỐNG (không chỉ present): cookie CÒN SỐNG (mint được bearer) ->
-        chỉ glitch chrome -> KHÔNG xóa, giữ session. Cookie CHẾT/present-but-dead -> XÓA để login MỚI lấy cookie tươi
-        (đúng ý user: 'cookie dead -> Chuẩn bị lấy cookie mới'). Cookie hết hạn (_force_login) -> BỎ guard, xóa luôn."""
+        chỉ glitch chrome -> KHÔNG xóa, giữ session. Cookie CHẾT/present-but-dead -> XÓA để login MỚI lấy cookie tươi.
+        QUAN TRỌNG: check SỐNG cả khi _force_login. _force_login chỉ set khi 401 (BEARER hết hạn ~30') — mà bearer
+        chết KHÔNG nghĩa COOKIE chết (cookie sống nhiều ngày). Cookie còn mint được bearer = account CHƯA out ->
+        XOÁ là tự phá session tốt -> 'out nhiều phải login lại'. CHỈ xoá khi cookie THẬT chết (mint bearer fail)."""
         self._kill_profile_chrome()
         time.sleep(1.5)
-        if not self._force_login and self._cookie_alive():
+        if self._cookie_alive():
             _clear_profile_lock(self.profile)   # cookie CÒN SỐNG -> chỉ mở khoá, GIỮ (đừng phá session tốt)
+            self._force_login = False           # cookie sống -> cho fast-path lại (khỏi ép login chrome vô ích)
             if log:
                 try: log(f"🛡️ {self.email}: cookie CÒN SỐNG -> KHÔNG xóa (giữ session, chỉ clear lock)")
                 except Exception: pass
@@ -1142,8 +1155,17 @@ class ImagePoolBrowser:
                     elif outcome == "retry_soft":
                         a.fails += 1; self.q.put(job)          # trả job về hàng đợi (account/slot khác lo)
                     elif isinstance(outcome, tuple) and outcome[0] == "reauth":
-                        self.q.put(job)                         # cần login lại -> break để prepare lại
-                        a._force_login = True                   # 401 -> ép LOGIN CHROME/PASSWORD lần sau (bỏ cookie chết) -> BẤT TỬ
+                        self.q.put(job)                         # break để prepare lại (job sang account/lượt khác)
+                        # 401 KHÔNG chắc cookie chết: bearer sống ~30' còn COOKIE sống NHIỀU NGÀY. Kiểm cookie THẬT:
+                        #   cookie CÒN SỐNG (mint được bearer, thử 3 lần) -> chỉ bearer hết hạn/nhịp lỗi thoáng qua ->
+                        #     re-prepare NHẸ qua fast-path (re-mint bearer, KHÔNG wipe, KHÔNG login password) -> khỏi 'out oan'.
+                        #   cookie CHẾT thật -> ép login chrome/password lấy cookie tươi.
+                        if a._cookie_alive():
+                            a._force_login = False
+                            self.log(f"🔑 {a.email}: 401 nhưng cookie CÒN SỐNG -> refresh bearer (KHÔNG login lại)")
+                        else:
+                            a._force_login = True
+                            self.log(f"🔑 {a.email}: cookie THẬT chết -> login lại lấy cookie tươi")
                         a.state = "new"
                     elif isinstance(outcome, tuple) and outcome[0] == "swap":
                         # reCAPTCHA lì -> ĐỔI ACCOUNT. Account bị đốt (swap NHIỀU lần liên tiếp) -> CÁCH LY (bad+cooldown)
