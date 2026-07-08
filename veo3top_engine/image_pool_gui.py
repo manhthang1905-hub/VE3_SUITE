@@ -43,29 +43,30 @@ class PoolTab(tk.Frame):
         self.logfile = logfile; self._logpos = None
         self._busy = False; self._rows_cache = []
 
-        r1 = tk.Frame(self); r1.pack(fill="x", padx=8, pady=(6, 2))
-        tk.Button(r1, text="Lam moi", command=self.refresh, width=8).pack(side="left")
-        tk.Button(r1, text="Check cookie (nhanh)", command=self.do_checkcookies).pack(side="left", padx=4)
-        tk.Label(r1, text="  Tim:").pack(side="left")
-        self.search = tk.Entry(r1, width=22); self.search.pack(side="left")
-        self.search.bind("<KeyRelease>", lambda e: self._render())
-        tk.Label(r1, text="  Loc:").pack(side="left")
-        self.filter_state = tk.StringVar(value="Tat ca")
-        tk.OptionMenu(r1, self.filter_state, *_STATES, command=lambda e: self._render()).pack(side="left")
-        tk.Button(r1, text="Them TK", command=self.do_add).pack(side="left", padx=(12, 2))
-        tk.Button(r1, text="Sua TK (chon)", command=self.do_edit).pack(side="left", padx=2)
-
-        r2 = tk.Frame(self); r2.pack(fill="x", padx=8, pady=2)
-        tk.Label(r2, text="Chuan bi = login HET account thieu cookie  |  Luong:").pack(side="left")
-        self.conc = tk.Entry(r2, width=4); self.conc.insert(0, str(M.PREP_CONCURRENCY)); self.conc.pack(side="left")
+        # HANG 1: TAT CA trong 1 nut (kiem cookie -> login lai acc thieu/chet -> warm -> refresh)
+        r1 = tk.Frame(self); r1.pack(fill="x", padx=8, pady=(8, 2))
+        self.btn_auto = tk.Button(r1, text=">> TU DONG: Chuan bi TAT CA", command=self.do_auto,
+                                  height=1, bg="#1565C0", fg="white", font=("", 11, "bold"),
+                                  activebackground="#0D47A1", activeforeground="white", padx=14)
+        self.btn_auto.pack(side="left")
         self.hide_var = tk.IntVar(value=1)
-        tk.Checkbutton(r2, text="An Chrome", variable=self.hide_var, command=self._apply_hide).pack(side="left", padx=6)
-        tk.Button(r2, text="Chuan bi", command=self.do_prepare, width=9).pack(side="left", padx=3)
-        if not is_video:
-            tk.Button(r2, text="Chuan bi + Probe", command=lambda: self.do_prepare(True)).pack(side="left", padx=3)
-            tk.Button(r2, text="Probe (chon)", command=self.do_probe).pack(side="left", padx=6)
-        tk.Button(r2, text="Kiem tra - mo Chrome (chon)", command=self.do_check).pack(side="left", padx=3)
-        tk.Button(r2, text="Reset (chon)", command=self.do_reset).pack(side="left", padx=6)
+        tk.Checkbutton(r1, text="An Chrome", variable=self.hide_var, command=self._apply_hide).pack(side="left", padx=8)
+        tk.Label(r1, text="= kiem cookie -> login lai acc thieu/chet -> warm. Acc Google CHAN: bam 'Mo Chrome' lam tay.",
+                 fg="#666").pack(side="left")
+
+        # HANG 2: tien ich phu (nho gon)
+        r2 = tk.Frame(self); r2.pack(fill="x", padx=8, pady=(2, 4))
+        tk.Button(r2, text="Lam moi", command=self.refresh, width=8).pack(side="left")
+        tk.Button(r2, text="+ Them TK", command=self.do_add).pack(side="left", padx=(8, 2))
+        tk.Button(r2, text="Sua TK (chon)", command=self.do_edit).pack(side="left", padx=2)
+        tk.Button(r2, text="Mo Chrome (chon)", command=self.do_check).pack(side="left", padx=(8, 2))
+        tk.Button(r2, text="Reset (chon)", command=self.do_reset).pack(side="left", padx=2)
+        tk.Label(r2, text="   Tim:").pack(side="left")
+        self.search = tk.Entry(r2, width=20); self.search.pack(side="left")
+        self.search.bind("<KeyRelease>", lambda e: self._render())
+        tk.Label(r2, text="  Loc:").pack(side="left")
+        self.filter_state = tk.StringVar(value="Tat ca")
+        tk.OptionMenu(r2, self.filter_state, *_STATES, command=lambda e: self._render()).pack(side="left")
 
         self.summary = tk.Label(self, text="", anchor="w", font=("Consolas", 10)); self.summary.pack(fill="x", padx=8)
 
@@ -184,28 +185,42 @@ class PoolTab(tk.Frame):
         self._run_bg(lambda: M.checkcookies_parallel(log=self.log, on_done=None, sf=self.sf,
                      acct_loader=self.acct_loader), "Check cookie")
 
-    def do_prepare(self, probe=False):
-        try: conc = max(1, int(self.conc.get()))
-        except Exception: conc = M.PREP_CONCURRENCY
+    def do_auto(self):
+        """1 NUT LAM HET (khong can thao tac gi them):
+        1) kiem cookie nhanh (khong chrome) -> biet acc nao cookie chet/mat
+        2) acc cookie CHET nhung state con 'ready/good' -> ha xuong de duoc login lai (va lo hong 'chuan bi bo sot cookie chet')
+        3) login + warm MOI account chua san sang (song song)
+        4) refresh + bao cao. Acc Google CHAN (challenge) khong login tu duoc -> user bam 'Mo Chrome' lam tay."""
+        conc = M.PREP_CONCURRENCY
         self._apply_hide()
         def _f():
-            todo = M.select_todo(None, self.sf, self.acct_loader)   # None = HET account thieu cookie (khong gioi han)
-            self.log(f"chuan bi {len(todo)} account thieu cookie, {min(conc, len(todo) or 1)} luong "
-                     f"(probe={probe}, an={'co' if self.hide_var.get() else 'khong'})")
-            M.prepare_parallel(todo, probe=probe, concurrency=conc, log=lambda m: None, sf=self.sf,
-                               profile_base=self.profile_base,
-                               on_done=lambda e, r: (self.log(f"  {e} -> {r}"), self.after(0, self.refresh)))
-        self._run_bg(_f, f"Chuan bi ALL (//{conc})" + ("+Probe" if probe else ""))
-
-    def do_probe(self):
-        emails = self._sel()
-        if not emails: messagebox.showinfo("Chon account", "Chon account trong bang."); return
-        def _f():
-            for e in emails:
-                a = self._find_acc(e)
-                if a: self.log(f"  probe {e} -> {M._prepare_one(0, a['email'], a['password'], a['totp'], probe=True, sf=self.sf, profile_base=self.profile_base)}")
-                self.after(0, self.refresh)
-        self._run_bg(_f, f"Probe {len(emails)}")
+            # 1) kiem cookie toan bo
+            self.log("[1/3] Kiem cookie tat ca (nhanh, khong mo chrome)...")
+            M.checkcookies_parallel(log=self.log, on_done=None, sf=self.sf, acct_loader=self.acct_loader)
+            # 2) cookie chet/mat MA state con ready/good -> xoa state de select_todo bat login lai
+            chg = 0
+            with M._STATE_LOCK:
+                s = M._load_state(self.sf)
+                for e, d in list(s.items()):
+                    if d.get("cookie") in ("cookie_dead", "no_cookie") and d.get("state") in ("ready", "good"):
+                        d.pop("state", None); d.pop("until", None); chg += 1
+                if chg: M._save_state(s, self.sf)
+            if chg: self.log(f"       {chg} account cookie CHET dang 'ready' -> danh dau login lai")
+            # 3) login + warm moi account chua san sang
+            todo = M.select_todo(None, self.sf, self.acct_loader)
+            if not todo:
+                self.log("[2/3] Moi account da san sang, khong can login lai.")
+            else:
+                self.log(f"[2/3] Login + warm {len(todo)} account (song song {min(conc, len(todo))} chrome, "
+                         f"an chrome={'co' if self.hide_var.get() else 'khong'})...")
+                M.prepare_parallel(todo, probe=False, concurrency=conc, log=lambda m: None, sf=self.sf,
+                                   profile_base=self.profile_base,
+                                   on_done=lambda e, r: (self.log(f"       {e} -> {r}"), self.after(0, self.refresh)))
+            # 4) bao cao
+            self.after(0, self.refresh)
+            cnt = M.status_summary(self.sf, self.acct_loader)
+            self.log("[3/3] XONG. Trang thai: " + ", ".join(f"{k}={v}" for k, v in sorted(cnt.items())))
+        self._run_bg(_f, "TU DONG chuan bi tat ca")
 
     def do_check(self):
         emails = self._sel()
