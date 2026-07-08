@@ -153,7 +153,7 @@ class VE3Worker:
             self.max_concurrent = config.get("max_concurrent", 1)
         self.final_full_rerun = config.get("final_full_rerun", False)
         self.prompt_rewrite_enabled = config.get("prompt_policy_rewrite_enabled", True)
-        self.prompt_rewrite_max_rounds = int(config.get("prompt_policy_rewrite_max_rounds", 1) or 1)
+        self.prompt_rewrite_max_rounds = int(config.get("prompt_policy_rewrite_max_rounds", 3) or 3)  # 3 vòng: mỗi vòng escalate mạnh tay hơn
         self.prompt_rewrite_debug = config.get("prompt_policy_rewrite_debug", True)
         self.reference_media_validation_enabled = bool(config.get("reference_media_validation_enabled", False))
         self.reference_media_validation_max_rounds = max(
@@ -580,6 +580,8 @@ class VE3Worker:
             "policy",
             "safety",
             "unsafe",
+            "unsafe_generation",       # PUBLIC_ERROR_UNSAFE_GENERATION (pool trả về)
+            "public_error_minor",      # PUBLIC_ERROR_MINOR (trẻ vị thành niên) — 'minor' KHÔNG match qua 'unsafe'
             "violat",
             "prohibited",
             "disallowed",
@@ -897,18 +899,44 @@ class VE3Worker:
             error_text=error_text,
         )
 
-    def _rewrite_prompt_for_policy_v2(self, prompt: str, error_text: str, mode: str = "image") -> Optional[str]:
+    def _rewrite_prompt_for_policy_v2(self, prompt: str, error_text: str, mode: str = "image",
+                                      round_index: int = 1) -> Optional[str]:
         if not self.prompt_rewrite_enabled:
             return None
 
         cleaned_error = re.sub(r"\s+", " ", (error_text or "")).strip()[:500]
         media_label = "Veo/Flow image prompt" if mode == "image" else "Veo video prompt"
+        # ESCALATE theo vòng: vòng trước viết lại VẪN bị chặn -> vòng sau CỐ HƠN (mạnh tay làm sạch triệt để hơn,
+        # temperature cao hơn cho đa dạng). Round 1 = giữ tối đa ý; round 2 = trừu tượng hoá mạnh; round 3 = tối giản
+        # an toàn tuyệt đối (chỉ giữ chủ thể + bối cảnh trung tính, bỏ HẾT chi tiết có thể gây cờ).
+        _r = max(1, int(round_index or 1))
+        if _r <= 1:
+            escalation = (
+                "- Keep as much of the original cinematic intent as possible; only soften the specific safety trigger."
+            )
+            _temp = 0.3
+        elif _r == 2:
+            escalation = (
+                "- The previous safer rewrite STILL got blocked, so push HARDER this time.\n"
+                "- Abstract away any charged element: replace explicit actions/objects with implied, off-frame, or aftermath framing.\n"
+                "- Drop specific words that could trip safety (weapon names, injury detail, body focus, substance names) — describe mood and composition instead."
+            )
+            _temp = 0.5
+        else:
+            escalation = (
+                "- Two safer rewrites ALREADY got blocked. Produce a MINIMAL, unquestionably safe-for-work prompt.\n"
+                "- Keep ONLY: the main subject/character, a neutral setting, camera framing, lighting and a calm mood.\n"
+                "- Remove ENTIRELY every potentially sensitive element (violence, injury, weapons, intimacy, substances, distress, minors-in-risk). Do not merely soften — delete them.\n"
+                "- Favor a still, quiet, emotionally neutral cinematic shot. It MUST pass safety review even if some original intent is lost."
+            )
+            _temp = 0.7
         rewrite_instruction = f"""
 You rewrite prompts for Google Flow / Veo 3 so they pass safety review while preserving the usable cinematic intent.
+This is rewrite attempt #{_r}.
 
 Hard requirements:
 - Rewrite the prompt below into a safer version for {media_label}.
-- Keep: subject identity, composition, framing, lens, camera movement, lighting, color, setting, mood, time period, wardrobe, and broad action when possible.
+- Keep when possible: subject identity, composition, framing, lens, camera movement, lighting, color, setting, mood, time period, wardrobe, and broad action.
 - Remove or soften any likely safety trigger.
 - Prefer neutral visual description over charged or explicit wording.
 - If the scene is intense, convert it to implied tension, aftermath, restraint, distance, or emotional reaction instead of explicit detail.
@@ -917,6 +945,9 @@ Hard requirements:
 - Output one clean English prompt only.
 - No bullets. No explanation. No quotes.
 
+Escalation for this attempt:
+{escalation}
+
 Original prompt:
 {prompt}
 
@@ -924,10 +955,10 @@ Error from generator:
 {cleaned_error or "Unknown policy rejection"}
 """.strip()
 
-        rewritten = self._call_rewrite_llm(rewrite_instruction, temperature=0.3, max_tokens=700)
+        rewritten = self._call_rewrite_llm(rewrite_instruction, temperature=_temp, max_tokens=700)
         if rewritten and rewritten.lower() != prompt.strip().lower():
             return rewritten
-        self.log(f"    [REWRITE] {self._provider_display_name()} khong viet lai duoc prompt hop le", "WARN")
+        self.log(f"    [REWRITE] {self._provider_display_name()} khong viet lai duoc prompt hop le (vong {_r})", "WARN")
         return None
 
     def _rewrite_reference_prompt_for_refresh_v2(
@@ -2149,8 +2180,8 @@ Generator/context error:
                     break
                 if not self._is_policy_violation_error(error_text):
                     break
-                self.log(f"    {char.id}: prompt co dau hieu vi pham policy, thu viet lai", "WARN")
-                rewritten = self._rewrite_prompt_for_policy_v2(current_prompt, error_text, mode="image")
+                self.log(f"    {char.id}: prompt co dau hieu vi pham policy, thu viet lai (vong {rewrite_round + 1}/{self.prompt_rewrite_max_rounds})", "WARN")
+                rewritten = self._rewrite_prompt_for_policy_v2(current_prompt, error_text, mode="image", round_index=rewrite_round + 1)
                 if not rewritten:
                     self._log_prompt_rewrite_event(
                         "char", char.id, "reference_image", "rewrite_failed",
@@ -2520,8 +2551,8 @@ Generator/context error:
                     break
                 if not self._is_policy_violation_error(error_text):
                     break
-                self.log(f"    Scene {scene_id}: prompt cÃ³ dáº¥u hiá»‡u vi pháº¡m policy, thá»­ viáº¿t láº¡i", "WARN")
-                rewritten = self._rewrite_prompt_for_policy_v2(current_prompt, error_text, mode="image")
+                self.log(f"    Scene {scene_id}: prompt cÃ³ dáº¥u hiá»‡u vi pháº¡m policy, thá»­ viáº¿t láº¡i (vong {rewrite_round + 1}/{self.prompt_rewrite_max_rounds})", "WARN")
+                rewritten = self._rewrite_prompt_for_policy_v2(current_prompt, error_text, mode="image", round_index=rewrite_round + 1)
                 if not rewritten:
                     self._log_prompt_rewrite_event(
                         "scene", scene_id, "scene_image", "rewrite_failed",
