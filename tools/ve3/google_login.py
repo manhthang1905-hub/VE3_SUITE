@@ -1050,6 +1050,23 @@ def login_google_chrome(account_info: dict, chrome_portable: str = None, profile
         # Mở Chrome mới
         driver = ChromiumPage(options)
 
+        # ẨN LOGIN chắc ăn: --start-minimized KHÔNG đủ (DrissionPage bung cửa sổ ra GIỮA màn hình khi tương tác).
+        # -> minimize CHỦ ĐỘNG qua CDP sau khi mở + sau mỗi bước điều hướng. Cửa sổ vẫn render (login/2FA OK).
+        _hide_login = os.environ.get("VEO3TOP_HIDE_CHROME", "0") == "1"
+        def _mini_login():
+            if not _hide_login:
+                return
+            try:
+                driver.set.window.mini(); return
+            except Exception:
+                pass
+            try:
+                wid = driver.run_cdp('Browser.getWindowForTarget')['windowId']
+                driver.run_cdp('Browser.setWindowBounds', windowId=wid, bounds={'windowState': 'minimized'})
+            except Exception:
+                pass
+        _mini_login()
+
         # v1.0.650: Inject fingerprint NGAY SAU khi mo Chrome, TRUOC khi navigate
         # Dam bao login va tao anh dung CUNG fingerprint → Google khong detect thay doi
         try:
@@ -1083,6 +1100,7 @@ def login_google_chrome(account_info: dict, chrome_portable: str = None, profile
         log("Navigating to Google login...")
         driver.get("https://accounts.google.com/signin")
         time.sleep(3)
+        _mini_login()   # navigate xong hay bung cửa sổ ra giữa -> minimize lại
 
         # Kiểm tra xem đã đăng nhập chưa
         if "myaccount.google.com" in driver.url or "google.com/search" in driver.url:

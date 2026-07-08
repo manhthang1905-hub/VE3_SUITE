@@ -7475,9 +7475,14 @@ Get-CimInstance Win32_Process |
         img_codes = max(1, min(20, round(base_img / IMG_PER)))
         vid_codes = max(1, min(8, round(base_vid / VID_PER)))
         img_per = max(1, -(-base_img // img_codes))   # luồng/mã ảnh = ceil(capacity/codes)
+        # VIDEO: luồng/mã = ĐẦY POOL. Pool video có (acc SỐNG × video_workers_per_account) slot. Chia đều cho vid_codes
+        # -> tổng luồng các mã video = full pool -> KHÔNG worker nào ngồi không (pool AIMD tự giảm nếu throttle).
+        _vwork = int(cfgd.get("video_workers_per_account", 7) or 7)
+        vid_slots = max(1, base_vid) * _vwork
+        vid_per = max(1, -(-vid_slots // vid_codes))   # ceil(slots/codes)
         res = {"ts": now, "img_up": img_up, "vid_up": vid_up,
                "img_total": img_total, "img_cap": img_cap, "img_codes": img_codes, "img_per": img_per,
-               "vid_total": vid_total, "vid_cap": vid_cap, "vid_codes": vid_codes}
+               "vid_total": vid_total, "vid_cap": vid_cap, "vid_codes": vid_codes, "vid_per": vid_per}
         self._pool_cap_cache = res
         return res
 
@@ -7606,10 +7611,16 @@ Get-CimInstance Win32_Process |
                 pair_cfg["psychology_reference_image"] = nguon_meta["psychology_reference_image"]
             if nguon_meta.get("topic"):
                 pair_cfg.setdefault("topic", nguon_meta["topic"])
-            # TRẠM ẢNH: truyền số LUỒNG/mã TỰ TÍNH (theo nhân sự thực) -> worker gửi đúng số ảnh song song để đầy pool.
-            if mode == "image-only":
+            # TRUYỀN số LUỒNG/mã TỰ TÍNH (theo pool thực) -> worker gửi đúng số job song song để ĐẦY pool.
+            # TRẠM ẢNH -> img_per (theo pool ảnh); TRẠM VIDEO -> vid_per (theo pool video 10 acc × luồng/acc).
+            # (Trước đây video-only KHÔNG set -> worker rơi vào fallback dùng image_pool_accounts = sai pool -> pool video đói.)
+            if mode in ("image-only", "video-only"):
                 try:
-                    pair_cfg["run_max_concurrent"] = int(self._compute_pool_capacity().get("img_per", 0) or 0)
+                    _cap = self._compute_pool_capacity()
+                    _key = "img_per" if mode == "image-only" else "vid_per"
+                    _rmc = int(_cap.get(_key, 0) or 0)
+                    if _rmc > 0:
+                        pair_cfg["run_max_concurrent"] = _rmc
                 except Exception:
                     pass
             config_file = pd / ".ve3_run_config.json"
