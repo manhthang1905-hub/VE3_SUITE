@@ -3215,8 +3215,8 @@ Generator/context error:
                     break
                 if not self._is_policy_violation_error(error_text):
                     break
-                self.log(f"    Video scene {sid}: prompt co dau hieu vi pham policy, thu viet lai", "WARN")
-                rewritten = self._rewrite_prompt_for_policy_v2(current_prompt, error_text, mode="video")
+                self.log(f"    Video scene {sid}: prompt co dau hieu vi pham policy, thu viet lai (vong {rewrite_round + 1}/{self.prompt_rewrite_max_rounds})", "WARN")
+                rewritten = self._rewrite_prompt_for_policy_v2(current_prompt, error_text, mode="video", round_index=rewrite_round + 1)
                 if not rewritten:
                     self._log_prompt_rewrite_event(
                         "scene", sid, "scene_video", "rewrite_failed",

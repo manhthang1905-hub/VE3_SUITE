@@ -473,6 +473,13 @@ class VideoFactory:
                 return "retry_soft"
             else:
                 account.last_kind = f"{kind}@{ename}"
+                # NỘI DUNG BỊ CHẶN lúc SUBMIT (PROMPT VIDEO vi phạm): account/token nào cũng bị -> đổi VÔ ÍCH.
+                # Trả THẲNG worker (giữ 'policy') -> worker VIẾT LẠI PROMPT VIDEO. (Video hay fail ở render/poll hơn -
+                # đã xử ở trên; đây bắt nốt trường hợp chặn ngay submit.)
+                _vb = str(data or "").upper()
+                if kind == "other" and ("UNSAFE" in _vb or "PUBLIC_ERROR_MINOR" in _vb or "SAFETY" in _vb or "PROHIBITED" in _vb):
+                    job["_result"] = (False, {}, f"submit policy - can rewrite prompt: {str(data or '')[:100]}")
+                    return ("fail", "submit policy")
                 if kind in ("ratelimit", "ip_block"):
                     # per-IP -> xoay IPv6 RIÊNG của account này rồi bắn lại
                     quota_streak = 0
