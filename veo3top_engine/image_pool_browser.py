@@ -530,10 +530,15 @@ class Account:
                         except Exception: pass
                         log(f"⚡ {self.email}: ready qua COOKIE (KHÔNG mở chrome) project {proj[:8]}")
                         return True
-        # 1) reuse session SẴN trong profile — GIỚI HẠN mở chrome ĐỒNG THỜI (login_sem = LOGIN_CONCURRENCY) ->
-        #    tránh 24 slot mở 24 chrome cùng lúc = CPU 99%. Sau khi lấy cookie -> đóng chrome (external) -> nhẹ.
+        # 1) CHECK LOGIN (SSO) TRƯỚC (đúng ý user: chưa login thì LOGIN, login RỒI mới vào labs):
+        #    - CÓ SSO (SAPISID trong profile) -> reuse labs (lấy session qua SSO, KHÔNG password).
+        #    - CHƯA login (không SSO) + được phép login -> BỎ reuse (khỏi phí 1 vòng mở chrome labs vô ích),
+        #      xuống LOGIN password thẳng. SSO còn -> mới vào labs.
+        _need_login_first = allow_login and not _profile_logged_in(self.email)
+        if _need_login_first:
+            log(f"🔐 {self.email}: CHƯA login (không SSO) -> login password TRƯỚC, rồi mới vào labs")
         with login_sem:
-            c = self._open_cdp()
+            c = None if _need_login_first else self._open_cdp()
             if c:
                 try:
                     # THỬ email() NHIỀU LẦN: page/egress (IPv6) chậm dễ trả None thoáng qua -> account ĐÃ login bị gán
@@ -610,7 +615,9 @@ class Account:
             ok = False
             n_try = max(LOGIN_RETRIES, len(_pool))
             for _try in range(n_try):
-                _pxy = _pool[_try % len(_pool)]
+                # LỆCH egress theo ACCOUNT (self.idx) -> login ĐỒNG THỜI dùng IP KHÁC NHAU (4G/WARP/IP máy),
+                # KHÔNG dồn cùng 1 IP -> Google KHÔNG nghi 'nhiều login 1 IP' -> hết 'Password not accepted'.
+                _pxy = _pool[(self.idx + _try) % len(_pool)]
                 _tag = _pxy.split("//")[-1] if _pxy else "IP máy"
                 # LẦN ĐẦU: KHÔNG xóa profile -> GIỮ cookie (reuse-check có thể fail THOÁNG QUA do CDP chậm/lỗi, mà
                 # account VẪN logged-in -> login sẽ thấy 'Already logged in' luôn, khỏi out oan). Chỉ XÓA từ retry

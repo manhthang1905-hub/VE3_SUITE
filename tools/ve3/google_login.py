@@ -1384,7 +1384,9 @@ def login_google_chrome(account_info: dict, chrome_portable: str = None, profile
 
                 # B3+B4: ĐIỀN OTP có RETRY — điền xong nếu CHƯA CHUYỂN TRANG (OTP sai/hết hạn) thì Ctrl+A XOÁ
                 # rồi sinh OTP MỚI điền lại (tối đa 3 lần). GUARD cửa sổ: OTP sắp hết (<8s) -> chờ cửa sổ mới.
-                clean_secret = totp_secret.replace(" ", "").replace("-", "").upper()
+                # LỌC chỉ giữ ký tự base32 hợp lệ [A-Z2-7] -> bỏ space/dấu/ký tự UNICODE lạ (dấu –, ký tự ẩn) khiến
+                # pyotp b32decode crash 'string argument should contain only ASCII characters' -> 2FA fail.
+                clean_secret = re.sub(r'[^A-Z2-7]', '', (totp_secret or "").upper())
                 otp_ok = False
                 for otp_try in range(3):
                     rem = 30 - int(time.time()) % 30
