@@ -1041,75 +1041,7 @@ class ImagePoolBrowser:
             t = threading.Thread(target=self._slot_worker, args=(s,), daemon=True)
             t.start(); self._slots.append(t)
         threading.Thread(target=self._chrome_sweeper, daemon=True).start()   # tự dọn chrome zombie/orphan
-        threading.Thread(target=self._keep_warm_loop, daemon=True).start()   # GIỮ session ẤM (labs ~12h) -> khỏi chết cả loạt
         return True
-
-    def _keep_warm_loop(self):
-        """GỐC 'account tụt dần': session labs.google chỉ sống ~12h. Slot chỉ giữ ~n_slots account tươi; số CÒN LẠI
-        (idle, không được bốc) nằm im tới 12h -> HẾT HẠN CẢ LOẠT -> pool tụt 96->40. Video pool có keep-warm nên
-        không bị; ảnh TRƯỚC ĐÂY THIẾU. Thread này (như video) mỗi ~10p: RE-PREPARE (reuse -> refresh session) account
-        ĐÃ CHẾT hoặc SẮP hết hạn (session >KEEPWARM_BEFORE_H giờ) -> giữ 96 account SỐNG 24/7. Chỉ reuse (allow_login=
-        False) -> KHÔNG password churn; account mất cookie/SSO chết để slot+POOL_LOGIN lo."""
-        WARM_SECS = int(os.environ.get("VEO3TOP_IMG_KEEPWARM_SECS", "600") or "600")
-        for _ in range(12):                       # đợi ~120s cho startup ổn định
-            if not self._running: return
-            time.sleep(10)
-        while self._running:
-            try: self._keep_warm_pass()
-            except Exception as e:
-                try: self.log(f"keep-warm ảnh lỗi: {e}")
-                except Exception: pass
-            for _ in range(max(1, WARM_SECS // 10)):
-                if not self._running: return
-                time.sleep(10)
-
-    def _keep_warm_pass(self):
-        import concurrent.futures as _cf
-        BEFORE_H = float(os.environ.get("VEO3TOP_IMG_KEEPWARM_BEFORE_H", "10") or "10")  # session ~12h -> refresh khi >10h
-        BATCH = int(os.environ.get("VEO3TOP_IMG_KEEPWARM_BATCH", "8") or "8")
-        WK = min(BATCH, max(2, LOGIN_CONCURRENCY - 1))   # chừa slot 1 permit login_sem
-        now = time.time()
-        need = []
-        for a in list(self.candidates):
-            if a.email in self.active or self._in_cooldown(a.email):
-                continue                          # slot đang dùng / đang cooldown -> để chỗ khác lo
-            d = _AUTHCACHE._load(a.email) if _AUTHCACHE is not None else None
-            ck = (d or {}).get("cookie")
-            if not ck:
-                continue                          # mất cookie -> cần password login (slot/POOL_LOGIN lo), keep-warm bỏ qua
-            try: live = fc.cookie_liveness(ck)
-            except Exception: continue
-            age_h = (now - ((d or {}).get("ts") or 0)) / 3600
-            if live == "dead":
-                need.append((0, age_h, a))        # đã chết -> ưu tiên cao
-            elif live == "alive" and age_h >= BEFORE_H:
-                need.append((1, age_h, a))         # sắp hết hạn -> refresh TRƯỚC khi chết
-        if not need:
-            self.log("🔥 keep-warm ảnh: mọi account còn tươi (chưa tới hạn refresh session)")
-            return
-        need.sort(key=lambda x: (x[0], -x[1]))    # dead trước, rồi cũ nhất
-        pick = [a for _, _, a in need[:BATCH]]
-        def _warm(a):
-            with self._cand_lock:
-                if a.email in self.active: return None
-                self.active[a.email] = a
-            try:
-                ok = a.prepare(self._login, self.login_sem, lambda *_: None, allow_login=False)
-                if ok:
-                    self._ever_ready.add(a.email)
-                    self._mark(a.email, state="ready", project=a.project, cookie="alive")
-                return bool(ok)
-            except Exception:
-                return False
-            finally:
-                try: a.close()
-                except Exception: pass
-                self._release_candidate(a)
-        with _cf.ThreadPoolExecutor(max_workers=WK) as ex:
-            oks = list(ex.map(_warm, pick))
-        n_ok = sum(1 for o in oks if o)
-        self.log(f"🔥 keep-warm ảnh: refresh {len(pick)} account (dead/sắp hết hạn session ~12h) -> {n_ok} tươi lại "
-                 f"(còn {sum(1 for _,_,a in need)} cần refresh, giữ SỐNG chủ động khỏi tụt cả loạt)")
 
     def _chrome_sweeper(self):
         """Định kỳ REAP chrome MỒ CÔI của pool (fix GỐC zombie dài hạn).
