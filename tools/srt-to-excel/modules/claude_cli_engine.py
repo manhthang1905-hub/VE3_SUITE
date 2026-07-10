@@ -783,12 +783,13 @@ JSON RULES:
         if proc.returncode != 0:
             self._kill_proc_tree(proc)  # ensure no surviving children on error
             msg = (err or out or "").strip()
-            # Key digishop HET TOKEN / loi auth (401) -> cho key nay NGHI cooldown 60' roi tu quay lai vong
+            # Key digishop HET TOKEN / loi auth (401) / connector disabled -> cho key nay NGHI cooldown 60' roi tu quay lai vong
             # (key tu hoi). Chunk nay se retry -> _next_proxy_key nhay sang key con song.
             if proxy_key and len(self._proxy_keys) > 1:
                 _low = msg.lower()
                 if any(s in _low for s in ("401", "invalid token", "unauthorized",
-                                           "authentication", "invalid api key", "invalid x-api-key")):
+                                           "authentication", "invalid api key", "invalid x-api-key",
+                                           "connectors are disabled", "connector", "anthropic_api_key")):
                     self._mark_key_cooldown(proxy_key)
                     self._log(f"     (key ...{proxy_key[-6:]} het token/loi auth -> nghi {self._key_cd_secs//60}' cho hoi, xoay key khac)", "WARN")
             raise RuntimeError(f"Claude CLI exited {proc.returncode}: {msg[:500]}")
