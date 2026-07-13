@@ -523,6 +523,11 @@ ABSOLUTE RULES for the thumbnails:
   change the hook text + word names), and end with: {neg_tail_thumb}
 """
 
+        # Khối định hướng sáng tạo tùy chọn (config claude_cli_extra_notes).
+        # Rỗng -> prompt giữ nguyên như cũ cho mọi kênh hiện hành.
+        _extra = str(self.config.get("claude_cli_extra_notes", "") or "").strip()
+        extra_block = (f"\nEXTRA CREATIVE DIRECTION (from the channel owner — follow strictly):\n"
+                       f"{_extra}\n") if _extra else ""
         return f"""You are an expert video-script analyst and storyboard director.
 Read the SRT below, divide it into scenes by MEANING, and write an image prompt +
 a video prompt for each scene{thumb_intro}. Output the result
@@ -575,6 +580,7 @@ SCENE DIVISION (use the real timecodes shown in the SRT):
   each next starts at previous last index + 1, last scene ends at [{last_index}].
 
 The narration audience is {audience} — keep cultural/visual choices appropriate.
+{extra_block}
 
 {thumb_section}
 SRT (each line: [index] start-end (duration): text). Total ~{total_dur:.0f}s,

@@ -3,10 +3,16 @@ accounts:
   project_id: d024bae6-0475-4270-b43d-847083f2a74c
   token: ''
 claude_cli_anthropic_base_url: https://vip.digishop.work
-claude_cli_anthropic_key: sk-aPTA6ErieibKtiMIGW36Eo0O6UYCIasIrjOOYN8aMYGunAU4
+claude_cli_anthropic_key: sk-V9h4yTreTbrDecN08QTHHYUq88RBnKnGcDA6Y40ATRYBKLMI
+claude_cli_anthropic_keys:
+- sk-V9h4yTreTbrDecN08QTHHYUq88RBnKnGcDA6Y40ATRYBKLMI
+- sk-5aOr3CtuxQ1CIvs57yQmXILHVVzE0CPUyhJ1RwxkT9VEg342
+- sk-u99N46Zi5e4Zs4r82cTCcekktNILW0JSPKrBCrPilDgE90kh
 claude_cli_backend: cli
 claude_cli_chunk_parallel: 3
 claude_cli_chunk_retries: 2
+claude_cli_chunk_size: 30
+claude_cli_chunk_threshold: 30
 claude_cli_max_parallel: 5
 claude_cli_model: claude-sonnet-4-6
 claude_cli_review: false
@@ -53,10 +59,10 @@ gemini_api_keys: []
 generation_backend: veo3top_b_pool
 generation_mode: veo3top_b_pool
 image_account_rest: 180
-image_egress: ipv6
+image_egress: direct
 image_fake_dns_google: true
 image_hide_chrome: true
-image_max_per_account: 5
+image_max_per_account: 0
 image_pool_accounts: 96
 image_swap_giveup: 2
 image_token_chromes: 4
@@ -186,8 +192,12 @@ local_server_list:
   url: http://192.168.88.63:5100
 local_server_url: http://192.168.88.63:5100
 log_level: INFO
+login_4g_proxies: []
+login_use_warp: true
 max_concurrent: 4
 max_concurrent_codes: 10
+max_concurrent_image_codes: 0
+max_concurrent_video_codes: 0
 max_parallel_api: 11
 mint_interval: 1.2
 music_workspace_mode_enabled: true
@@ -205,6 +215,7 @@ nanopic_video_cookie: ''
 nanopic_video_model: VEO_3_FAST_LOWER
 nanopic_video_type: frame
 pipeline_workers: 3
+pool_isolation_hours: 6
 prompt_policy_rewrite_debug: true
 prompt_policy_rewrite_enabled: true
 prompt_policy_rewrite_max_rounds: 2
@@ -221,3 +232,19 @@ vov_direct_model_chain:
 - claude-sonnet-4-6
 - claude-opus-4-6
 vov_direct_parallel_slots: 10
+
+# Dinh huong sang tao them cho prompt anh/video (giu chan nguoi xem).
+# Xoa/sua khoi nay la prompt tro ve nhu cu — khong can dung code.
+claude_cli_extra_notes: |
+  RETENTION FIRST — every scene must stop the scroll:
+  - Every scene needs ONE clear visual hook: a transformation, a reveal, or an
+    exaggerated visual METAPHOR of the narration (swirling clocks, cracking glass,
+    tangled threads, growing shadow, drowning in papers...) — never a character
+    simply sitting or standing still while the narration plays.
+  - Vary shot size and camera angle hard between consecutive scenes
+    (extreme close-up -> wide -> top-down -> over-the-shoulder).
+    Never two similar framings in a row.
+  - Video prompts: strong, clearly visible motion with a change from start to end
+    of the clip (push-in, morphing, particles, camera orbit, lighting shift).
+    Avoid the words: subtle, slight, gentle, slowly.
+  - Exaggerate emotion like a top animated short: expressive faces, dynamic poses.

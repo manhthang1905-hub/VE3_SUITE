@@ -3711,7 +3711,11 @@ Generator/context error:
         Ảnh đồng bộ (không poll). Trả (ok, media_name, sinfo, err) khớp _submit_image."""
         output_path.parent.mkdir(parents=True, exist_ok=True)
         image_inputs = self._refs_to_raw_inputs(refs)
-        aspect = None
+        # A scene normally does not pass an explicit aspect_ratio. Previously this
+        # left aspect=None and image_factory silently defaulted to LANDSCAPE.
+        # Always inherit the worker's configured aspect instead (landscape configs
+        # keep the exact same behaviour; portrait configs finally take effect).
+        aspect = self._veo3top_image_aspect()
         if aspect_ratio is not None:
             an = aspect_ratio.name.upper() if hasattr(aspect_ratio, "name") else str(aspect_ratio).upper()
             aspect = ("IMAGE_ASPECT_RATIO_PORTRAIT" if "PORTRAIT" in an else

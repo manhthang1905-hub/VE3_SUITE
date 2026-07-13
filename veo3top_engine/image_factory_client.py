@@ -218,3 +218,13 @@ def health():
         return requests.get(f"{BASE}/health", timeout=5).json()
     except Exception:
         return None
+
+
+def shutdown():
+    """Stop the shared image factory and all browser workers it owns."""
+    if requests is None:
+        return
+    try:
+        requests.post(f"{BASE}/shutdown", json={}, timeout=10)
+    except Exception:
+        pass
