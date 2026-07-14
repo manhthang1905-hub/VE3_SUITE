@@ -473,18 +473,19 @@ class Account:
         """XÓA SẠCH dữ liệu profile Chrome cho account bị OUT/session zombie. Google hay giữ 1 session-zombie
         (redirect khỏi trang signin) khiến login đè lên profile bẩn bị KẸT/thất bại -> phải để Chrome TRẮNG mới
         login lại được. Kill chrome giữ profile -> rmtree retry (Windows lock) -> tạo lại rỗng.
-        BẢO VỆ COOKIE (chống 'out oan') NHƯNG check SỐNG (không chỉ present): cookie CÒN SỐNG (mint được bearer) ->
-        chỉ glitch chrome -> KHÔNG xóa, giữ session. Cookie CHẾT/present-but-dead -> XÓA để login MỚI lấy cookie tươi.
-        QUAN TRỌNG: check SỐNG cả khi _force_login. _force_login chỉ set khi 401 (BEARER hết hạn ~30') — mà bearer
-        chết KHÔNG nghĩa COOKIE chết (cookie sống nhiều ngày). Cookie còn mint được bearer = account CHƯA out ->
-        XOÁ là tự phá session tốt -> 'out nhiều phải login lại'. CHỈ xoá khi cookie THẬT chết (mint bearer fail)."""
+        BẢO VỆ 2 LỚP (chống 'out oan' — GỐC tụt 96->56):
+          1) SSO GOOGLE (SAPISID trong profile) CÒN SỐNG -> TUYỆT ĐỐI KHÔNG xóa. SSO sống HÀNG TUẦN; session
+             labs.google chỉ ~12h -> labs hết hạn là BÌNH THƯỜNG, refresh được qua SSO (reload/warm_flow), KHÔNG
+             cần login lại. XÓA profile lúc này = phá SSO quý -> account mất login thật -> phải password lại.
+          2) Cookie labs CÒN SỐNG (mint được bearer) -> cũng giữ.
+        CHỈ xóa khi CẢ HAI chết (SSO mất + cookie chết) = account THẬT SỰ out (login lại clean)."""
         self._kill_profile_chrome()
         time.sleep(1.5)
-        if self._cookie_alive():
-            _clear_profile_lock(self.profile)   # cookie CÒN SỐNG -> chỉ mở khoá, GIỮ (đừng phá session tốt)
-            self._force_login = False           # cookie sống -> cho fast-path lại (khỏi ép login chrome vô ích)
+        if _profile_logged_in(self.email) or self._cookie_alive():
+            _clear_profile_lock(self.profile)   # SSO/cookie CÒN SỐNG -> chỉ mở khoá, GIỮ (đừng phá login tốt)
+            self._force_login = False           # còn login -> cho reuse/fast-path lại (khỏi ép password vô ích)
             if log:
-                try: log(f"🛡️ {self.email}: cookie CÒN SỐNG -> KHÔNG xóa (giữ session, chỉ clear lock)")
+                try: log(f"🛡️ {self.email}: SSO/cookie CÒN SỐNG -> KHÔNG xóa (giữ login, chỉ clear lock)")
                 except Exception: pass
             return
         try:
