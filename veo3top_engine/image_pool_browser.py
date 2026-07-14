@@ -219,9 +219,13 @@ def load_gmail_accounts():
     return out
 
 
-def _profile_logged_in(email):
+def _profile_logged_in(email, on_read_error=False):
     """Kiểm tra NHANH profile account ĐÃ login Google chưa (có cookie SAPISID *.google.com) — để pool CHỈ dùng
-    account đã login, KHỎI phí slot mở chrome cho gmail chưa login. Đọc Cookies DB (copy tạm) không mở chrome."""
+    account đã login, KHỎI phí slot mở chrome cho gmail chưa login. Đọc Cookies DB (copy tạm) không mở chrome.
+
+    on_read_error: giá trị trả khi ĐỌC KHÔNG ĐƯỢC sau retry (file Cookies còn lock do chrome vừa kill chưa nhả).
+      - Guard _wipe_profile truyền True: đọc-lỗi -> coi như CÒN login -> KHÔNG xóa (chống wipe SSO OAN, GỐC tụt account).
+      - start()/đếm truyền False (mặc định): đọc-lỗi -> coi chưa login (chỉ ảnh hưởng thống kê, không phá gì)."""
     import glob, sqlite3, tempfile, shutil
     prof = os.path.join(POOL_PROFILES, "p_" + email.replace("@", "_").replace(".", "_"))
     ck = None
@@ -229,20 +233,22 @@ def _profile_logged_in(email):
               glob.glob(os.path.join(prof, "**", "Network", "Cookies"), recursive=True)):
         ck = p; break
     if not ck:
-        return False
+        return False   # KHÔNG có file Cookies = thật sự chưa login (không phải đọc-lỗi)
     tmp = os.path.join(tempfile.gettempdir(), "poolck_" + os.path.basename(prof))
-    try:
-        shutil.copy(ck, tmp)
-        con = sqlite3.connect(tmp)
-        n = con.execute("SELECT COUNT(*) FROM cookies WHERE host_key LIKE '%google.com%' "
-                        "AND name LIKE '%SAPISID%'").fetchone()[0]
-        con.close()
-        return n > 0
-    except Exception:
-        return False
-    finally:
-        try: os.remove(tmp)
-        except Exception: pass
+    for _att in range(3):   # RETRY: chrome vừa _kill_profile_chrome có thể còn lock file Cookies (WAL) 1-2s
+        try:
+            shutil.copy(ck, tmp)
+            con = sqlite3.connect(f"file:{tmp}?mode=ro&immutable=1", uri=True)
+            n = con.execute("SELECT COUNT(*) FROM cookies WHERE host_key LIKE '%google.com%' "
+                            "AND name LIKE '%SAPISID%'").fetchone()[0]
+            con.close()
+            return n > 0
+        except Exception:
+            time.sleep(0.8)
+        finally:
+            try: os.remove(tmp)
+            except Exception: pass
+    return on_read_error   # đọc KHÔNG được sau 3 lần -> trả theo ngữ cảnh caller (guard wipe: True = giữ)
 
 
 # --- WINNING APPROACH (đã đo 75-77%): mint token IMAGE_GENERATION từ CHROME TRẮNG CLEAN TƯƠI dùng chung
@@ -481,7 +487,9 @@ class Account:
         CHỈ xóa khi CẢ HAI chết (SSO mất + cookie chết) = account THẬT SỰ out (login lại clean)."""
         self._kill_profile_chrome()
         time.sleep(1.5)
-        if _profile_logged_in(self.email) or self._cookie_alive():
+        # on_read_error=True: file Cookies còn lock (chrome vừa kill) -> ĐỌC KHÔNG ĐƯỢC != CHƯA LOGIN. Bảo thủ:
+        # đọc-lỗi coi như CÒN SSO -> KHÔNG xóa (thà giữ profile 'nghi còn login' còn hơn xóa nhầm SSO quý -> tụt account).
+        if _profile_logged_in(self.email, on_read_error=True) or self._cookie_alive():
             _clear_profile_lock(self.profile)   # SSO/cookie CÒN SỐNG -> chỉ mở khoá, GIỮ (đừng phá login tốt)
             self._force_login = False           # còn login -> cho reuse/fast-path lại (khỏi ép password vô ích)
             if log:

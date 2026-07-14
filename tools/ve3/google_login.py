@@ -1074,10 +1074,23 @@ def login_google_chrome(account_info: dict, chrome_portable: str = None, profile
 
         # v1.0.650: Inject fingerprint NGAY SAU khi mo Chrome, TRUOC khi navigate
         # Dam bao login va tao anh dung CUNG fingerprint → Google khong detect thay doi
+        # FIX (2026-07-14): seed CO DINH THEO EMAIL (khong random moi lan). Truoc day get_unique_seed() random
+        # moi login + file theo worker_id (=slot, khong phai account) -> MOI lan account re-login, Google thay
+        # WebGL/screen/CPU/RAM/canvas KHAC HAN -> flag 'thiet bi doi loan' -> reCAPTCHA/2FA challenge -> login fail
+        # -> account tut. Nay seed suy tu email (hash on dinh) -> CUNG account LUON CUNG van tay -> Google khong flag.
         try:
-            from modules.fingerprint_data import get_unique_seed, build_fingerprint_js
-            _fp_seed_file = Path(TOOL_DIR) / "config" / f".fingerprint_seed_{worker_id}"
-            _fp_seed = get_unique_seed()
+            import hashlib as _hh
+            from modules.fingerprint_data import build_fingerprint_js
+            _safe_em = "".join(ch if ch.isalnum() else "_" for ch in str(email))
+            _fp_seed_file = Path(TOOL_DIR) / "config" / f".fingerprint_seed_{_safe_em}"
+            if _fp_seed_file.exists():
+                try: _fp_seed = int((_fp_seed_file.read_text() or "").strip())
+                except Exception: _fp_seed = None
+            else:
+                _fp_seed = None
+            if not _fp_seed:
+                # seed on dinh suy tu email -> cung account luon cung van tay (ben vung qua moi lan login/restart)
+                _fp_seed = int(_hh.sha256(str(email).encode()).hexdigest(), 16) % 9899999 + 100000
             _fp_js = build_fingerprint_js(_fp_seed)
 
             # CDP: inject cho TAT CA page loads (TRUOC khi scripts chay)
