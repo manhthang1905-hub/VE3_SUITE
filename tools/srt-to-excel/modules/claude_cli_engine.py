@@ -765,8 +765,19 @@ JSON RULES:
             env["ANTHROPIC_API_KEY"] = proxy_key
             if self.model:
                 env["ANTHROPIC_MODEL"] = self.model
+            # CÁCH LY config claude.exe KHỎI Claude extension VS Code (ĐÃ TEST THẬT 2026-07-14): claude.exe (chạy key
+            # digishop) và extension DÙNG CHUNG ~/.claude/.credentials.json (OAuth claude.ai của extension) + ~/.claude.json.
+            # Tool chạy nhiều claude.exe song song -> đụng file OAuth chung -> extension 'OAuth session expired / 401 /
+            # logged out'. CLAUDE_CONFIG_DIR (Windows/Linux) chuyển .credentials.json + .claude.json sang thư mục RIÊNG.
+            # ĐÃ VERIFY: với config cách ly, chạy claude.exe -> credentials + .claude.json CHUNG KHÔNG bị đụng (mtime
+            # không đổi), extension giữ nguyên login. ANTHROPIC_AUTH_TOKEN GIỮ (test: thiếu nó -> 'Not logged in', có ->
+            # PONG OK qua proxy). config cách ly rỗng OAuth nên BẮT BUỘC key đi qua AUTH_TOKEN/API_KEY.
+            _iso_cfg = os.path.join(str(TOOL_DIR), "config", ".claude_cli_isolated")
+            try: os.makedirs(_iso_cfg, exist_ok=True)
+            except Exception: pass
+            env["CLAUDE_CONFIG_DIR"] = _iso_cfg
             _ndigi = len(self._proxy_keys)
-            self._log(f"     (qua proxy Anthropic: {proxy_url}{f' | {_ndigi} key xoay vong' if _ndigi > 1 else ''})")
+            self._log(f"     (qua proxy Anthropic: {proxy_url}{f' | {_ndigi} key xoay vong' if _ndigi > 1 else ''} | config cách ly khỏi VS Code)")
 
         hb = threading.Thread(target=_heartbeat, daemon=True)
         hb.start()

@@ -121,3 +121,6 @@ veo3top_engine/vid_accounts.txt
 accounts/
 .veo3top_vidpool_state.json
 .veo3top_imgpool_state.json.bak
+
+tools/srt-to-excel/config/.claude_cli_isolated/
+tools/ve3/config/.fingerprint_seed_*
