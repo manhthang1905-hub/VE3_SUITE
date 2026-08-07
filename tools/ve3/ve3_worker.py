@@ -45,6 +45,51 @@ from modules.server_pool import ServerPool
 from modules.thumbnail_youtube import ThumbnailOptimizeError, optimize_youtube_thumbnail
 
 
+# ===== NHANH MOI: goi thang API api.shopapi.vn =====================================
+# Cac module client nam trong veo3top_engine/ (canh image_factory_client.py va
+# video_factory_client.py) nen phai nap sys.path giong het cach cac nhanh cu dang lam.
+# Import MUON trong tung ham: may khong co SDK shopapi van phai chay duoc duong cu.
+
+def _shopapi_nap_engine():
+    """Them veo3top_engine/ vao sys.path roi tra ve module shopapi_common.
+
+    Dung SUITE_ROOT thay vi go cung 'D:\\VE3_SUITE\\veo3top_engine' nhu vai nhanh cu:
+    go cung lam tool chet ngay khi ai do chep thu muc sang o khac hoac doi ten.
+    """
+    engine_dir = str(SUITE_ROOT / "veo3top_engine")
+    if engine_dir not in sys.path:
+        sys.path.insert(0, engine_dir)
+    import shopapi_common
+    return shopapi_common
+
+
+def _shopapi_nap_batch():
+    """Nap module `shopapi_batch` (chay ca me, so luong song song tu /v1/me)."""
+    _shopapi_nap_engine()          # bao dam veo3top_engine/ da nam trong sys.path
+    import shopapi_batch
+    return shopapi_batch
+
+
+def _shopapi_che_khoa(key):
+    """Che khoa truoc khi ghi log. Khong bao gio in khoa day du ra man hinh."""
+    try:
+        return _shopapi_nap_engine().che_khoa(key)
+    except Exception:
+        return "(khoa)" if key else "(chua co khoa)"
+
+
+def _shopapi_trong_me():
+    """Luong nay dang chay trong mot me `chay_ca_me` khong?
+
+    Quyet dinh nhanh gui job co duoc phep NEM `BiNghen` (429/503) ra ngoai hay
+    khong. Thieu module -> False, tuc la giu nguyen hanh vi cu (khong bao gio nem).
+    """
+    try:
+        return _shopapi_nap_batch().trong_me()
+    except Exception:
+        return False
+
+
 class VE3Worker:
     """Worker táº¡o áº£nh tá»« Excel qua server mode."""
 
@@ -73,6 +118,15 @@ class VE3Worker:
         self._stop_flag = False
         self._excel_lock = threading.Lock()
         self._auth_lock = threading.Lock()
+        # Dem so viec da xong. `completed_count[0] += 1` la doc-sua-ghi, KHONG nguyen
+        # tu duoi GIL -> chay 1 luong thi khong sao, chay 40 luong la dem thieu va
+        # thanh tien do lui nguoc tren GUI. Khoa rieng (khong dung chung _excel_lock)
+        # de khong bat luong nao phai cho o dia.
+        self._dem_lock = threading.Lock()
+        # Ket qua anh da tao san bang cach GOP nhieu scene cung prompt vao 1 job
+        # `n=k`. `_submit_image_shopapi` tra thang tu day, khong goi API lai.
+        self._shopapi_anh_gop = {}
+        self._shopapi_gop_lock = threading.Lock()
         self._last_auth_refresh_ts = 0.0
         self._wb: Optional[PromptWorkbook] = None
 
@@ -91,7 +145,8 @@ class VE3Worker:
 
         # Generation backend config
         self.generation_backend = str(config.get("generation_backend") or config.get("generation_mode") or "server").strip().lower()
-        if self.generation_backend not in {"server", "nanopic", "flowkit", "combined", "veo3top", "veo3top_b", "veo3top_b_ultra", "veo3top_b_pool"}:
+        # "shopapi" = goi thang API api.shopapi.vn (mac dinh cua ban nay).
+        if self.generation_backend not in {"server", "nanopic", "flowkit", "combined", "veo3top", "veo3top_b", "veo3top_b_ultra", "veo3top_b_pool", "shopapi"}:
             self.generation_backend = "server"
         # veo3top (A): chrome account thuong tru/mã. veo3top_b (B): token-chrome chung + auth cache.
         # Chi anh huong buoc tao VIDEO; upload anh / status van nhu cu. Lazy-init.
@@ -103,15 +158,48 @@ class VE3Worker:
         self.veo3top_image_mode = str(config.get("veo3top_image_mode") or "").strip().lower()
         if self.veo3top_image_mode in ("ultra", "veo3top_b_ultra"):
             self.veo3top_image_mode = "account"
-        if self.veo3top_image_mode not in ("", "blank", "account", "pool"):
+        if self.veo3top_image_mode not in ("", "blank", "account", "pool", "shopapi"):
             self.veo3top_image_mode = ""
         self.use_veo3top_for_image = self.veo3top_image_mode in ("blank", "account", "pool")
         self._veo3top_image_provider = None
+
+        # ===== NHANH MOI: goi thang API api.shopapi.vn (MAC DINH cua ban nay) =====
+        # Khoa API co y KHONG doc tu settings.yaml: file do nam trong kho ma va con
+        # duoc chep sang worker qua .ve3_run_config.json trong thu muc project ->
+        # hai duong ro ri ma nguoi dung khong he biet. Chi doc bien moi truong
+        # SHOPAPI_KEY hoac kho khoa %APPDATA%\ShopAPI\ve3-suite\khoa.txt.
+        self.shopapi_key, self.shopapi_key_source = self._doc_khoa_shopapi()
+        _shopapi_image_chon = (self.veo3top_image_mode == "shopapi")
+        _shopapi_video_chon = (self.generation_backend == "shopapi")
+        self.use_shopapi_for_image = _shopapi_image_chon and bool(self.shopapi_key)
+        self.use_shopapi_for_video = _shopapi_video_chon and bool(self.shopapi_key)
+        # Tran cho MOT job (POST + poll cho toi khi xong). Video lau hon anh nhieu.
+        self.shopapi_image_timeout = float(config.get("shopapi_image_timeout", 900) or 900)
+        self.shopapi_video_timeout = float(config.get("shopapi_video_timeout", 1600) or 1600)
+        # LUI VE DUONG CU khi chua co khoa: bao TO roi chay tiep bang backend cu,
+        # KHONG chet lang (nguoi dung phai biet vi sao hoa don API van bang 0).
+        if (_shopapi_image_chon or _shopapi_video_chon) and not self.shopapi_key:
+            self.log("=" * 72, "WARN")
+            self.log("CANH BAO: da chon backend 'API shopapi' NHUNG CHUA CO KHOA API.", "WARN")
+            self.log("  -> Tool LUI VE duong cu (server/veo3top) cho lan chay nay.", "WARN")
+            self.log("  -> Vao trang Cai dat, dan khoa sk_live_... vao o 'Khoa API shopapi'", "WARN")
+            self.log("     roi bam 'Kiem khoa'. Hoac dat bien moi truong SHOPAPI_KEY.", "WARN")
+            self.log("=" * 72, "WARN")
+        elif self.use_shopapi_for_image or self.use_shopapi_for_video:
+            self.log("API shopapi: khoa lay tu {0} ({1}) | anh={2} video={3}".format(
+                self.shopapi_key_source, _shopapi_che_khoa(self.shopapi_key),
+                "API" if self.use_shopapi_for_image else "cu",
+                "API" if self.use_shopapi_for_video else "cu"))
         # Neu CA anh VA video deu ban thang veo3top -> KHONG can server pool / bearer worker (moi buoc tu lay auth).
         # veo3top_b_pool = NHA MAY CHUNG (pool anh + pool video): ca 2 buoc tu lay auth per-account (android_bypass),
         # KHONG dung ExtAuth/token worker -> phai nam trong nhom nay (neu thieu -> chay nham ExtAuth cu -> "extension: no project").
-        self._veo3top_only = self.use_veo3top_for_image and \
-            self.generation_backend in ("veo3top", "veo3top_b", "veo3top_b_ultra", "veo3top_b_pool")
+        # CA anh VA video deu di qua API shopapi -> cung KHONG can bearer/project worker
+        # (khong mo Chrome lan nao). Chi tinh khi DA CO KHOA: thieu khoa thi tool lui ve
+        # duong cu, ma duong cu VAN CAN auth -> phai de nguyen luong auth chay.
+        self._shopapi_only = self.use_shopapi_for_image and self.use_shopapi_for_video
+        self._veo3top_only = (self.use_veo3top_for_image and
+            self.generation_backend in ("veo3top", "veo3top_b", "veo3top_b_ultra", "veo3top_b_pool")) \
+            or self._shopapi_only
         self.nanopic_fallback_enabled = bool(config.get("nanopic_fallback_enabled", True))
 
         # FlowKit config
@@ -140,7 +228,19 @@ class VE3Worker:
         # Concurrent prompts (số ảnh 1 mã gửi SONG SONG).
         # AUTO (pool mode): = số chrome pool / số mã song song -> luôn làm ĐẦY pool (không chrome nào ngồi không),
         # không over-thread. Tự tính theo thực tế, KHÔNG cần chỉnh tay ở GUI. Backend khác -> giữ config cũ.
-        if str(config.get("generation_backend", "") or "").strip() == "veo3top_b_pool":
+        if self.use_shopapi_for_image:
+            # API shopapi: so job song song KHONG duoc go cung - may chu tinh lai lien tuc
+            # theo suc chua nha may chia cho so khach dang cho.
+            #
+            # ⚠ TRUOC DAY cho nay hoi GET /v1/me MOT LAN luc khoi dong roi giu con so
+            # do ca luot chay. Do la tu bop minh: doc trung luc dong khach duoc 2 thi
+            # ca 4 tieng sau van chay 2, du nha may da rong ra tu lau. Gio moi PHA hoi
+            # lai (`_shopapi_luong`) va `min` voi con so nay, nen con nay chi con la
+            # TRAN NGUOI DUNG: nguoi dung ghim thi ton trong, khong ghim thi de tran
+            # CUNG cua loai job (may chu van la nguoi chan tren that su moi lo).
+            _pin = int(config.get("max_concurrent", 0) or 0)
+            self.max_concurrent = _pin if _pin > 0 else self._shopapi_tran_cung("image")
+        elif str(config.get("generation_backend", "") or "").strip() == "veo3top_b_pool":
             _override = int(config.get("run_max_concurrent", 0) or 0)   # GUI TỰ TÍNH số luồng/mã theo tài nguyên thực -> dùng thẳng
             if _override > 0:
                 self.max_concurrent = _override
@@ -581,6 +681,9 @@ class VE3Worker:
             "safety",
             "unsafe",
             "unsafe_generation",       # PUBLIC_ERROR_UNSAFE_GENERATION (pool trả về)
+            "content_rejected",        # API shopapi: job.error.code khi bộ lọc chặn prompt.
+                                       # Thông điệp kèm theo là văn xuôi TIẾNG VIỆT nên không
+                                       # marker tiếng Anh nào ở đây khớp — phải bắt bằng mã.
             "public_error_minor",      # PUBLIC_ERROR_MINOR (trẻ vị thành niên) — 'minor' KHÔNG match qua 'unsafe'
             "violat",
             "prohibited",
@@ -1305,7 +1408,9 @@ Generator/context error:
             return result
 
         # POOL: media_id VO DUNG (embed base64 per-account) -> KHONG validate media_id (tranh repair qua ExtAuth).
-        if _do_image and self.reference_media_validation_enabled and self.generation_backend != "veo3top_b_pool":
+        # API shopapi cung the: anh tham chieu di bang URL upload, khong co mediaId cua Flow de ma validate.
+        if _do_image and self.reference_media_validation_enabled \
+                and self.generation_backend != "veo3top_b_pool" and not self.use_shopapi_for_image:
             self.log("")
             self.log("=" * 50)
             self.log("PHASE 1B: Validate media_id cua reference")
@@ -1454,7 +1559,8 @@ Generator/context error:
         if self._stop_flag:
             return ref_result, {"total": 0, "completed": 0, "failed": 0}, {"total": 0, "completed": 0, "failed": 0}
 
-        if self.reference_media_validation_enabled and self.generation_backend != "veo3top_b_pool":
+        if self.reference_media_validation_enabled \
+                and self.generation_backend != "veo3top_b_pool" and not self.use_shopapi_for_image:
             self.log("")
             self.log("=" * 50)
             self.log("PHASE 1B: Validate media_id cua reference (luot 2)")
@@ -2043,7 +2149,8 @@ Generator/context error:
             return False
         # POOL: nha may anh EMBED base64 nv1.png (file local) per-account -> media_id account-scoped VO DUNG,
         # KHONG can upload ExtAuth. Chi can nv1.png ton tai local (da copy boi _ensure_psychology_reference_row).
-        if self.generation_backend == "veo3top_b_pool":
+        # API shopapi: y het - anh tham chieu di bang URL upload, khong dinh gi toi ExtAuth.
+        if self.generation_backend == "veo3top_b_pool" or self.use_shopapi_for_image:
             if str(getattr(char, "status", "") or "").strip().lower() != "done":
                 with self._excel_lock:
                     wb.update_character("nv1", status="done", image_file="nv1.png")
@@ -2095,7 +2202,7 @@ Generator/context error:
 
             # POOL: nha may EMBED base64 file anh local per-account -> KHONG can media_id, KHONG upload ExtAuth,
             # KHONG sinh de len anh user. Co file anh local -> done luon; thieu file -> van sinh moi qua pool.
-            if self.generation_backend == "veo3top_b_pool" and img_path.exists():
+            if (self.generation_backend == "veo3top_b_pool" or self.use_shopapi_for_image) and img_path.exists():
                 if char.status != "done":
                     with self._excel_lock:
                         wb.update_character(char.id, status="done")
@@ -2133,7 +2240,7 @@ Generator/context error:
             pending.append((char, img_path))
 
         result["total"] = len(pending)
-        self.log(f"References cáº§n táº¡o: {len(pending)}/{len(characters)} (concurrent={self.max_concurrent})")
+        self.log(f"References cáº§n táº¡o: {len(pending)}/{len(characters)} (tran nguoi dung={self.max_concurrent}, so that hoi may chu moi lo)")
         ref_total, ref_done_base = self._count_reference_progress(characters)
 
         # Build task list
@@ -2231,8 +2338,10 @@ Generator/context error:
                         # Excel bá»‹ khÃ³a â€” lÆ°u pending write Ä‘á»ƒ khÃ´ng máº¥t data
                         wb._save_pending_write("character", char_id=char.id, **update_data)
                         self.log(f"    {char.id}: Excel bá»‹ khÃ³a, lÆ°u pending write", "WARN")
-                completed_count[0] += 1
-                current_done = min(ref_total, ref_done_base + completed_count[0])
+                with self._dem_lock:          # dem duoi nhieu luong: xem `_dem_lock`
+                    completed_count[0] += 1
+                    _da_xong = completed_count[0]
+                current_done = min(ref_total, ref_done_base + _da_xong)
                 self.progress("refs", current_done, ref_total, char.id)
                 self.log(f"    {char.id} â†’ OK ({elapsed}s, {server_info.get('server', '?')})")
                 self.on_item_status("char", char.id, "done", str(img_path),
@@ -2250,18 +2359,9 @@ Generator/context error:
                                     {"elapsed": elapsed, **server_info})
                 return False
 
-        with ThreadPoolExecutor(max_workers=self.max_concurrent) as executor:
-            futures = {executor.submit(_do_char, t): t for t in tasks}
-            for future in as_completed(futures):
-                if self._stop_flag:
-                    executor.shutdown(wait=False, cancel_futures=True)
-                    break
-                r = future.result()
-                if r is True:
-                    result["completed"] += 1
-                elif r is False:
-                    result["failed"] += 1
-
+        # So luong lay tu MAY CHU (`/v1/me`) chu khong go cung, va bi chan tren
+        # boi `self.max_concurrent` de khong pha gioi han nguoi dung da dat.
+        self._chay_me("image", tasks, _do_char, self.max_concurrent, result)
         return result
 
     def _is_reference_location(self, char: Character) -> bool:
@@ -2493,7 +2593,7 @@ Generator/context error:
 
         result["total"] = len(pending)
         total_scenes = len([s for s in scenes if s.img_prompt])
-        self.log(f"Scenes cáº§n táº¡o: {len(pending)}/{total_scenes} (concurrent={self.max_concurrent})")
+        self.log(f"Scenes cáº§n táº¡o: {len(pending)}/{total_scenes} (tran nguoi dung={self.max_concurrent}, so that hoi may chu moi lo)")
         scene_total, scene_done_base = self._count_scene_image_progress(scenes)
 
         media_ids = self._load_media_ids(wb)
@@ -2597,8 +2697,10 @@ Generator/context error:
                                                media_id=media_name or "",
                                                img_prompt=current_prompt if current_prompt != prompt else "")
                         self.log(f"    Scene {scene_id}: Excel bá»‹ khÃ³a, lÆ°u pending write", "WARN")
-                completed_count[0] += 1
-                current_done = min(scene_total, scene_done_base + completed_count[0])
+                with self._dem_lock:          # dem duoi nhieu luong: xem `_dem_lock`
+                    completed_count[0] += 1
+                    _da_xong = completed_count[0]
+                current_done = min(scene_total, scene_done_base + _da_xong)
                 self.progress("scenes", current_done, scene_total, f"scene_{scene_id}")
                 self.log(f"    Scene {scene_id} â†’ OK ({elapsed}s, {server_info.get('server', '?')})")
                 self.on_item_status("scene", scene_id, "done", str(img_path),
@@ -2621,18 +2723,26 @@ Generator/context error:
                                     {"elapsed": elapsed, **server_info})
                 return False
 
-        with ThreadPoolExecutor(max_workers=self.max_concurrent) as executor:
-            futures = {executor.submit(_do_scene, i, s): s for i, s in enumerate(pending)}
-            for future in as_completed(futures):
-                if self._stop_flag:
-                    executor.shutdown(wait=False, cancel_futures=True)
-                    break
-                r = future.result()
-                if r is True:
-                    result["completed"] += 1
-                elif r is False:
-                    result["failed"] += 1
+        # GOP TRUOC, CHAY SAU: scene nao trung y het prompt + ti le + ref thi don
+        # vao MOT job `n=k` (toi 8 anh/job) - chi ton 1 cho trong tran song song
+        # thay vi k cho. Gop hong thi khong sao, chung di duong binh thuong ben duoi.
+        if self.use_shopapi_for_image and not self._stop_flag:
+            try:
+                cong_viec_gop = []
+                for s in pending:
+                    refs, expected_refs, missing_refs = self._build_references(
+                        s, media_ids, with_details=True, ignored_ids=child_ids)
+                    if expected_refs and missing_refs:
+                        continue          # thieu ref -> de `_do_scene` bao loi dung cho
+                    cong_viec_gop.append((s.img_prompt,
+                                          self.img_dir / f"{s.scene_id}.png",
+                                          refs, self.aspect_ratio))
+                self._shopapi_gop_anh_cung_prompt(cong_viec_gop)
+            except Exception as e:
+                self.log(f"    [shopapi-img] bo qua buoc gop ({e})", "WARN")
 
+        self._chay_me("image", list(enumerate(pending)),
+                      lambda p: _do_scene(p[0], p[1]), self.max_concurrent, result)
         return result
 
     def _load_media_ids(self, wb: PromptWorkbook) -> Dict[str, str]:
@@ -2988,13 +3098,20 @@ Generator/context error:
         self.log(f"Thumbnail can tao: {len(thumbnails)}")
         media_ids = self._load_media_ids(wb)
 
-        for idx, thumb in enumerate(thumbnails, start=1):
+        def _lam_mot_thumb(cap):
+            """Tao MOT thumbnail. Tra True/False/None - khop cach `_chay_me` dem.
+
+            Tach ra khoi vong `for` de ca me thumbnail chay SONG SONG duoc: truoc
+            day day la cho duy nhat con chay tuan tu 100%, moi anh cho anh truoc
+            xong moi gui, trong khi nha may van rong.
+            """
+            idx, thumb = cap
             if self._stop_flag:
-                break
+                return None
             thumb_id = int(getattr(thumb, "thumb_id", idx) or idx)
             prompt = (getattr(thumb, "img_prompt", "") or "").strip()
             if not prompt:
-                continue
+                return None
 
             out_path = self.thumb_dir / f"thumb_{thumb_id:03d}.png"
             refs, expected_refs, missing_refs = self._build_thumbnail_references(thumb, media_ids, with_details=True)
@@ -3004,7 +3121,7 @@ Generator/context error:
                     wb.update_thumbnail(thumb_id, status_img="error")
                     wb.safe_save()
                 self.log(f"  [{idx}/{len(thumbnails)}] Thumb {thumb_id}: missing refs -> {missing_preview}", "WARN")
-                continue
+                return False
 
             self.log(f"  [{idx}/{len(thumbnails)}] Thumb {thumb_id}: generating...")
 
@@ -3014,17 +3131,22 @@ Generator/context error:
                                      "poll_status": info.get("status")})
 
             t0 = time.time()
+            # Thumbnail đi theo khổ kênh: kênh landscape (YouTube) giữ LANDSCAPE + optimize
+            # như cũ; kênh portrait (short 9:16) ra thumb dọc và giữ nguyên ảnh gốc.
+            _is_portrait_channel = "PORTRAIT" in str(
+                getattr(self.aspect_ratio, "name", self.aspect_ratio)).upper()
             success, media_name, sinfo, _error_text = self._submit_image(
                 prompt=prompt,
                 output_path=out_path,
                 refs=refs,
                 poll_callback=_poll_cb,
-                aspect_ratio=AspectRatio.LANDSCAPE
+                aspect_ratio=self.aspect_ratio if _is_portrait_channel else AspectRatio.LANDSCAPE
             )
             elapsed = round(time.time() - t0, 1)
 
             if success:
-                final_path = self._optimize_thumbnail_for_youtube(out_path)
+                final_path = out_path if _is_portrait_channel \
+                    else self._optimize_thumbnail_for_youtube(out_path)
                 if not final_path:
                     with self._excel_lock:
                         wb.update_thumbnail(thumb_id, status_img="error")
@@ -3032,7 +3154,7 @@ Generator/context error:
                     self.log(f"    Thumb {thumb_id} -> FAIL optimize YouTube thumbnail ({elapsed}s)", "WARN")
                     self.on_item_status("thumb", thumb_id, "error", None,
                                         {"elapsed": elapsed, **sinfo})
-                    continue
+                    return False
                 with self._excel_lock:
                     wb.update_thumbnail(thumb_id, status_img="done", img_path=str(final_path))
                     if not wb.safe_save():
@@ -3041,6 +3163,7 @@ Generator/context error:
                 self.log(f"    Thumb {thumb_id} -> OK ({elapsed}s, {sinfo.get('server', '?')})")
                 self.on_item_status("thumb", thumb_id, "done", str(final_path),
                                     {"elapsed": elapsed, **sinfo})
+                return True
             else:
                 with self._excel_lock:
                     wb.update_thumbnail(thumb_id, status_img="error")
@@ -3048,6 +3171,14 @@ Generator/context error:
                 self.log(f"    Thumb {thumb_id} -> FAIL ({elapsed}s)", "WARN")
                 self.on_item_status("thumb", thumb_id, "error", None,
                                     {"elapsed": elapsed, **sinfo})
+                return False
+
+        # Thumbnail cung la job ANH -> dung chung tran song song voi pha scene.
+        # Backend CU giu nguyen chay tuan tu (tran = 1): thay doi song song cho
+        # nhung duong khong lien quan la tu chuoc rui ro khong can thiet.
+        self._chay_me("image", list(enumerate(thumbnails, start=1)), _lam_mot_thumb,
+                      self.max_concurrent if self.use_shopapi_for_image else 1,
+                      {"completed": 0, "failed": 0})
 
         # (Removed: backward-compatible alias thumb/<project_code>.jpg — not needed.)
 
@@ -3145,7 +3276,9 @@ Generator/context error:
         # Lá»c scene cÃ³ video_prompt vÃ  áº£nh Ä‘Ã£ xong
         # FLOW2 local mode: upload anh scene len Ultra -> media_id Ultra vao Excel TRUOC khi I2V
         # veo3top_b_pool: NHÀ MÁY CHUNG tự upload ảnh per-account -> KHÔNG bulk upload ở đây.
-        if self.use_local_token_for_image and self.generation_backend != "veo3top_b_pool":
+        # API shopapi cung KHONG bulk upload: buoc I2V tu upload anh scene lay URL cong khai.
+        if self.use_local_token_for_image and self.generation_backend != "veo3top_b_pool" \
+                and not self.use_shopapi_for_video:
             self._upload_local_images_for_video(wb, scenes)
             scenes = wb.get_scenes()  # reload media_id moi (Ultra-bound)
 
@@ -3173,7 +3306,9 @@ Generator/context error:
             img_path = self.img_dir / f"{scene.scene_id}.png"
             media_id = getattr(scene, 'media_id', '') or ''
             # pool: chỉ cần ẢNH (nhà máy tự upload lấy media_id); mode khác cần media_id sẵn.
-            need_media = self.generation_backend != "veo3top_b_pool"
+            # API shopapi: cũng chỉ cần ẢNH — `_submit_video_shopapi` tự upload `img/X.png`
+            # lấy URL công khai. Bắt buộc media_id ở đây là chặn oan CẢ project.
+            need_media = self.generation_backend != "veo3top_b_pool" and not self.use_shopapi_for_video
             if not img_path.exists() or (need_media and not media_id):
                 self.log(f"  Skip scene {scene.scene_id}: chÆ°a cÃ³ áº£nh hoáº·c media_id")
                 continue
@@ -3184,7 +3319,7 @@ Generator/context error:
         if not pending:
             self.log("KhÃ´ng cÃ³ scene nÃ o cáº§n táº¡o video")
             return result
-        self.log(f"Videos cáº§n táº¡o: {len(pending)}/{video_total} (concurrent={self.max_concurrent})")
+        self.log(f"Videos cáº§n táº¡o: {len(pending)}/{video_total} (tran nguoi dung={self.max_concurrent}, so that hoi may chu moi lo)")
 
         completed_count = [0]
 
@@ -3280,8 +3415,10 @@ Generator/context error:
                                                status_vid="done", video_path=str(vid_path),
                                                video_prompt=current_prompt if current_prompt != vp else "")
                         self.log(f"    Video scene {sid}: Excel bá»‹ khÃ³a, lÆ°u pending write", "WARN")
-                completed_count[0] += 1
-                current_done = min(video_total, video_done_base + completed_count[0])
+                with self._dem_lock:          # dem duoi nhieu luong: xem `_dem_lock`
+                    completed_count[0] += 1
+                    _da_xong = completed_count[0]
+                current_done = min(video_total, video_done_base + _da_xong)
                 self.progress("videos", current_done, video_total, f"scene_{sid:03d}")
                 self.log(f"    Video scene {sid} â†’ OK ({elapsed}s)")
                 self.on_item_status("scene", sid, "done", None,
@@ -3312,18 +3449,20 @@ Generator/context error:
         elif self.generation_backend == "veo3top_b_pool":
             # pool: đẩy NHIỀU job vào hàng đợi chung để 10 account-worker luôn có việc (service tự điều phối)
             vid_workers = int(self.config.get("veo3top_pool_concurrency", 20) or 20)
-        with ThreadPoolExecutor(max_workers=vid_workers) as executor:
-            futures = {executor.submit(_do_video, i, s): s for i, s in enumerate(pending)}
-            for future in as_completed(futures):
-                if self._stop_flag:
-                    executor.shutdown(wait=False, cancel_futures=True)
-                    break
-                r = future.result()
-                if r is True:
-                    result["completed"] += 1
-                elif r is False:
-                    result["failed"] += 1
+        elif self.use_shopapi_for_video:
+            # API shopapi: trần song song của VIDEO khác trần của ẢNH (`self.max_concurrent`),
+            # và máy chủ tính lại liên tục -> `_chay_me` hỏi GET /v1/me ở MỖI LÔ.
+            # Ở đây chỉ chốt trần của TOOL: người dùng ghim thì tôn trọng, không
+            # ghim thì để trần CỨNG của video (máy chủ mới là người chặn thật sự).
+            vid_workers = int(self.config.get("shopapi_video_concurrency", 0) or 0) \
+                or self._shopapi_tran_cung("video")
+        elif self.use_shopapi_for_image:
+            # ẢNH đi API còn VIDEO đi backend cũ: `self.max_concurrent` lúc này là
+            # trần CỨNG của ảnh (128) — vô nghĩa và nguy hiểm cho backend video cũ.
+            vid_workers = max(1, int(self.config.get("max_concurrent", 1) or 1))
 
+        self._chay_me("video", list(enumerate(pending)),
+                      lambda p: _do_video(p[0], p[1]), vid_workers, result)
         return result
 
     def _video_reference_path(self, output_path: Path) -> Path:
@@ -3487,6 +3626,328 @@ Generator/context error:
         with ThreadPoolExecutor(max_workers=conc) as ex:
             results = list(ex.map(_up_one, todo))
         return sum(1 for r in results if r)
+
+    # ===== NHANH MOI: API shopapi.vn (anh + video) ==================================
+
+    def _doc_khoa_shopapi(self):
+        """Tim khoa API shopapi. Tra (khoa, nguon). Khong tim thay -> ("", "").
+
+        `nguon` la cau tieng Viet de hien len log, KHONG bao gio chua chinh khoa.
+        Thieu SDK/module -> tra rong, va nhanh moi se tu lui ve duong cu.
+        """
+        try:
+            return _shopapi_nap_engine().doc_khoa()
+        except Exception:
+            return "", ""
+
+    # ⚠ DA BO `_shopapi_tran_song_song`: no hoi /v1/me MOT LAN luc khoi dong roi
+    # giu con so do ca luot chay, va coi `0` la "chay 1 job". Ca hai deu sai:
+    # tran doi lien tuc (phai hoi lai moi lo -> `_shopapi_luong`), con `0` nghia
+    # la nha may DANG DUNG nen gui 1 job la chac chan an 503 va bao loi oan cho
+    # mot viec khong he co loi (phai CHO roi hoi lai -> `so_luong_song_song`).
+
+    def _shopapi_tran_cung(self, loai):
+        """Tran CUNG tuyet doi cua mot loai job (tts 16 / image 128 / video 64).
+
+        Doc tu SDK de may chu nang tran la tool an theo ngay. KHONG phai con so
+        de lam so luong: no chi la chot chan phong khi doc /v1/me hong.
+        """
+        try:
+            return int(_shopapi_nap_engine().tran_cung(loai))
+        except Exception:
+            return {"tts": 16, "image": 128, "video": 64}.get(loai, 1)
+
+    def _shopapi_luong(self, loai, tran_tool=None):
+        """So job loai `loai` duoc ban CUNG LUC ngay bay gio.
+
+        = min(tran dong cua may chu, tran cung cua loai, tran nguoi dung dat).
+        KHONG go cung mot con so nao: `GET /v1/me` moi la nguon su that, va no
+        doi lien tuc theo suc chua nha may chia cho so khach dang cho.
+
+        `0` tu may chu = nha may loai do DANG DUNG -> ham cho roi hoi lai (co ghi
+        log tung vong de nguoi dung biet la dang cho chu khong phai treo), va tra
+        `0` khi cho qua lau de noi goi bo cuoc CO KIEM SOAT.
+        """
+        try:
+            sb = _shopapi_nap_batch()
+        except Exception as e:
+            self.log("API shopapi: thieu module shopapi_batch ({0}) -> chay 1 job".format(e), "WARN")
+            return 1
+        return int(sb.so_luong_song_song(
+            loai, tran_tool=tran_tool, api_key=self.shopapi_key, log=self.log,
+            ngu=lambda giay: self._sleep_with_stop(giay),
+            dung_lai=lambda: bool(self._stop_flag),
+        ))
+
+    def _chay_me_shopapi(self, loai, viec, chay_mot, tran_tool=None):
+        """Chay ca me `viec` qua API shopapi, tu do nhip. Tra ket qua DUNG THU TU DUA VAO.
+
+        Day la cho thay the `ThreadPoolExecutor(max_workers=<so co dinh>)`: so
+        luong khong con go cung ma do may chu quyet moi lo, con nhip thi tu do
+        (muot thi +1, 429 chia doi, 503 dung han roi tham do lai bang 1 job).
+
+        Job bi tu choi o cua KHONG bi tinh la hong - no quay ve dau hang cho.
+        Job hong that thi chi minh no hong, khong keo ca me chet theo.
+        """
+        sb = _shopapi_nap_batch()
+        return sb.chay_ca_me(
+            viec, chay_mot, loai, tran_tool=tran_tool, api_key=self.shopapi_key,
+            log=self.log,
+            ngu=lambda giay: self._sleep_with_stop(giay),
+            dung_lai=lambda: bool(self._stop_flag),
+        )
+
+    def _chay_me(self, loai, viec, chay_mot, tran_tool, ket):
+        """Chay ca me: nhanh API thi tu do nhip, nhanh cu thi giu Y NGUYEN duong cu.
+
+        `ket` la dict {"completed": n, "failed": n} duoc cong don tai cho, dung
+        cach cu: `True` -> completed, `False` -> failed, `None` -> khong tinh
+        (bi dung giua chung).
+
+        VI SAO GOP VAO MOT CHO: ba pha (references / scenes / videos) truoc day
+        chep y het khoi ThreadPoolExecutor + as_completed. Sua song song o ba
+        ban sao la ba lan sai khac nhau.
+        """
+        dung_api = (loai == "image" and self.use_shopapi_for_image) or \
+                   (loai == "video" and self.use_shopapi_for_video)
+        if dung_api:
+            try:
+                ket_qua = self._chay_me_shopapi(loai, viec, chay_mot, tran_tool)
+            except Exception as e:
+                # Thieu module / loi khong luong truoc -> LUI VE duong cu, khong
+                # bo ca pha. Bao TO vi day la mat cong suat, khong phai chuyen nho.
+                self.log("API shopapi: chay ca me that bai ({0}) -> lui ve chay tuan tu"
+                         .format(e), "ERROR")
+                ket_qua = None
+            if ket_qua is not None:
+                for r in ket_qua:
+                    if r is True:
+                        ket["completed"] += 1
+                    elif r is False:
+                        ket["failed"] += 1
+                return ket
+
+        # Duong cu: y nguyen nhu truoc khi co nhanh API.
+        with ThreadPoolExecutor(max_workers=max(1, int(tran_tool or 1))) as executor:
+            futures = {executor.submit(chay_mot, v): v for v in viec}
+            for future in as_completed(futures):
+                if self._stop_flag:
+                    executor.shutdown(wait=False, cancel_futures=True)
+                    break
+                r = future.result()
+                if r is True:
+                    ket["completed"] += 1
+                elif r is False:
+                    ket["failed"] += 1
+        return ket
+
+    def _shopapi_refs_to_bytes(self, refs):
+        """Refs (ImageInput) -> danh sach bytes anh de UPLOAD lam URL cong khai.
+
+        API chi nhan anh tham chieu la URL cong khai, khong nhan duong dan may va
+        cung khong nhan mediaId cua Flow. `_make_ref` da nhung san base64 khi
+        veo3top_image_mode == "shopapi", nen o day chi viec giai ma nguoc lai.
+        Ref nao khong co bytes thi BO va ghi canh bao - gui ref rong chi ton tien
+        ma anh van lech nhan vat.
+        """
+        if not refs:
+            return []
+        import base64 as _b64
+        out = []
+        for r in refs:
+            b64 = getattr(r, "base64_data", "") or ""
+            if not b64:
+                self.log("    [shopapi-img] ref '{0}' khong co bytes anh -> BO (anh co the "
+                         "lech nhan vat)".format(getattr(r, "name", "?")), "WARN")
+                continue
+            try:
+                out.append(_b64.b64decode(b64))
+            except Exception as e:
+                self.log("    [shopapi-img] ref '{0}' giai ma base64 loi: {1} -> BO".format(
+                    getattr(r, "name", "?"), e), "WARN")
+        return out
+
+    def _submit_video_shopapi(self, prompt, output_path):
+        """Dung video bang API shopapi. Tra (success, info, error) - KHOP _submit_video.
+
+        Rang buoc TEN: video `vid/X.mp4` PHAI co anh `img/X.png` cung stem (giong
+        het nhanh veo3top-b-pool) - do la anh dau vao cua buoc image-to-video.
+        """
+        from pathlib import Path as _P
+        img_path = self.img_dir / f"{_P(output_path).stem}.png"
+        if not img_path.exists():
+            return False, {}, f"shopapi-vid: khong thay anh scene {img_path}"
+        try:
+            _shopapi_nap_engine()
+            import shopapi_video_client as svc
+        except Exception as e:
+            return False, {}, f"shopapi-vid: import client loi: {e}"
+        Path(output_path).parent.mkdir(parents=True, exist_ok=True)
+        aspect = self._nanopic_video_aspect_ratio()
+        return svc.generate(str(img_path), prompt, str(output_path), aspect=aspect,
+                            timeout=self.shopapi_video_timeout,
+                            api_key=self.shopapi_key, log=self.log,
+                            # Trong mot me thi 429/503 phai NEM ra de vong do nhip
+                            # tra viec ve hang cho; goi le thi tuyet doi khong nem
+                            # (hop dong _submit_video la tra dung 3 phan tu).
+                            nem_khi_nghen=_shopapi_trong_me())
+
+    def _submit_image_shopapi(self, prompt, output_path, refs=None, aspect_ratio=None) -> tuple:
+        """Tao anh bang API shopapi. Tra (ok, media_name, sinfo, err) - KHOP _submit_image."""
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+
+        # Anh nay da duoc tao san trong mot job GOP `n=k` (nhieu scene cung prompt)?
+        # Co roi thi tra thang, KHONG goi API lan hai - tra tien hai lan cho cung
+        # mot buc anh la loi tra tien, khong phai loi ky thuat.
+        san = self._shopapi_lay_anh_gop(output_path)
+        if san is not None:
+            return san
+
+        try:
+            _shopapi_nap_engine()
+            import shopapi_image_client as sic
+        except Exception as e:
+            return False, None, {}, f"shopapi-img: import client loi: {e}"
+        # Scene thuong khong truyen aspect_ratio -> ke thua aspect da cau hinh cua worker.
+        aspect = aspect_ratio if aspect_ratio is not None else self.aspect_ratio
+        refs_bytes = self._shopapi_refs_to_bytes(refs)
+        ok, info, err = sic.generate_image(
+            prompt, str(output_path), aspect=aspect, reference_images=refs_bytes,
+            n=1, timeout=self.shopapi_image_timeout, api_key=self.shopapi_key, log=self.log,
+            # Xem chu thich o `_submit_video_shopapi`.
+            nem_khi_nghen=_shopapi_trong_me(),
+        )
+        return (ok, (info or {}).get("media_name"), self._shopapi_sinfo(info),
+                err if not ok else "")
+
+    @staticmethod
+    def _shopapi_sinfo(info):
+        """Loc `info` cua client thanh `server_info` gon cho Excel/GUI."""
+        sinfo = {"backend": "shopapi"}
+        if info:
+            sinfo.update({k: info[k] for k in ("bytes", "job_id", "cost", "aspect", "refs", "n")
+                          if k in info})
+        return sinfo
+
+    def _shopapi_lay_anh_gop(self, output_path):
+        """Anh `output_path` da co san tu mot job gop chua? Co -> tuple 4 phan tu.
+
+        Lay ra la XOA khoi kho: moi ket qua chi dung dung mot lan, tranh chuyen
+        lan chay sau trong cung tien trinh nhan nham anh cu.
+        """
+        khoa = str(output_path)
+        with self._shopapi_gop_lock:
+            san = self._shopapi_anh_gop.pop(khoa, None)
+        if san is None:
+            return None
+        if not Path(khoa).exists():
+            # File bien mat (nguoi dung xoa tay giua chung) -> coi nhu chua co.
+            return None
+        media_name, sinfo = san
+        return True, media_name, sinfo, ""
+
+    def _shopapi_gop_anh_cung_prompt(self, cong_viec):
+        """GOP nhieu anh CUNG PROMPT vao MOT job `n=k` truoc khi chay me.
+
+        `cong_viec`: danh sach `(prompt, out_path, refs, aspect)`.
+
+        VI SAO DANG LAM: `POST /v1/images/generations` nhan `n` toi 8 anh mot job.
+        k anh cung prompt gop lai chi chiem MOT cho trong tran song song va MOT
+        lan xep hang, thay vi k cho va k lan. Tran song song la thu khan hiem
+        nhat o day, nen tieu 1 thay vi k la nhan cong suat len - re hon va nhanh
+        hon HAN so voi viec chi chay k job song song.
+
+        Ket qua nhet vao `self._shopapi_anh_gop`; `_submit_image_shopapi` se tra
+        thang tu do, nen TOAN BO phan ghi Excel / tien do / viet lai prompt cua
+        cac pha giu nguyen khong phai sua mot dong nao.
+
+        Gop that bai -> khong sao ca: khong ghi gi vao kho, cac anh do di duong
+        binh thuong (moi anh mot job). Day la toi uu, khong phai duong song.
+        """
+        try:
+            sic = self._shopapi_import_image_client()
+            sc = _shopapi_nap_engine()
+        except Exception as e:
+            self.log("    [shopapi-img] khong nap duoc client de gop: {0}".format(e), "WARN")
+            return 0
+
+        nhom = {}
+        for prompt, out_path, refs, aspect in cong_viec:
+            if Path(out_path).exists():
+                continue
+            # Chi gop khi TRUNG CA BA: prompt, ti le, va bo anh tham chieu. Cung
+            # prompt ma khac ref la khac anh - gop vao la sai ket qua.
+            khoa = (str(prompt), sc.ty_le_api(aspect), self._shopapi_khoa_refs(refs))
+            nhom.setdefault(khoa, []).append((str(out_path), refs, aspect))
+
+        # Moi phan tu = MOT job gop. Cat theo MAX_ANH_MOT_JOB vi n>8 la 400 cho
+        # CA job (mat luon 8 anh hop le), chu khong phai chi mat phan du.
+        cac_job = []
+        for khoa, muc in nhom.items():
+            if len(muc) < 2:
+                continue        # mot minh thi gop cung nhu khong
+            for i in range(0, len(muc), sc.MAX_ANH_MOT_JOB):
+                phan = muc[i:i + sc.MAX_ANH_MOT_JOB]
+                if len(phan) >= 2:
+                    cac_job.append((khoa[0], phan))
+        if not cac_job:
+            return 0
+
+        da_gop = [0]
+
+        def _mot_job_gop(job):
+            prompt, phan = job
+            dich = [p for p, _r, _a in phan]
+            self.log("    [shopapi-img] GOP {0} anh cung prompt vao 1 job n={0} "
+                     "(thay vi {0} job rieng): {1}".format(len(phan), prompt[:50]))
+            ok, info, err = sic.generate_image(
+                prompt, dich[0], aspect=phan[0][2],
+                reference_images=self._shopapi_refs_to_bytes(phan[0][1]),
+                out_paths=dich, timeout=self.shopapi_image_timeout,
+                api_key=self.shopapi_key, log=self.log,
+                # Gop la TOI UU, khong phai duong song: 429/503 o day khong duoc
+                # bien thanh BiNghen lam roi loan me chinh - cu de no that bai
+                # roi tung anh di duong binh thuong.
+                nem_khi_nghen=False,
+            )
+            duong_da_co = list((info or {}).get("paths") or [])
+            if not ok and not duong_da_co:
+                self.log("    [shopapi-img] gop that bai ({0}) -> {1} anh nay se chay "
+                         "tung job nhu cu".format(err, len(phan)), "WARN")
+                return False
+            sinfo = self._shopapi_sinfo(info)
+            media_name = (info or {}).get("media_name")
+            with self._shopapi_gop_lock:
+                for p in duong_da_co:
+                    self._shopapi_anh_gop[str(p)] = (media_name, dict(sinfo))
+                da_gop[0] += len(duong_da_co)
+            return True
+
+        # Cac job gop cung chay SONG SONG voi nhau, van do may chu dinh nhip.
+        self._chay_me("image", cac_job, _mot_job_gop, self.max_concurrent,
+                      {"completed": 0, "failed": 0})
+
+        if da_gop[0]:
+            self.log("    [shopapi-img] gop xong {0} anh trong {1} job -> tiet kiem {2} luot "
+                     "xep hang".format(da_gop[0], len(cac_job), da_gop[0] - len(cac_job)))
+        return da_gop[0]
+
+    def _shopapi_import_image_client(self):
+        """Nap `shopapi_image_client`. Tach ra de bai kiem thay the duoc."""
+        _shopapi_nap_engine()
+        import shopapi_image_client as sic
+        return sic
+
+    @staticmethod
+    def _shopapi_khoa_refs(refs):
+        """Chu ky cua bo anh tham chieu, de biet hai viec co dung chung ref khong."""
+        if not refs:
+            return ()
+        return tuple(sorted(
+            str(getattr(r, "name", "") or "") + "|" + str(getattr(r, "media_id", "") or "")
+            + "|" + str(len(getattr(r, "base64_data", "") or ""))
+            for r in refs
+        ))
 
     def _submit_video_veo3top_b_pool(self, prompt, output_path):
         """NHÀ MÁY CHUNG: gửi ảnh scene tới video_factory service (dùng chung 10 account ultra).
@@ -3690,7 +4151,9 @@ Generator/context error:
         """Tạo 1 ImageInput reference. Với POOL (account khác nhau -> mediaId account-scoped VÔ DỤNG),
         EMBED base64 ảnh nhân vật/địa điểm từ file nv/{ref_name}.png -> ref đi kèm ảnh thật, giữ nhất quán."""
         ii = ImageInput(name=media_id or "", input_type=ImageInputType.REFERENCE)
-        if self.veo3top_image_mode == "pool":
+        # "shopapi" cung phai nhung bytes: API nhan anh tham chieu bang URL cong khai
+        # (upload tu bytes), tuyet doi khong hieu mediaId cua Flow.
+        if self.veo3top_image_mode in ("pool", "shopapi"):
             try:
                 import base64 as _b64
                 for ext in (".png", ".jpg", ".jpeg"):
@@ -4002,6 +4465,11 @@ Generator/context error:
         Returns:
             (success: bool, server_info: dict, error_text: str)
         """
+        # NHANH MOI (uu tien cao nhat): dung API shopapi.vn. Chi bat khi DA CO KHOA -
+        # thieu khoa thi co xuong 0 tu __init__ (da canh bao TO) va roi xuong duong cu.
+        if self.use_shopapi_for_video:
+            return self._submit_video_shopapi(prompt, output_path)
+
         if self.generation_backend == "veo3top":
             return self._submit_video_veo3top(prompt, output_path, reference_image_id)
         if self.generation_backend in ("veo3top_b", "veo3top_b_ultra"):
@@ -4761,6 +5229,12 @@ Generator/context error:
         Returns:
             (success: bool, media_name: str or None, server_info: dict, error_text: str)
         """
+        # NHANH MOI (uu tien cao nhat): tao anh bang API shopapi.vn.
+        # Chi bat khi DA CO KHOA; thieu khoa -> co bang 0 (da canh bao TO o __init__)
+        # va roi xuong dung backend cu ben duoi, khong chet lang.
+        if self.use_shopapi_for_image:
+            return self._submit_image_shopapi(prompt, output_path, refs, aspect_ratio)
+
         # OPTION MOI: tao anh bang veo3top-b (ban thang Flow API, giong video). Uu tien cao nhat khi bat.
         if self.use_veo3top_for_image:
             if self.veo3top_image_mode == "pool":
@@ -4895,23 +5369,45 @@ Generator/context error:
 # CLI Entry Point - Subprocess mode support
 # =============================================================================
 
+#: Khoa cho MOI dong giao thuc `@@...|` di ra stdout.
+#
+# VI SAO BAT BUOC PHAI CO: GUI doc stdout cua worker THEO DONG
+# (`ve3_gui.py` tach `@@PROG|phase|cur|total|detail` bang `split("|")`). Ke tu
+# khi cac pha chay hang chuc luong cung luc, ba ham duoi day bi goi dong thoi tu
+# nhieu luong. `write()` roi `flush()` la HAI buoc: khong khoa thi mot luong co
+# the chen giua hai buoc cua luong khac, dong bi cat lam doi va GUI parse ra rac
+# - te nhat la `int(cur)` no ValueError roi ca thanh tien do dung im, trong khi
+# job van dang chay ngon lanh. Loi kieu do rat kho lan ra vi no chi hien khi
+# dong khach.
+#
+# Khoa nay CHI om hai lenh ghi, khong om viec tao chuoi, nen no khong bao gio la
+# cho tac nghen.
+_KHOA_STDOUT = threading.Lock()
+
+
+def _viet_dong(dong):
+    """Ghi TRON MOT dong giao thuc ra stdout, khong de luong khac chen vao giua."""
+    with _KHOA_STDOUT:
+        sys.stdout.write(dong)
+        sys.stdout.flush()
+
+
 def _structured_log(msg, level="INFO"):
     msg_clean = str(msg).replace("\n", " ").replace("\r", "")
-    sys.stdout.write(f"@@LOG|{level}|{msg_clean}\n")
-    sys.stdout.flush()
+    _viet_dong(f"@@LOG|{level}|{msg_clean}\n")
 
 
 def _structured_progress(phase, current, total, detail=""):
-    detail_clean = str(detail).replace("|", "_")
-    sys.stdout.write(f"@@PROG|{phase}|{current}|{total}|{detail_clean}\n")
-    sys.stdout.flush()
+    detail_clean = str(detail).replace("|", "_").replace("\n", " ").replace("\r", "")
+    _viet_dong(f"@@PROG|{phase}|{current}|{total}|{detail_clean}\n")
 
 
 def _structured_item(item_type, item_id, status, path=None, extras=None):
     path_str = str(path) if path else ""
-    extras_json = json.dumps(extras or {}, ensure_ascii=False)
-    sys.stdout.write(f"@@ITEM|{item_type}|{item_id}|{status}|{path_str}|{extras_json}\n")
-    sys.stdout.flush()
+    # `ensure_ascii=False` co the nha ky tu xuong dong tu du lieu -> phai cat,
+    # neu khong mot dong `@@ITEM|` tu no da la hai dong roi.
+    extras_json = json.dumps(extras or {}, ensure_ascii=False).replace("\n", " ").replace("\r", "")
+    _viet_dong(f"@@ITEM|{item_type}|{item_id}|{status}|{path_str}|{extras_json}\n")
 
 
 def main():
@@ -4956,8 +5452,7 @@ def main():
     result = worker.run()
 
     if args.config_file:
-        sys.stdout.write(f"@@RESULT|{json.dumps(result, ensure_ascii=False)}\n")
-        sys.stdout.flush()
+        _viet_dong(f"@@RESULT|{json.dumps(result, ensure_ascii=False)}\n")
     else:
         status = "Done" if result["success"] else "Errors"
         print(f"\n{status}: {result['completed']}/{result['total']} images")

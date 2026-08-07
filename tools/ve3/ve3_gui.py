@@ -1760,10 +1760,11 @@ class SettingsPage(ctk.CTkScrollableFrame):
             "API DeepSeek -> CLI": "api_ds_cli",
         }
         self.claude_backend_labels = {v: k for k, v in self.claude_backend_options.items()}
-        self.generation_backend_options = {"Server": "server", "NanoPic": "nanopic", "FlowKit": "flowkit", "Combined": "combined", "Veo3top": "veo3top", "Veo3top-B": "veo3top_b", "Veo3top-B-Ultra": "veo3top_b_ultra", "Veo3top-B-Pool (nha may chung)": "veo3top_b_pool"}
+        # "API shopapi" = goi thang api.shopapi.vn (MAC DINH cua ban nay, khong mo Chrome).
+        self.generation_backend_options = {"API shopapi": "shopapi", "Server": "server", "NanoPic": "nanopic", "FlowKit": "flowkit", "Combined": "combined", "Veo3top": "veo3top", "Veo3top-B": "veo3top_b", "Veo3top-B-Ultra": "veo3top_b_ultra", "Veo3top-B-Pool (nha may chung)": "veo3top_b_pool"}
         self.generation_backend_labels = {v: k for k, v in self.generation_backend_options.items()}
         # Backend TAO ANH (ban thang Flow API giong video). "" = dung backend anh cu (server/local token).
-        self.image_backend_options = {"Mac dinh": "", "Veo3top-B (anh)": "blank", "Veo3top-B-Ultra (anh)": "account", "Veo3top-B-Pool (anh)": "pool"}
+        self.image_backend_options = {"API shopapi (anh)": "shopapi", "Mac dinh": "", "Veo3top-B (anh)": "blank", "Veo3top-B-Ultra (anh)": "account", "Veo3top-B-Pool (anh)": "pool"}
         self.image_backend_labels = {v: k for k, v in self.image_backend_options.items()}
         self.grid_columnconfigure(0, weight=1)
 
@@ -1878,6 +1879,29 @@ class SettingsPage(ctk.CTkScrollableFrame):
         ctk.CTkButton(gc, text="Quan ly account anh/video", width=200, height=30, fg_color=RN,
                       hover_color="#1565C0", text_color="#FFF", font=("",11,"bold"), corner_radius=6,
                       command=app._open_pool_manager).grid(row=13, column=0, columnspan=3, padx=10, pady=(0,10))
+
+        # ===== KHOA API shopapi.vn ==================================================
+        # Khoa KHONG luu vao settings.yaml: file do nam trong kho ma va con duoc chep
+        # sang worker qua .ve3_run_config.json trong thu muc project -> hai duong ro ri.
+        # Nut "Luu khoa" ghi vao %APPDATA%\ShopAPI\ve3-suite\khoa.txt (ngoai kho ma).
+        key_box = ctk.CTkFrame(gc, fg_color="transparent")
+        key_box.grid(row=14, column=0, columnspan=3, padx=10, pady=(0,8), sticky="ew")
+        key_box.grid_columnconfigure(1, weight=1)
+        ctk.CTkLabel(key_box, text="Khoa API shopapi:", font=("",11), text_color=T2).grid(row=0, column=0, padx=(0,6), sticky="e")
+        self.ent_shopapi_key = ctk.CTkEntry(key_box, placeholder_text="sk_live_...", height=28, corner_radius=4,
+                                            font=("Consolas",10), fg_color=EN, border_color=BD, show="*")
+        self.ent_shopapi_key.grid(row=0, column=1, sticky="ew", padx=(0,4))
+        ctk.CTkButton(key_box, text="Luu khoa", width=80, height=28, corner_radius=4, fg_color=OK,
+                      hover_color=OK2, text_color="#FFF", font=("",10),
+                      command=self._shopapi_save_key).grid(row=0, column=2, padx=(0,4))
+        ctk.CTkButton(key_box, text="Kiem khoa", width=90, height=28, corner_radius=4, fg_color=RN,
+                      hover_color="#1565C0", text_color="#FFF", font=("",10),
+                      command=self._shopapi_check_key).grid(row=0, column=3, padx=(0,4))
+        ctk.CTkButton(key_box, text="Quen khoa", width=90, height=28, corner_radius=4, fg_color=EN,
+                      hover_color=BD, text_color=T2, font=("",10),
+                      command=self._shopapi_forget_key).grid(row=0, column=4)
+        self.lbl_shopapi_key = ctk.CTkLabel(key_box, text="", font=("",10), text_color=T3, anchor="w", wraplength=560, justify="left")
+        self.lbl_shopapi_key.grid(row=1, column=0, columnspan=5, sticky="w", pady=(3,0))
 
         # Excel AI
         ai = ctk.CTkFrame(self, fg_color=CD, corner_radius=8, border_width=1, border_color=BD)
@@ -2324,6 +2348,90 @@ class SettingsPage(ctk.CTkScrollableFrame):
                 self.ent_vov_slots.delete(0, "end")
                 self.ent_vov_slots.insert(0, "2")
 
+    # ===== KHOA API shopapi.vn =================================================
+
+    def _shopapi_common(self):
+        """Nap module veo3top_engine/shopapi_common.py. Loi -> None (khong lam sap GUI)."""
+        try:
+            engine_dir = str(SUITE_ROOT / "veo3top_engine")
+            if engine_dir not in sys.path:
+                sys.path.insert(0, engine_dir)
+            import shopapi_common
+            return shopapi_common
+        except Exception:
+            return None
+
+    def _shopapi_refresh_key_label(self):
+        """Hien nguon khoa + khoa DA CHE. Khong bao gio in khoa day du ra man hinh."""
+        try:
+            sc = self._shopapi_common()
+            if sc is None:
+                self.lbl_shopapi_key.configure(
+                    text="Khong nap duoc module shopapi (thieu veo3top_engine/shopapi_common.py).",
+                    text_color="#E17055")
+                return
+            key, source = sc.doc_khoa()
+            if key:
+                self.lbl_shopapi_key.configure(
+                    text="Dang dung khoa {0} - nguon: {1}".format(sc.che_khoa(key), source),
+                    text_color=T3)
+            else:
+                self.lbl_shopapi_key.configure(
+                    text="CHUA CO KHOA. Chon backend 'API shopapi' ma khong co khoa thi tool "
+                         "TU LUI VE duong cu (server/veo3top). Lay khoa o shopapi.vn/dashboard/api-keys.",
+                    text_color="#E17055")
+        except Exception:
+            pass
+
+    def _shopapi_save_key(self):
+        """Ghi khoa vao kho khoa cua may (%APPDATA%\\ShopAPI\\ve3-suite\\khoa.txt)."""
+        sc = self._shopapi_common()
+        if sc is None:
+            messagebox.showerror("Loi", "Khong nap duoc module shopapi_common.")
+            return
+        key = (self.ent_shopapi_key.get() or "").strip()
+        if not key:
+            messagebox.showwarning("Loi", "O khoa dang trong.")
+            return
+        try:
+            path = sc.luu_khoa(key)
+        except Exception as e:
+            messagebox.showerror("Loi", "Khong ghi duoc khoa: {0}".format(e))
+            return
+        # Xoa khoi o nhap ngay sau khi luu: khong de khoa nam tren man hinh.
+        self.ent_shopapi_key.delete(0, "end")
+        self._shopapi_refresh_key_label()
+        messagebox.showinfo("Da luu", "Da luu khoa vao:\n{0}\n\n(Nam NGOAI kho ma nguon)".format(path))
+
+    def _shopapi_forget_key(self):
+        sc = self._shopapi_common()
+        if sc is None:
+            return
+        try:
+            sc.quen_khoa()
+        except Exception:
+            pass
+        self.ent_shopapi_key.delete(0, "end")
+        self._shopapi_refresh_key_label()
+
+    def _shopapi_check_key(self):
+        """GET /v1/balance -> hien so du. Chay o luong rieng: dung goi mang tren luong GUI."""
+        sc = self._shopapi_common()
+        if sc is None:
+            messagebox.showerror("Loi", "Khong nap duoc module shopapi_common.")
+            return
+        key = (self.ent_shopapi_key.get() or "").strip() or None   # trong -> dung khoa da luu
+        self.lbl_shopapi_key.configure(text="Dang kiem khoa...", text_color=T3)
+
+        def _run():
+            ok, msg = sc.kiem_khoa(api_key=key)
+            def _show():
+                # Giu nguyen ket qua tren man hinh (KHONG refresh de len): so du moi la
+                # cai nguoi dung bam nut de xem.
+                self.lbl_shopapi_key.configure(text=msg, text_color=(OK if ok else "#E17055"))
+            self.after(0, _show)
+        threading.Thread(target=_run, daemon=True).start()
+
     def load_config(self, cfg):
         self._render()
         self.ent_retry.delete(0, "end")
@@ -2462,7 +2570,8 @@ class SettingsPage(ctk.CTkScrollableFrame):
         img_mode = str(cfg.get("veo3top_image_mode") or "").strip().lower()
         if img_mode in ("ultra", "veo3top_b_ultra"):
             img_mode = "account"
-        self.opt_image_backend.set(self.image_backend_labels.get(img_mode if img_mode in ("blank", "account", "pool") else "", "Mac dinh"))
+        self.opt_image_backend.set(self.image_backend_labels.get(img_mode if img_mode in ("blank", "account", "pool", "shopapi") else "", "Mac dinh"))
+        self._shopapi_refresh_key_label()
 
     def _auto_flowkit_server_list(self) -> list:
         """Auto-generate flowkit_server_list from Chrome Portable copies."""
@@ -3146,6 +3255,16 @@ Write-Output $kill.Count
             if p.exists():
                 with open(p,"r",encoding="utf-8") as f: self.config_data = yaml.safe_load(f) or {}
         except: self.config_data = {}
+        # ===== MAC DINH MOI: di qua API shopapi.vn ==============================
+        # Chi dat khi cau hinh CHUA CO Y KIEN. Nguoi dung cu da chon backend khac thi
+        # GIU NGUYEN - doi len backend cua ho la doi cho tien di duong khac ma khong hoi.
+        # Phai kiem CA generation_backend LAN generation_mode: may cu chi co
+        # generation_mode, dat generation_backend='shopapi' vao do la de len y cu.
+        if not self.config_data.get("generation_backend") and not self.config_data.get("generation_mode"):
+            self.config_data["generation_backend"] = "shopapi"
+            self.config_data["generation_mode"] = "shopapi"
+        if "veo3top_image_mode" not in self.config_data:
+            self.config_data["veo3top_image_mode"] = "shopapi"
         self.config_data.setdefault("music_workspace_mode_enabled", True)
         self.config_data.setdefault("image_hide_chrome", True)   # mặc định ẩn chrome tạo ảnh
         self.config_data.setdefault("image_pool_accounts", 24)   # slot ảnh (account song song, cookie-based nhẹ)
@@ -5753,7 +5872,10 @@ Get-CimInstance Win32_Process |
             try:
                 w = VE3Worker(project_dir=str(self.project_dir), config=cfg,
                               log_func=lambda m,l="INFO": self.after(0, lambda: self._log(m,l)))
-                t0 = _time.time(); ok, med, si = w._submit_image(prompt, ip)
+                # BUG CU: cho nay unpack 3 phan tu tu _submit_image von tra 4 -> ValueError
+                # moi lan bam Regen. Sua bang cach nhan du 4 (KHONG doi kieu tra ve cua
+                # _submit_image: ca chuc cho khac dang phu thuoc vao dung 4 phan tu do).
+                t0 = _time.time(); ok, med, si, err = w._submit_image(prompt, ip)
                 el = round(_time.time()-t0,1); ex = {"elapsed":el, **si}
                 if ok:
                     self.wb.update_character(cid, status="done", media_id=med or "", reference_media_checked=False); self.wb.safe_save()
@@ -5762,7 +5884,7 @@ Get-CimInstance Win32_Process |
                     self.after(0, lambda: self._log(f"{cid} done ({el}s)","SUCCESS"))
                 else:
                     self.after(0, lambda: self.pages["gen"].update_char(cid, "error", ex))
-                    self.after(0, lambda: self._log(f"{cid} failed","ERROR"))
+                    self.after(0, lambda: self._log(f"{cid} failed: {err[:300]}","ERROR"))
             except Exception as e:
                 self.after(0, lambda: self.pages["gen"].update_char(cid, "error"))
                 self.after(0, lambda: self._log(f"Error: {e}","ERROR"))
@@ -5792,7 +5914,8 @@ Get-CimInstance Win32_Process |
                     )
                     if expected_refs and missing_refs:
                         raise RuntimeError(f"Scene {sid} thieu references: {', ' .join(missing_refs[:6])}")
-                t0 = _time.time(); ok, med, si = w._submit_image(prompt, ip, refs)
+                # BUG CU (giong regen_character): unpack 3 tu ham tra 4 -> ValueError.
+                t0 = _time.time(); ok, med, si, err = w._submit_image(prompt, ip, refs)
                 el = round(_time.time()-t0,1); ex = {"elapsed":el, **si}
                 if ok:
                     self.wb.update_scene(sid, status_img="done", media_id=med or ""); self.wb.safe_save()
@@ -5802,7 +5925,7 @@ Get-CimInstance Win32_Process |
                 else:
                     self.wb.update_scene(sid, status_img="error"); self.wb.safe_save()
                     self.after(0, lambda: self.pages["gen"].update_scene(sid, "error", ex))
-                    self.after(0, lambda: self._log(f"Scene {sid} failed","ERROR"))
+                    self.after(0, lambda: self._log(f"Scene {sid} failed: {err[:300]}","ERROR"))
             except Exception as e:
                 self.after(0, lambda: self.pages["gen"].update_scene(sid, "error"))
                 self.after(0, lambda: self._log(f"Error: {e}","ERROR"))
