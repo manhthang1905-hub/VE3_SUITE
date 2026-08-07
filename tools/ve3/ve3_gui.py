@@ -3730,9 +3730,16 @@ Write-Output $kill.Count
         cfg.setdefault("claude_cli_backend", "api_shop")
         cfg.setdefault("claude_cli_api_model", "claude-sonnet-4-6")
         cfg.setdefault("claude_cli_max_parallel", 5)
-        # DeepSeek API backend (api_ds / api_ds_cli) — deepseek-v4-pro, highest model.
+        # Nhánh DeepSeek (`api_ds` / `api_ds_cli`) — KHÔNG còn dùng, giữ lại đường
+        # chạy phòng khi cần, nhưng KHÔNG kèm khoá.
+        #
+        # ⚠ ĐỪNG GÕ KHOÁ THẬT VÀO ĐÂY NỮA. Chỗ này từng chứa một khoá DeepSeek
+        # sống, và `cfg` còn được ghi ra `.excel_runtime_config.yaml` trong từng
+        # thư mục project — nên một khoá gõ ở đây tự nhân bản ra mọi project trên
+        # đĩa, ngoài chuyện nằm sẵn trong kho mã. Ai cần DeepSeek thì tự điền vào
+        # settings.yaml của máy mình.
         cfg.setdefault("claude_cli_ds_base_url", "https://api.deepseek.com/v1")
-        cfg.setdefault("claude_cli_ds_api_key", "sk-de9ca9b3ec734f24a61d1e02ab8dc46c")
+        cfg.setdefault("claude_cli_ds_api_key", "")
         cfg.setdefault("claude_cli_ds_model", "deepseek-v4-pro")
         return cfg
 

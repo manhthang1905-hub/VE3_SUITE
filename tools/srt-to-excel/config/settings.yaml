@@ -7,11 +7,8 @@ claude_pool_model_chain:
 - gpt-5.3-codex
 - gemini-3-flash-agent
 - gemini-3.1-pro-high
-deepseek_api_key: sk-e3a4138d816a42778531c1e944ece336
-deepseek_api_keys:
-- sk-e3a4138d816a42778531c1e944ece336
-- sk-a138987932af4ac6a28ac0c99b49fd77
-- sk-de9ca9b3ec734f24a61d1e02ab8dc46c
+deepseek_api_key: ''
+deepseek_api_keys: []
 deepseek_model: deepseek-v4-pro
 deepseek_thinking_type: disabled
 excel_ai_attempts_per_key: 30
