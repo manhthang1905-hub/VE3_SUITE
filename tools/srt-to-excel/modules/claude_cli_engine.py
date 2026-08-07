@@ -134,18 +134,46 @@ class ClaudeCliEngine:
         #   "api_cli"    — VOV API first; on failure fall back to claude.exe (this run)
         #   "api_ds"     — POST the prompt to DeepSeek API (deepseek-v4-pro)
         #   "api_ds_cli" — DeepSeek API first; on failure fall back to claude.exe
+        #   "api_shop"   — POST to api.shopapi.vn (claude-fable-5) — CÙNG MỘT KHOÁ
+        #                  `sk_live_` đang trả tiền ảnh/video, không khoá riêng
+        #   "api_shop_cli" — shopapi trước; hỏng thì lùi về claude.exe
         # Everything else (chunking, auto-split, thumbnails, builder) is identical.
         self.backend = str(self.config.get("claude_cli_backend", "cli") or "cli").strip().lower()
-        if self.backend not in ("cli", "api", "api_cli", "api_ds", "api_ds_cli"):
+        if self.backend not in ("cli", "api", "api_cli", "api_ds", "api_ds_cli",
+                                "api_shop", "api_shop_cli"):
             self.backend = "cli"
         # Which transports use the HTTP API (as primary), and which fall back to CLI.
-        self._uses_api = self.backend in ("api", "api_cli", "api_ds", "api_ds_cli")
-        self._api_fallback_cli = self.backend in ("api_cli", "api_ds_cli")
+        self._uses_api = self.backend in ("api", "api_cli", "api_ds", "api_ds_cli",
+                                          "api_shop", "api_shop_cli")
+        self._api_fallback_cli = self.backend in ("api_cli", "api_ds_cli", "api_shop_cli")
         # Once the API fails in a fallback mode, disable it for the rest of THIS run
         # (re-checked on the next code, so quota recovery is picked up).
         self._api_disabled = False
-        # Resolve the API endpoint by provider: DeepSeek for *_ds, else VOV.
-        if self.backend in ("api_ds", "api_ds_cli"):
+        # Resolve the API endpoint by provider: shopapi for *_shop, DeepSeek for
+        # *_ds, else VOV.
+        if self.backend in ("api_shop", "api_shop_cli"):
+            self.api_base_url = str(
+                self.config.get("shopapi_base_url") or "https://api.shopapi.vn/v1"
+            ).strip().rstrip("/")
+            # ⚠ KHOÁ ĐỌC TỪ KHO KHOÁ CỦA MÁY, KHÔNG PHẢI `settings.yaml`.
+            #
+            # `tools/srt-to-excel/config/settings.yaml` NẰM TRONG KHO MÃ NGUỒN —
+            # mở file đó ra là thấy vài khoá DeepSeek đã bị `git add` lên lịch sử
+            # từ lâu. Nhét `sk_live_` (khoá đang trả tiền ảnh/video) vào đúng chỗ
+            # đó là lặp lại y hệt sai lầm, lần này với khoá có ví tiền thật.
+            #
+            # Dùng chung kho khoá với nhánh ảnh/video: MỘT khoá, MỘT chỗ cất, nằm
+            # ngoài cây mã. Lưu bằng nút "Luu khoa" ở trang Cài đặt của VE3.
+            self.api_key = str(
+                self.config.get("shopapi_api_key") or self._doc_khoa_shopapi() or ""
+            ).strip()
+            # `claude-fable-5` = model "sáng tạo, viết lách cao cấp" của shopapi.
+            # Chọn nó vì việc ở đây là VIẾT PROMPT tả cảnh — đó là viết lách sáng
+            # tạo, không phải suy luận hay code. Muốn rẻ hơn thì `claude-sonnet-5`.
+            self.api_model = str(
+                self.config.get("shopapi_model") or "claude-fable-5"
+            ).strip()
+        elif self.backend in ("api_ds", "api_ds_cli"):
             self.api_base_url = str(
                 self.config.get("claude_cli_ds_base_url")
                 or "https://api.deepseek.com/v1"
@@ -218,6 +246,28 @@ class ClaudeCliEngine:
             self.chunk_retries = max(0, int(self.config.get("claude_cli_chunk_retries", 4) or 4))
         except Exception:
             self.chunk_retries = 4
+
+    @staticmethod
+    def _doc_khoa_shopapi() -> str:
+        """Khoá `sk_live_` từ kho khoá chung của máy. Không có → chuỗi rỗng.
+
+        Đi vòng qua `veo3top_engine/shopapi_common.py` thay vì tự đọc file, để
+        chỉ có MỘT nơi biết đường dẫn kho khoá. Đổi chỗ cất khoá thì sửa một chỗ,
+        cả ảnh/video lẫn Excel cùng theo.
+
+        Nuốt lỗi có chủ ý: máy chưa từng lưu khoá thì trả rỗng để phần gọi báo
+        câu "chưa cấu hình" tử tế, chứ không làm sập cả lượt tạo Excel.
+        """
+        try:
+            import sys as _sys
+            from pathlib import Path as _P
+            _engine = _P(__file__).resolve().parents[3] / "veo3top_engine"
+            if str(_engine) not in _sys.path:
+                _sys.path.insert(0, str(_engine))
+            import shopapi_common as _sc
+            return (_sc.doc_khoa() or ("", ""))[0]
+        except Exception:
+            return ""
 
     @staticmethod
     def _neg_tail() -> str:
@@ -680,7 +730,15 @@ JSON RULES:
             try:
                 resp = requests.post(url, headers=headers, json=data,
                                      timeout=self.timeout_seconds, stream=True)
-                if resp.status_code != 200:
+                # Nhận MỌI mã 2xx, đừng bắt đúng 200.
+                #
+                # ĐÃ DÍNH THẬT: `api.shopapi.vn` trả **201** cho luồng SSE của
+                # `/v1/chat/completions`. Thân trả về hoàn toàn hợp lệ và token
+                # chảy ra bình thường — chỉ mỗi con số là khác, mà bản cũ so
+                # `!= 200` nên vứt sạch rồi thử lại ba lần cho tới khi hỏng hẳn.
+                # Hỏng kiểu này rất khó đoán: log chỉ kêu "API fail" kèm một mẩu
+                # JSON trông như thành công.
+                if not (200 <= resp.status_code < 300):
                     last_error = f"HTTP {resp.status_code} {resp.text[:160]}"
                 else:
                     parts = []

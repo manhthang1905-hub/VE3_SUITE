@@ -1753,6 +1753,10 @@ class SettingsPage(ctk.CTkScrollableFrame):
         self.excel_engine_labels = {v: k for k, v in self.excel_engine_options.items()}
         # Transport for the Claude CLI engine: local claude.exe vs OpenAI-compatible API (VOV).
         self.claude_backend_options = {
+            # shopapi dung CHUNG khoa sk_live_ voi anh/video -> khong khoa rieng,
+            # khong claude.exe, khong dinh toi OAuth cua extension VS Code.
+            "API shopapi (fable-5)": "api_shop",
+            "API shopapi -> CLI": "api_shop_cli",
             "CLI (claude.exe)": "cli",
             "API (VOV)": "api",
             "API -> CLI (fallback)": "api_cli",
