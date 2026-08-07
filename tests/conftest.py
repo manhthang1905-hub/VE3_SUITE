@@ -50,6 +50,23 @@ def sc():
     return shopapi_common
 
 
+@pytest.fixture
+def lui_nhip_0(monkeypatch):
+    """Rút quãng lùi nhịp sau `429` về 0 — **chỉ cho bài KHÔNG đo quãng đó**.
+
+    Từ bản sửa 07/08/2026, một cú `429` khoá cả mẻ lại 15 giây thật
+    (`shopapi_batch.LUI_NHIP_GIAY`) để tool không gửi lại ngay lập tức. Đúng cho
+    sản phẩm, nhưng bài nào chỉ muốn kiểm "429 được đếm là THỬ LẠI chứ không
+    phải THẤT BẠI" thì nó chỉ tổ ngồi chờ 15 giây cho mỗi bài.
+
+    ⚠ Đừng dùng fixture này cho bài đo chính quãng lùi nhịp — dùng là bài đó
+    xanh mà chẳng kiểm gì. Quãng lùi nhịp được đóng đinh riêng ở
+    `test_cong_hang_cho.py`.
+    """
+    import shopapi_batch
+    monkeypatch.setattr(shopapi_batch, "LUI_NHIP_GIAY", 0.0)
+
+
 # ── Client giả ───────────────────────────────────────────────────────────────
 
 

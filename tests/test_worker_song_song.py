@@ -313,7 +313,7 @@ def test_goi_LE_thi_429_KHONG_duoc_nem_ra_ngoai(tmp_path, nhat_ky, co_khoa, monk
 
 
 def test_trong_me_thi_429_duoc_nem_de_TRA_VIEC_VE_HANG_CHO(tmp_path, nhat_ky, co_khoa,
-                                                           monkeypatch, sc):
+                                                           monkeypatch, sc, lui_nhip_0):
     """Trong mẻ, `429` phải thành `BiNghen` — nếu không, việc bị đếm nhầm là hỏng."""
     monkeypatch.setattr(sc, "tran_song_song",
                         lambda loai, api_key=None, mac_dinh=1, client=None: 4)
@@ -338,7 +338,8 @@ def test_trong_me_thi_429_duoc_nem_de_TRA_VIEC_VE_HANG_CHO(tmp_path, nhat_ky, co
     assert ket == {"completed": 1, "failed": 0}, "429 KHONG duoc dem la that bai"
 
 
-def test_video_trong_me_cung_nem_429(tmp_path, nhat_ky, co_khoa, monkeypatch, sc):
+def test_video_trong_me_cung_nem_429(tmp_path, nhat_ky, co_khoa, monkeypatch, sc,
+                                     lui_nhip_0):
     monkeypatch.setattr(sc, "tran_song_song",
                         lambda loai, api_key=None, mac_dinh=1, client=None: 4)
     w = _worker(tmp_path, nhat_ky)

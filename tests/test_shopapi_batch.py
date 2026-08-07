@@ -58,6 +58,31 @@ def ngu_gia():
     return _ngu
 
 
+@pytest.fixture
+def me_nhanh():
+    """Tham số cho `chay_ca_me` để mọi quãng CHỜ trôi qua tức thì, vẫn ĐÚNG LUẬT.
+
+    Từ bản sửa ngày 07/08/2026, một cú `429` đặt quãng lùi nhịp cho **cả mẻ**
+    (`CongHangCho.bi_nghen`) — nếu không thì việc bị từ chối quay về đầu hàng chờ
+    rồi được gửi lại sau vài mili-giây, tức là "gửi lại NGAY", đúng thứ đề bài
+    cấm. Quãng đó dài 15 giây thật.
+
+    Fixture này **không tắt** luật ấy — nó chỉ thay đồng hồ: `ngu` vặn kim thay
+    vì ngồi chờ. Vòng lặp vẫn phải đi qua đúng nhánh chờ, vẫn phải ghi log, chỉ
+    là hết trong vài micro-giây. Đây là cách duy nhất giữ được cả tính đúng của
+    sản phẩm lẫn tốc độ của bộ kiểm.
+    """
+    dong_ho = {"t": 1000.0}
+
+    def _ngu(giay):
+        """Vặn kim thay vì ngồi chờ — vòng lặp vẫn đi qua đúng nhánh chờ."""
+        _ngu.lan.append(float(giay))
+        dong_ho["t"] += float(giay)
+
+    _ngu.lan = []
+    return {"cong": sb.CongHangCho(_dong_ho=lambda: dong_ho["t"]), "ngu": _ngu}
+
+
 def _lo_da_ban(nhat_ky):
     """Đọc kích thước từng lô từ log — cách duy nhất soi nhịp mà không phá đóng gói."""
     ra = []
@@ -167,7 +192,7 @@ def test_mot_job_hong_KHONG_keo_ca_me_chet(tran_gia, nhat_ky):
     assert any("mot viec hong" in m for _lv, m in nhat_ky.dong)
 
 
-def test_429_thi_HA_NHIP_va_viec_bi_tu_choi_KHONG_MAT(tran_gia, nhat_ky, sc):
+def test_429_thi_HA_NHIP_va_viec_bi_tu_choi_KHONG_MAT(tran_gia, nhat_ky, sc, me_nhanh):
     """`429` = "bạn nhanh quá", KHÔNG phải "việc này hỏng"."""
     tran_gia(16)
     so_lan = {}
@@ -179,7 +204,7 @@ def test_429_thi_HA_NHIP_va_viec_bi_tu_choi_KHONG_MAT(tran_gia, nhat_ky, sc):
             raise sc.BiNghen(429)
         return v
 
-    ket = sb.chay_ca_me(list(range(10)), _chay, "image", log=nhat_ky)
+    ket = sb.chay_ca_me(list(range(10)), _chay, "image", log=nhat_ky, **me_nhanh)
 
     assert ket == list(range(10)), "KHONG duoc mat viec nao"
     assert so_lan[2] == 2 and so_lan[3] == 2 and so_lan[4] == 2, "phai chay lai"
@@ -190,7 +215,7 @@ def test_429_thi_HA_NHIP_va_viec_bi_tu_choi_KHONG_MAT(tran_gia, nhat_ky, sc):
     assert min(lo[1:]) < max(lo[:-1]), "nhip phai giam sau khi an 429, khong duoc tang deu"
 
 
-def test_viec_bi_tu_choi_quay_ve_DAU_hang_cho(tran_gia, nhat_ky, sc):
+def test_viec_bi_tu_choi_quay_ve_DAU_hang_cho(tran_gia, nhat_ky, sc, me_nhanh):
     """Về cuối hàng chờ là việc đó chờ hết cả mẻ — về đầu mới đúng."""
     tran_gia(2)
     thu_tu = []
@@ -203,7 +228,7 @@ def test_viec_bi_tu_choi_quay_ve_DAU_hang_cho(tran_gia, nhat_ky, sc):
         thu_tu.append(v)
         return v
 
-    sb.chay_ca_me(list(range(8)), _chay, "image", log=nhat_ky)
+    sb.chay_ca_me(list(range(8)), _chay, "image", log=nhat_ky, **me_nhanh)
 
     # Việc 0 bị hoãn ở lô đầu nhưng phải chạy lại NGAY lô sau, không phải cuối mẻ.
     assert thu_tu.index(0) < 4, "viec bi hoan phai duoc uu tien chay lai, thu tu={0}".format(thu_tu)
