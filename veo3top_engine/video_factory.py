@@ -27,6 +27,9 @@ import ipv6_transport as ip6t
 import rate_coordinator
 import account_manager as am
 import project_pool as pp
+import roster_reload as rr          # NẠP LẠI NÓNG roster (xem chú thích dài trong roster_reload.py)
+import phien_kiem as pk             # KIỂM PHIÊN ba trạng thái — DÙNG CHUNG với nhà máy ẢNH, đừng chép bản thứ hai
+import kho_phien as kp              # KÉO PHIÊN TỪ KHO SERVER (xem chú thích dài trong kho_phien.py)
 from auth_cache import AuthCache
 from pool_accounts import load_pool_accounts
 
@@ -127,6 +130,16 @@ class Account:
         self.last_kind = ""       # loại lỗi gần nhất (ratelimit/recaptcha_quota/unusual...)
         self._lock = threading.Lock()
         self._recovering = False       # đang được RecoveryManager chữa (nền)
+        # NẠP LẠI NÓNG: account rời roster -> `retired=True`. Luồng thợ của NÓ tự
+        # thoát ở ĐẦU vòng lặp kế, tức SAU khi job đang chạy xong — không cắt
+        # ngang. Đây là cách dừng đúng một account mà không đụng `_running`
+        # (thứ dừng CẢ nhà máy).
+        self.retired = False
+        # Phiên ở trạng thái nào — BA giá trị, không phải hai. Mặc định CHƯA RÕ
+        # chứ không phải "chết": lúc vừa dựng object thì chưa ai kiểm gì cả.
+        # Xem `phien_kiem.py` (sự cố 07/08/2026) — nhà máy ảnh và video dùng
+        # CHUNG một bộ luật, đừng để hai bên trôi khác nhau.
+        self.trang_thai_phien = pk.KHONG_KIEM_DUOC
         self._proj = pp.ProjectRotator()   # XOAY + TỰ CHỮA project — chống gãy 24/7 (dùng chung với ảnh)
         import re as _re
         m = _re.search(r"Copy \((\d+)\)", str(chrome_path or ""))
@@ -145,6 +158,7 @@ class Account:
                                  name=self.name, login_worker_id=self._login_wid, warm_port=self.relogin_port, log=log)
             if nd and nd.get("bearer") and am.validate_auth(nd):
                 self.clear_rest()
+                self.phien_ok = True
                 log(f"✅ VIDEO: {self.email} ĐÃ CHỮA XONG (login+warm+cookie) -> hoạt động lại.")
                 return nd
             self.rest(3600)
@@ -172,9 +186,27 @@ class Account:
     def mark_project_bad(self, pid):
         self._proj.mark_bad(pid, log=lambda m: _log(f"{self.email}: {m}"))
 
+    # `phien_ok` giữ TÊN CŨ cho mã cũ (đường ra 200 và đường 401 vẫn ghi kiểu
+    # `= True/False`), nhưng đọc nó nghĩa là "ĐÃ CHỨNG MINH được là sống".
+    @property
+    def phien_ok(self):
+        return self.trang_thai_phien == pk.SONG
+
+    @phien_ok.setter
+    def phien_ok(self, v):
+        self.trang_thai_phien = pk.SONG if v else pk.CHET_CHAC_CHAN
+
     def auth(self, force=False):
-        """Auth NHẸ (không mở chrome -> KHÔNG chặn worker): cache còn hạn -> refresh TỪ COOKIE.
-        Cookie chết/không project -> None (recovery mở chrome chạy NỀN qua RecoveryManager)."""
+        """Auth NHẸ (không mở chrome -> KHÔNG chặn worker). BỐN BƯỚC, RẺ TỚI ĐẮT.
+
+        1. cache cục bộ còn hạn -> dùng · 2. có cookie -> làm mới thẻ từ cookie ·
+        3. KHO SERVER có phiên -> KÉO VỀ + ghi cache · 4. hết cách -> None.
+
+        Bước 3 thêm 07/08/2026, giống hệt nhà máy ảnh: hôm đó server giữ 96 tài
+        khoản `ready` mà máy chỉ có 65 bản ghi `_auth_cache`, nên 31 tài khoản có
+        phiên hợp lệ TRÊN SERVER bị đọc thành "phiên chết" và bị gõ lại mật khẩu.
+        Xem chú thích dài ở `kho_phien.py`.
+        """
         d = self.cache._load(self.email)
         if not force and self.cache._fresh(d):
             return d
@@ -182,6 +214,11 @@ class Account:
             nd = self.cache._refresh_from_cookie(self.email, d)
             if nd:
                 return nd
+        if not (d and d.get("cookie")):
+            nd, _kq = kp.keo_phien_ve(self.email, self.cache,
+                                      log=lambda m: _log(f"{self.email}: {m}"))
+            if nd and nd.get("cookie") and nd.get("project"):
+                return self.cache._refresh_from_cookie(self.email, nd)
         return None
 
     def note_egress_win(self, egress):
@@ -209,25 +246,39 @@ class VideoFactory:
         self.total_done = 0; self.total_fail = 0; self.started_ts = time.time()
         self._clock = threading.Lock()
         self.recovery = am.RecoveryManager(log=self.log)   # chữa account lỗi ở NỀN (không chặn tiến độ)
+        # HẠN MỨC đăng nhập lại bằng mật khẩu — xem `phien_kiem.HanMucChua`.
+        # ⚠ Ảnh và video là HAI TIẾN TRÌNH RỜI NHAU, nên đây là hai van rời nhau;
+        # tổng số lượt đăng nhập/giờ mà Google thấy là TỔNG của hai bên. Chỉnh
+        # `VEO3TOP_CHUA_MOI_LUOT` phải nhớ điều đó.
+        self.han_muc_chua = pk.HanMucChua(log=self.log)
+        # ── NẠP LẠI NÓNG (07/08/2026) — xem chú thích dài ở `reload_accounts` ──
+        self._nap_lai_lock = rr.KhoaNapLai()
+        self._wpa = int(os.environ.get("VEO3TOP_POOL_WORKERS_PER_ACCOUNT", "7") or "7")
+        self._ipv6_slot = 0
+        self.n_kho_san_sang = 0
+        self.last_reload_ts = 0.0
+        self.reload_count = 0
+        self._da_canh_bao_lech = False
 
-    def _startup_check(self):
-        """Đầu giờ: CHECK nhanh từng account (cookie -> validate 1 POST). Lỗi -> chữa NỀN. KHÔNG chặn."""
-        healthy = []; broken = []; lock = threading.Lock()
-        def _check(a):
-            try:
-                auth = a.auth(); ok = bool(auth) and am.validate_auth(auth)
-            except Exception:
-                ok = False
-            with lock:
-                (healthy if ok else broken).append(a)
-            if not ok:
-                a.rest(1800)
-                self.recovery.submit(a.email, lambda a=a: a.recover(self.log))
-        ths = [threading.Thread(target=_check, args=(a,), daemon=True) for a in self.accounts]
-        for t in ths: t.start()
-        for t in ths: t.join(timeout=60)
-        self.log(f"pool VIDEO: {len(self.accounts)} account -> {len(healthy)} SỐNG, {len(broken)} lỗi đang chữa nền "
-                 f"({', '.join(a.name for a in broken) if broken else 'không có'})")
+    def _startup_check(self, accounts=None):
+        """Đầu giờ: kiểm nhanh từng account. Luật nằm ở `phien_kiem.kiem_roster` —
+        CHUNG một hàm với nhà máy ẢNH, cố ý không chép bản thứ hai (bản cũ là hai
+        bản chép tay của cùng một lỗi, và sửa một bên là chắc chắn quên bên kia).
+
+        `accounts` — chỉ kiểm một PHẦN roster. Đường nạp lại nóng dùng nó để kiểm
+        riêng account VỪA THÊM; kiểm cả roster sẽ bắn POST validate vào những
+        account đang chạy job của khách, hoàn toàn vô ích.
+
+        Bản cũ: `except Exception: ok=False` + `rest(1800)` + đăng nhập lại ngay
+        cho MỌI lượt kiểm trượt, 64 lượt bắn cùng lúc. Xem `phien_kiem.py` cho
+        toàn bộ số đo ngày 07/08/2026 và vì sao nó tự nuôi chính nó."""
+        accounts = self.accounts if accounts is None else accounts
+        kq = pk.kiem_roster(
+            accounts,
+            submit_chua=lambda a: self.recovery.submit(a.email, lambda a=a: a.recover(self.log)),
+            log=self.log, han_muc=self.han_muc_chua, nhan="VIDEO",
+        )
+        return kq["song"]
 
     def _cached_media(self, email, image_path, project=None):
         # KÈM project: media_id gắn với project -> đổi project phải upload lại (tránh dùng media_id sai project)
@@ -252,16 +303,41 @@ class VideoFactory:
         if os.environ.get("VEO3TOP_POOL_USE_IPV6", "0") != "1":
             self.log("egress = DIRECT IP máy (IPv6 TẮT — bypass chạy IP máy, tránh netsh nặng)")
             return self._start_rest()
+        ok6 = self._cap_ipv6(self.accounts)
+        self.log(f"IPv6 RIÊNG mỗi account: {ok6}/{len(self.accounts)} account có IP riêng (như veo3top-b)")
+        return self._start_rest()
+
+    # ---------- tiện ích dùng chung cho start() VÀ nạp lại nóng ----------
+    def _cap_ipv6(self, accounts):
+        """Cấp IPv6 riêng cho một NHÓM account. Port lấy từ bộ đếm tăng dần chứ
+        KHÔNG phải `enumerate`: account thêm lúc nạp nóng mà tái dùng port của
+        account đang chạy thì hai transport tranh nhau một cổng, và cái thua là
+        cái đang phục vụ khách."""
+        if os.environ.get("VEO3TOP_POOL_USE_IPV6", "0") != "1":
+            return 0
         ok6 = 0
-        for i, a in enumerate(self.accounts):
+        for a in accounts:
+            if a.ipv6:
+                ok6 += 1; continue
             try:
-                tr = ip6t.IPv6Transport(f"vf_{a.name}", port=self.ipv6_port + i, log=lambda *_: None)
+                tr = ip6t.IPv6Transport(f"vf_{a.name}", port=self.ipv6_port + self._ipv6_slot,
+                                        log=lambda *_: None)
+                self._ipv6_slot += 1
                 if tr.start():
                     a.ipv6 = tr; ok6 += 1
             except Exception:
                 pass
-        self.log(f"IPv6 RIÊNG mỗi account: {ok6}/{len(self.accounts)} account có IP riêng (như veo3top-b)")
-        return self._start_rest()
+        return ok6
+
+    def _mo_tho(self, accounts):
+        """Mở `_wpa` luồng thợ cho mỗi account trong nhóm. Luồng tự thoát khi
+        `account.retired` -> gỡ account không cần đụng `_running`."""
+        n = 0
+        for a in accounts:
+            for _ in range(self._wpa):
+                t = threading.Thread(target=self._worker, args=(a,), daemon=True)
+                t.start(); self._workers.append(t); n += 1
+        return n
 
     def _start_rest(self):
         self.log(f"EGRESS: {[e[0] for e in self.egress]}")
@@ -273,11 +349,8 @@ class VideoFactory:
         # 4) account workers — NHIỀU LUỒNG/ACCOUNT (như veo3top-b 7-20 luồng/tk, KHÔNG phải 1!)
         #    Mỗi account chạy song song nhiều video -> tận dụng hết account (render 1 cái, grind cái khác).
         self._running = True
-        wpa = int(os.environ.get("VEO3TOP_POOL_WORKERS_PER_ACCOUNT", "7") or "7")
-        for a in self.accounts:
-            for _ in range(wpa):
-                t = threading.Thread(target=self._worker, args=(a,), daemon=True)
-                t.start(); self._workers.append(t)
+        wpa = self._wpa
+        self._mo_tho(self.accounts)
         self.log(f"đã khởi động {len(self._workers)} worker ({len(self.accounts)} account x {wpa} luồng)")
         # KEEP-WARM: giữ account video LUÔN TƯƠI (tự chữa 24/7). Video chạy BURST -> account nằm không
         # giữa các burst -> bearer(~30p)/cookie hết hạn -> lúc phase video chạy mới phát hiện 0 SỐNG (chữa chậm+fail).
@@ -313,23 +386,40 @@ class VideoFactory:
             if not self._running: return
             time.sleep(10)
         while self._running:
-            fresh = 0; healed = 0
-            for a in self.accounts:
-                if not self._running: return
-                if getattr(a, "_recovering", False):
-                    continue
-                try:
-                    auth = a.auth(force=True)            # ép refresh từ cookie -> bearer mới + cookie được "chạm" (ấm)
-                    ok = bool(auth) and am.validate_auth(auth)
-                except Exception:
-                    ok = False
-                if ok:
-                    fresh += 1
-                else:
-                    healed += 1
-                    a.rest(1800)
-                    self.recovery.submit(a.email, lambda a=a: a.recover(self.log))
-            _log(f"keep-warm VIDEO: {fresh} tươi, {healed} ngả -> chữa NỀN chủ động (trước khi phase video cần)")
+            # Chụp danh sách MỘT LẦN: `reload_accounts` thay `self.accounts`
+            # nguyên khối, duyệt thẳng lên thuộc tính là duyệt hai danh sách
+            # khác nhau giữa chừng.
+            ds = [a for a in list(self.accounts)
+                  if not (getattr(a, "_recovering", False) or a.retired)]
+            if not self._running: return
+            # ĐI QUA ĐÚNG BỘ LUẬT CHUNG (`phien_kiem`): vòng này trước đây là bản
+            # chép thứ ba của cùng một lỗi — `except: ok=False` rồi `rest(1800)` +
+            # đăng nhập lại, chạy TUẦN TỰ trên CẢ roster mỗi 10 phút. Với account
+            # khoẻ mà mạng chập một nhịp, nó cắt 30 phút công suất và đốt một lượt
+            # đăng nhập, cứ thế mỗi 10 phút.
+            kq = pk.kiem_roster(
+                ds,
+                submit_chua=lambda a: self.recovery.submit(a.email, lambda a=a: a.recover(self.log)),
+                log=self.log, han_muc=self.han_muc_chua, nhan="VIDEO keep-warm",
+                # ÉP làm mới thẻ từ cookie: đó mới là phần "keep-WARM" — cookie
+                # được chạm mỗi 10 phút nên không nguội giữa hai đợt video.
+                kiem=lambda a, ngu=time.sleep: pk.kiem_co_thu_lai(a, ngu=ngu, force=True),
+            )
+            _log(f"keep-warm VIDEO: {kq['song']} tươi, {kq['chet_chac_chan']} chết chắc chắn "
+                 f"-> chữa NỀN chủ động ({kq['cho_chua']} xếp hàng), {kq['khong_kiem_duoc']} chưa rõ "
+                 f"-> ĐỂ YÊN, vẫn giao việc")
+            # CẢNH BÁO KHO LỆCH: kho có phiên mà nhà máy không dùng được = chạy
+            # chậm nhiều lần MÀ KHÔNG BÁO LỖI. Đó chính là cách sự cố 07/08/2026
+            # sống sót cả ca. Kêu MỘT lần mỗi đợt lệch, không spam.
+            try:
+                _cb = self.canh_bao_lech()
+                if _cb and not self._da_canh_bao_lech:
+                    self._da_canh_bao_lech = True
+                    self.log("⚠️ " + _cb)
+                elif not _cb:
+                    self._da_canh_bao_lech = False
+            except Exception:
+                pass
             # DỌN RÁC log định kỳ (không phình vô tận) — mỗi vòng keep-warm (~10p) cắt log nếu quá lớn, giữ phần mới.
             try:
                 import diag_report as _dr
@@ -345,6 +435,9 @@ class VideoFactory:
         self._running = False
         try:
             if self.recovery: self.recovery.stop()
+        except Exception: pass
+        try:
+            if self.han_muc_chua: self.han_muc_chua.stop()
         except Exception: pass
         try:
             if self.factory: self.factory.stop()
@@ -379,10 +472,16 @@ class VideoFactory:
                         bearer = a2["bearer"]; cookie = a2.get("cookie"); project = a2.get("project") or project
                         media_id, err = fc.upload_image(bearer, project, sess, job["image_path"], aspect=aspect)
                     if not media_id:
-                        # vẫn 401 -> chữa NỀN + PARK + requeue sang account SỐNG (không fail cứng job)
-                        self.log(f"VIDEO: {account.email} 401 lúc upload ref -> chữa NỀN, PARK + requeue.")
-                        account.rest(1800)
-                        self.recovery.submit(account.email, lambda a=account: a.recover(self.log))
+                        # vẫn 401 -> chữa NỀN + PARK + requeue sang account SỐNG (không fail cứng job).
+                        # 401 hai lần liên tiếp trên lượt gọi THẬT = bằng chứng phiên chết;
+                        # nghỉ NGẮN tăng dần + XIN LƯỢT chữa (hạn mức) — xem `phien_kiem`.
+                        account.trang_thai_phien = pk.CHET_CHAC_CHAN
+                        giay = pk.nghi_tang_dan(account)
+                        kq = self.han_muc_chua.xep_hang(
+                            account.email,
+                            lambda a=account: self.recovery.submit(a.email, lambda a=a: a.recover(self.log)))
+                        self.log(f"VIDEO: {account.email} 401 lúc upload ref -> nghỉ {int(giay)}s + "
+                                 f"{'chữa NỀN ngay' if kq == 'chay' else 'XẾP HÀNG chờ lượt chữa'}, PARK + requeue.")
                         return "retry_soft"
                 if not media_id:
                     return ("fail", f"upload ref fail: {err}")
@@ -427,6 +526,7 @@ class VideoFactory:
                     finally:
                         account.limiter.release()
             if kind == "ok":
+                account.phien_ok = True   # ra 200 = phiên còn sống (dùng cho cảnh báo kho lệch)
                 account.limiter.on_ok()   # submit mượt -> tín hiệu nới trần dần (AIMD)
                 quota_streak = 0          # submit 200 -> KHÔNG hết quota -> reset (chống 6h oan do đếm dồn xen kẽ)
                 account.note_egress_win(ename)
@@ -467,9 +567,15 @@ class VideoFactory:
                         quota_streak = 0   # 401 (bearer hết hạn) KHÁC hết-quota -> reset, không cộng dồn vào 6h
                         continue
                 account.last_kind = "auth_recovering"
-                self.log(f"VIDEO: {account.email} 401 -> chữa NỀN (login+warm+cookie), PARK + requeue (account khác chạy tiếp).")
-                account.rest(1800)
-                self.recovery.submit(account.email, lambda a=account: a.recover(self.log))
+                # 401 TRÊN LƯỢT GỌI THẬT = bằng chứng phiên chết. Đây là lý do
+                # account "chưa rõ" vẫn được giao việc: chỗ này mới kết luận nổi.
+                account.trang_thai_phien = pk.CHET_CHAC_CHAN
+                giay = pk.nghi_tang_dan(account)   # NGẮN + tăng dần, không phải 1800s cứng
+                kq = self.han_muc_chua.xep_hang(
+                    account.email, lambda a=account: self.recovery.submit(a.email, lambda a=a: a.recover(self.log)))
+                self.log(f"VIDEO: {account.email} 401 lúc chạy thật -> nghỉ {int(giay)}s + "
+                         f"{'chữa NỀN ngay' if kq == 'chay' else 'XẾP HÀNG chờ lượt chữa'}, "
+                         f"PARK + requeue (account khác chạy tiếp).")
                 return "retry_soft"
             else:
                 account.last_kind = f"{kind}@{ename}"
@@ -523,7 +629,9 @@ class VideoFactory:
 
     # ---------- vòng lặp 1 account-worker ----------
     def _worker(self, account):
-        while self._running:
+        # `account.retired` kiểm ở ĐẦU vòng -> chỉ thoát SAU khi job hiện tại
+        # xong. Gỡ một account KHÔNG BAO GIỜ cắt ngang job đang chạy.
+        while self._running and not account.retired:
             w = account.rest_remaining()
             if w > 0:
                 time.sleep(min(w, 5)); continue
@@ -566,22 +674,145 @@ class VideoFactory:
             return False, {}, "video_factory: timeout chờ job"
         return job.get("_result", (False, {}, "no result"))
 
+    # ================================================================
+    # NẠP LẠI NÓNG roster — thêm/bỏ account mà KHÔNG khởi động lại
+    # ================================================================
+    #
+    # ═══ SỐ ĐO LÀM BẰNG CHỨNG, ĐỪNG GỠ KHỐI NÀY ═══
+    #
+    # 07/08/2026 nhà máy ẢNH chạy 8/64 account đăng nhập được trong khi kho có
+    # 96/96 sẵn sàng; ảnh mất 600-780 giây thay vì ~90 và một khách thật có 4
+    # job bò ở tốc độ đó. Nhà máy VIDEO có ĐÚNG cái lỗi ấy: `start()` đọc
+    # `load_pool_accounts()` một lần rồi thôi. Nó chưa cắn vì video ít account
+    # hơn — nhưng "chưa cắn" không phải là "đã sửa".
+
+    def _co_phien(self, email):
+        """Account có cookie dùng được trong `_auth_cache` chưa? (điều kiện để
+        `Account.auth()` chạy mà KHÔNG mở Chrome)."""
+        try:
+            d = self.cache._load(email)
+            return bool(d and d.get("cookie"))
+        except Exception:
+            return False
+
+    def _so_lieu_roster(self):
+        accounts = list(self.accounts)   # chụp một lần: `self.accounts` bị thay nguyên khối
+        # `logged_in`/`not_logged_in` ĐÃ BỊ BỎ (07/08/2026) — một con số mang hai
+        # nghĩa. Xem `phien_kiem.dem_trang_thai`.
+        so = pk.dem_trang_thai(accounts)
+        so["dang_ban"] = sum(1 for a in accounts if a.busy)
+        so["kho_san_sang"] = self.n_kho_san_sang
+        return so
+
+    def canh_bao_lech(self):
+        # `phien_dung_duoc` = SỐNG + CHƯA RÕ: account chưa rõ VẪN được giao việc.
+        return rr.canh_bao_kho_lech(
+            pk.dem_trang_thai(list(self.accounts))["phien_dung_duoc"], self.n_kho_san_sang,
+            uptime_s=time.time() - self.started_ts,
+        )
+
+    def reload_accounts(self):
+        """Đọc lại `load_pool_accounts()` rồi cập nhật roster ĐANG CHẠY.
+
+        KHÔNG đụng account đang bận: account rời roster mà `busy`/đang được chữa
+        thì giữ lại tới lượt nạp sau. Account còn trong roster GIỮ NGUYÊN object
+        cũ — dựng lại là vứt cookie/bearer/IPv6/cache media và job đang chạy trên
+        đó chết theo."""
+        with self._nap_lai_lock:
+            pool = load_pool_accounts()
+            truoc = self._so_lieu_roster()
+            if not pool:
+                # settings.yaml đang được `account_bridge` ghi dở là ca có thật
+                # (ghi qua file .tmp rồi `os.replace`, nhưng yaml hỏng vẫn ra
+                # danh sách rỗng). Coi rỗng là sự thật = tự gỡ hết account tốt.
+                self.log("⚠️ nạp lại nóng: KHO đọc ra RỖNG -> giữ nguyên roster đang chạy "
+                         "(settings.yaml đang ghi dở?), KHÔNG gỡ account nào")
+                bao = rr.dung_bao_cao(truoc, truoc, rr.KetQuaHopNhat([], [], [], [], []),
+                                      self.canh_bao_lech())
+                bao["ok"] = False; bao["loi"] = "kho rỗng - giữ nguyên roster"
+                return bao
+            self.n_kho_san_sang = sum(1 for a in pool if self._co_phien(a["email"]))
+
+            cu = list(self.accounts)
+            kq = rr.hop_nhat_roster(
+                cu, pool,
+                lay_khoa=lambda a: a.email,
+                lay_khoa_mong_muon=lambda d: d["email"],
+                dang_ban=lambda a: bool(a.busy) or bool(getattr(a, "_recovering", False)),
+                tao_moi=lambda d: Account(d["name"], d["email"], d["chrome_path"],
+                                          self.cache, d.get("bundle", "")),
+            )
+            moi = [a for a in kq.danh_sach if a not in cu]
+            # Gán NGUYÊN KHỐI (không sửa tại chỗ): luồng đọc luôn thấy danh sách
+            # cũ trọn vẹn hoặc danh sách mới trọn vẹn, không bao giờ nửa vời.
+            self.accounts = kq.danh_sach
+            for a in cu:
+                if a in kq.danh_sach:
+                    continue
+                a.retired = True     # luồng thợ tự thoát SAU job hiện tại
+                try:
+                    if a.ipv6: a.ipv6.stop()
+                except Exception:
+                    pass
+            self.last_reload_ts = time.time(); self.reload_count += 1
+
+            if moi:
+                self._cap_ipv6(moi)
+                if self._running:
+                    self._mo_tho(moi)
+                try:
+                    self._startup_check(moi)   # chỉ kiểm account MỚI
+                except Exception as e:
+                    self.log(f"nạp lại nóng: kiểm account mới lỗi ({e}) — vẫn cho chạy")
+
+            sau = self._so_lieu_roster()
+            canh_bao = self.canh_bao_lech()
+            self.log(
+                f"♻️ nạp lại nóng roster VIDEO: {truoc['accounts']} -> {sau['accounts']} account "
+                f"(+{len(kq.them)} / -{len(kq.bo)}), giữ lại {len(kq.giu_lai_vi_ban)} vì ĐANG BẬN; "
+                f"dùng được {sau['phien_dung_duoc']}/{sau['kho_san_sang']} (kho) "
+                f"[đã kiểm sống {sau['phien_song']}, chết chắc chắn {sau['phien_chet_chac_chan']}, "
+                f"chưa kiểm {sau['phien_chua_kiem']}]"
+            )
+            if canh_bao:
+                self.log("⚠️ " + canh_bao)
+            return rr.dung_bao_cao(truoc, sau, kq, canh_bao)
+
     def health(self):
         up = time.time() - self.started_ts
         vph = (self.total_done / up * 3600) if up > 5 else 0
-        return {
+        ds = list(self.accounts)
+        out = {
             "accounts": [
                 {"name": a.name, "email": a.email, "resting_in": round(a.rest_remaining(), 1),
                  "busy": a.busy, "wins": a.wins, "fails": a.fails, "egress_wins": a.egress_wins,
                  "submit_limit": (_snap := a.limiter.snapshot())[0], "submit_active": _snap[1],
+                 "trang_thai_phien": a.trang_thai_phien,
                  "last_kind": getattr(a, "last_kind", "")}
-                for a in self.accounts
+                for a in ds
             ],
             "egress": [e[0] for e in self.egress],
             "queue": self.q.qsize(),
             "done": self.total_done, "fail": self.total_fail,
             "video_per_hour": round(vph, 1), "uptime_s": round(up),
+            # ── nạp lại nóng + cảnh báo kho lệch (07/08/2026) ──────────────
+            # Hôm đó KHÔNG khoá nào trong `/health` nói được rằng nhà máy đang
+            # chạy 8/96 tài khoản: mọi chỉ số đều xanh, chỉ có ảnh chậm 8 lần.
+            #
+            # ⚠ KHOÁ `logged_in` ĐÃ BỊ XOÁ HẲN, ĐỪNG THÊM LẠI — nó là BỘ ĐẾM
+            # TIẾN TRÌNH KIỂM đội lốt số account đăng nhập được (đo trên nhà máy
+            # ảnh: 8 -> 41 trong 30 phút). Bốn khoá `phien_*` bên dưới thay nó,
+            # mỗi con số trả lời đúng một câu hỏi — xem `phien_kiem.dem_trang_thai`.
+            "kho_san_sang": self.n_kho_san_sang,
+            "chua_cho_luot": self.han_muc_chua.cho_doi(),
+            "roster_canh_bao": self.canh_bao_lech(),
+            "reload_count": self.reload_count,
+            "last_reload_ts": round(self.last_reload_ts),
         }
+        so = pk.dem_trang_thai(ds)
+        so.pop("accounts", None)   # `accounts` ở trên là DANH SÁCH, không phải số đếm
+        out.update(so)
+        return out
 
 
 # ---------------- HTTP ----------------
@@ -612,6 +843,16 @@ class _Handler(BaseHTTPRequestHandler):
             self._send(400, {"error": "bad json"}); return
         if self.path == "/shutdown":
             self._send(200, {"ok": True}); threading.Thread(target=_FACTORY.stop, daemon=True).start(); return
+        if self.path == "/reload_accounts":
+            # NẠP LẠI NÓNG — đường thay thế cho "khởi động lại để đổi account".
+            # Khởi động lại giết mọi job đang chạy dở; đường này KHÔNG đụng
+            # account đang bận (xem `VideoFactory.reload_accounts`).
+            try:
+                self._send(200, _FACTORY.reload_accounts())
+            except Exception as e:
+                _FACTORY.log(f"nạp lại nóng LỖI: {type(e).__name__}: {e}")
+                self._send(200, {"ok": False, "loi": f"{type(e).__name__}: {e}"})
+            return
         if self.path == "/generate":
             img = data.get("image_path"); pr = data.get("prompt"); outp = data.get("out_path")
             if not img or not outp:

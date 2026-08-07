@@ -40,18 +40,58 @@ def chrome_paths(chrome_path):
     return None, None
 
 
+def validate_auth_chi_tiet(auth, timeout=30, _post=None):
+    """Như `validate_auth` nhưng TRẢ VỀ BA TRẠNG THÁI + ghi chú, KHÔNG nuốt mã HTTP.
+
+    ═══ VÌ SAO PHẢI CÓ BẢN NÀY (07/08/2026) ═══
+
+    `validate_auth` trả về `bool`. Một bit không chở nổi ba sự thật khác nhau
+    ("sống" / "chết" / "chưa biết"), nên mọi người gọi nó đều phải TỰ ĐOÁN nốt
+    phần còn lại — và cả hai nhà máy đều đoán sai theo cùng một kiểu:
+
+        try:  ok = bool(auth) and am.validate_auth(auth)
+        except Exception:  ok = False        # mạng chập -> kết án phiên chết
+        if not ok: a.rest(1800); recovery.submit(...)   # + đăng nhập lại
+
+    Kết quả: 64 lượt validate bắn cùng lúc lúc khởi động -> Google chặn tốc độ ->
+    hàng loạt account khoẻ bị kết án -> nghỉ 30 phút + đăng nhập lại hàng loạt ->
+    CAPTCHA. Bằng chứng cùng ngày: 98 hồ sơ Chrome còn nguyên cookie, không hồ sơ
+    nào mất phiên; ảnh mất 600–780 giây thay vì ~90.
+
+    Phép kiểm bắn MỘT POST T2V với token reCAPTCHA GIẢ, nên 400 nghĩa là request
+    đã QUA lớp xác thực rồi mới bị từ chối vì token — tức bearer SỐNG. Phân loại
+    chi tiết nằm ở `phien_kiem.phan_loai_http`.
+    """
+    import phien_kiem as pk
+    if not (auth and auth.get("bearer") and auth.get("project")):
+        return pk.KHONG_KIEM_DUOC, "thiếu bearer/project - chưa hỏi được máy chủ"
+    try:
+        payload = fc.build_payload("x", auth["project"], "DUMMY", 1, aspect="VIDEO_ASPECT_RATIO_LANDSCAPE")
+        r = (_post or fc._post)(fc.GEN_T2V, fc._headers(auth["bearer"]),
+                                __import__("json").dumps(payload), timeout=timeout, proxy=None)
+    except Exception as e:
+        return pk.phan_loai_ngoai_le(e)
+    try:
+        body = r.text or ""
+    except Exception:
+        body = ""
+    return pk.phan_loai_http(getattr(r, "status_code", 0), body)
+
+
 def validate_auth(auth, timeout=30):
     """POST video T2V với token GIẢ: 401 = bearer CHẾT; khác (403/400/429) = bearer SỐNG (chưa tới recaptcha).
-    Rẻ, chắc chắn — dùng để biết account thật sự dùng được không (đừng tin bearer 'fresh')."""
-    try:
-        if not (auth and auth.get("bearer") and auth.get("project")):
-            return False
-        payload = fc.build_payload("x", auth["project"], "DUMMY", 1, aspect="VIDEO_ASPECT_RATIO_LANDSCAPE")
-        r = fc._post(fc.GEN_T2V, fc._headers(auth["bearer"]), __import__("json").dumps(payload),
-                     timeout=timeout, proxy=None)
-        return r.status_code != 401
-    except Exception:
-        return True   # lỗi mạng -> KHÔNG kết luận chết (tránh recover oan), coi như sống
+    Rẻ, chắc chắn — dùng để biết account thật sự dùng được không (đừng tin bearer 'fresh').
+
+    GIỮ NGUYÊN chữ ký cũ cho những nơi chỉ cần một câu trả lời có/không
+    (`Account.recover` kiểm phiên vừa chữa xong). Chỗ nào PHẢI RA QUYẾT ĐỊNH
+    (nghỉ? đăng nhập lại?) thì dùng `validate_auth_chi_tiet` — xem lý do ở đó.
+    """
+    import phien_kiem as pk
+    if not (auth and auth.get("bearer") and auth.get("project")):
+        return False
+    # "chưa kết luận được" vẫn quy về SỐNG y như trước (lỗi mạng KHÔNG được đọc
+    # thành phiên chết) — chỉ bằng chứng thật mới cho ra False.
+    return validate_auth_chi_tiet(auth, timeout=timeout)[0] != pk.CHET_CHAC_CHAN
 
 
 def _profile_in_use(profile_dir):

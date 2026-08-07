@@ -25,6 +25,8 @@ import flow_client as fc
 import ipv6_transport as ip6t
 import token_factory as tf
 import project_pool as pp
+import roster_reload as rr          # NẠP LẠI NÓNG roster (xem chú thích dài trong roster_reload.py)
+import kho_phien as kp              # KÉO PHIÊN TỪ KHO SERVER (xem chú thích dài trong kho_phien.py)
 from cdp_chrome import ChromeCDP, SITE_KEY, FLOW_URL
 try:
     from auth_cache import AuthCache
@@ -459,7 +461,20 @@ class Account:
         except Exception:
             ck = None
         if not ck:
-            return False   # KHÔNG có cookie = out thật
+            # KHÔNG có bản ghi trên máy ≠ phiên chết. HỎI KHO SERVER trước khi
+            # kết luận "out thật" — 07/08/2026 đo được: 96 tài khoản `ready` trên
+            # server, 65 bản ghi trong `_auth_cache` trên máy, 31 tài khoản có
+            # phiên hợp lệ TRÊN SERVER mà bị đọc thành "out" rồi đi gõ lại mật
+            # khẩu. Đăng nhập hàng loạt là thứ đẻ ra CAPTCHA. Xem `kho_phien.py`.
+            # Máy không cấu hình kho -> `keo_phien_ve` trả None -> hành vi như cũ.
+            if _AUTHCACHE is not None:
+                try:
+                    d2, _kq = kp.keo_phien_ve(self.email, _AUTHCACHE)
+                except Exception:
+                    d2 = None
+                ck = (d2 or {}).get("cookie")
+            if not ck:
+                return False   # máy không có, kho cũng không có = out thật
         saw_dead = False
         for i in range(max(1, tries)):
             try:
@@ -928,6 +943,18 @@ class ImagePoolBrowser:
         self._consec_recaptcha = 0        # số lần recaptcha-fail LIÊN TIẾP toàn pool (reset khi có 1 ảnh)
         self._quota_blocked_until = 0.0   # >now => đang coi quota cạn, chỉ probe nhẹ
         self._quota_alerted = False       # đã cảnh báo 1 lần (khỏi spam log)
+        # ── NẠP LẠI NÓNG (07/08/2026) ───────────────────────────────────────
+        # Trước bản này roster chỉ được đọc MỘT LẦN trong start(). Nhà máy bật
+        # trước lúc kho nạp đầy -> chạy cả ca với 8/96 tài khoản, ảnh 600-780
+        # giây thay vì ~90 (xem roster_reload.py). Ba thuộc tính dưới đây là
+        # phần trạng thái mà đường nạp nóng cần.
+        self._nap_lai_lock = rr.KhoaNapLai()   # 2 lượt nạp chồng nhau -> 1 email 2 object
+        self.n_configured = 0                  # tổng tài khoản trong KHO (đếm lại mỗi lượt nạp)
+        self.n_not_logged = 0                  # trong đó bao nhiêu chưa có hồ sơ đăng nhập
+        self.n_kho_san_sang = 0                # trong KHO, bao nhiêu cái THẬT SỰ có phiên dùng được
+        self.last_reload_ts = 0.0
+        self.reload_count = 0
+        self._da_canh_bao_lech = False         # kêu 1 lần/đợt lệch, không spam log
 
     # ---------- persistence (nhớ GOOD/BAD qua các lần chạy) ----------
     def _load_state(self):
@@ -995,6 +1022,20 @@ class ImagePoolBrowser:
             elig = [a for a in self.candidates
                     if a.email not in self.active and not self._in_cooldown(a.email)]
             if not elig:
+                # FIX WEDGE #1: có job chờ mà TOÀN BỘ account đều cooldown (starvation
+                # sau sự cố hệ thống: 429 hàng loạt / chrome bị kill / lock profile) ->
+                # ân xá account nghỉ gần hết hạn nhất thay vì để pool đứng hình vô hạn.
+                if self.q.qsize() > 0:
+                    parked = [a for a in self.candidates if a.email not in self.active]
+                    if parked:
+                        a = min(parked, key=lambda x: self._state.get(x.email, {}).get("until", 0))
+                        st = dict(self._state.get(a.email, {}))
+                        st.pop("until", None)
+                        self._state[a.email] = st
+                        self._save_state()
+                        self.log(f"⛑️ pool starvation: ân xá {a.email} (queue={self.q.qsize()}) để tiếp tục phục vụ")
+                        self.active[a.email] = a
+                        return a
                 # tất cả đang bận hoặc DEAD-cooldown -> chờ (slot sẽ thử lại)
                 return None
             def _rank(a):
@@ -1009,6 +1050,143 @@ class ImagePoolBrowser:
         with self._cand_lock:
             self.active.pop(a.email, None)
 
+    # ================================================================
+    # NẠP LẠI NÓNG roster — thêm/bỏ tài khoản mà KHÔNG khởi động lại
+    # ================================================================
+    #
+    # ═══ SỐ ĐO LÀM BẰNG CHỨNG, ĐỪNG GỠ KHỐI NÀY ═══
+    #
+    # 07/08/2026, `/health` của chính tiến trình này trả:
+    #     slots: 64, candidates: 64, not_logged_in: 50, logged_in: 8, known_good: 45
+    # trong khi CSDL kho có 96/96 tài khoản sẵn sàng. Ảnh mất 600-780 giây thay
+    # vì ~90 (`workers/veo3/logs/worker-20260807.jsonl`), một khách thật có 4 job
+    # bò ở tốc độ đó. Không một dòng lỗi nào — nhà máy vẫn khai "khoẻ".
+    #
+    # Lý do lỗi sống dai: `start()` đọc kho ĐÚNG MỘT LẦN, và cách duy nhất để
+    # nạp phiên mới là khởi động lại — tức GIẾT mọi job đang chạy dở của khách.
+    # Cái giá để sửa luôn rơi vào khách, nên ai cũng hoãn. Đường dưới đây bỏ
+    # cái giá đó: tài khoản ĐANG BẬN không bị đụng tới một chút nào.
+
+    @staticmethod
+    def _co_phien(email):
+        """Tài khoản này có phiên DÙNG ĐƯỢC chưa (theo đúng thứ tự `prepare` thử)?
+
+        `prepare()` nhận HAI loại phiên và đây phải đếm đúng cả hai, nếu không
+        con số cảnh báo sẽ nói dối:
+          * cookie trong `_auth_cache` -> đường FAST PATH, không mở Chrome. Đây
+            là đường mà worker shopapi bơm phiên vào (`account_bridge`).
+          * hồ sơ Chrome đã đăng nhập  -> đường cũ, mở Chrome lấy SSO.
+        Đếm thiếu vế đầu thì `not_logged_in` sẽ báo 50 tài khoản "chưa login"
+        trong khi chúng có cookie tươi và chạy được ngay.
+        """
+        try:
+            if _AUTHCACHE is not None:
+                d = _AUTHCACHE._load(email)
+                if d and d.get("cookie"):
+                    return True
+        except Exception:
+            pass
+        try:
+            return bool(_profile_logged_in(email))
+        except Exception:
+            return False
+
+    def _dem_kho(self, gmails):
+        """Đếm lại KHO và ghi vào ba bộ đếm dùng cho `/health` + cảnh báo lệch."""
+        self.n_configured = len(gmails)
+        self.n_not_logged = sum(1 for a in gmails if not _profile_logged_in(a["email"]))
+        self.n_kho_san_sang = sum(1 for a in gmails if self._co_phien(a["email"]))
+        return self.n_configured, self.n_not_logged, self.n_kho_san_sang
+
+    def _so_lieu_roster(self):
+        """Ảnh chụp nhanh để so TRƯỚC/SAU trong phản hồi `/reload_accounts`."""
+        return {
+            "candidates": len(self.candidates),
+            "dang_ban": len(self.active),
+            "configured": self.n_configured,
+            "not_logged_in": self.n_not_logged,
+            "logged_in": len(self._ever_ready),
+            "kho_san_sang": self.n_kho_san_sang,
+        }
+
+    def canh_bao_lech(self):
+        """Câu cảnh báo "kho lệch" hoặc chuỗi rỗng. Xem `roster_reload.canh_bao_kho_lech`."""
+        return rr.canh_bao_kho_lech(
+            len(self._ever_ready), self.n_kho_san_sang,
+            uptime_s=time.time() - self.started_ts,
+        )
+
+    def reload_accounts(self):
+        """Đọc lại KHO rồi cập nhật roster ĐANG CHẠY. KHÔNG đụng tài khoản bận.
+
+        Trả về thân phản hồi của `POST /reload_accounts` (xem `rr.dung_bao_cao`):
+        số liệu TRƯỚC và SAU, thêm bao nhiêu, bỏ bao nhiêu, giữ lại bao nhiêu vì
+        đang bận. Có TRƯỚC/SAU vì hôm 07/08 mọi thứ đều "ok: true" mà vẫn hỏng —
+        người vận hành cần thấy con số nhúc nhích thì mới tin là ăn thua.
+        """
+        with self._nap_lai_lock:
+            gmails = load_gmail_accounts()
+            truoc = self._so_lieu_roster()
+            if not gmails:
+                # Kho đọc ra RỖNG gần như chắc chắn là sqlite đang bị khoá / sai
+                # đường dẫn, KHÔNG phải "chủ dự án vừa xoá sạch kho". Coi nó là
+                # sự thật thì ta tự tay gỡ hết tài khoản đang chạy tốt.
+                self.log("⚠️ nạp lại nóng: KHO đọc ra RỖNG -> giữ nguyên roster đang chạy "
+                         "(nhiều khả năng accounts.db bị khoá/sai đường dẫn, không phải kho trống)")
+                bao = rr.dung_bao_cao(truoc, truoc, rr.KetQuaHopNhat([], [], [], [], []),
+                                      self.canh_bao_lech())
+                bao["ok"] = False
+                bao["loi"] = "kho rỗng - giữ nguyên roster"
+                return bao
+
+            self._dem_kho(gmails)
+            if IMG_NO_LOGIN and not POOL_LOGIN:
+                # Giống hệt `start()`: không tự đăng nhập thì đừng phí slot cho
+                # tài khoản chưa có phiên.
+                gmails = [a for a in gmails if self._co_phien(a["email"])]
+
+            # Tài khoản vừa được nạp phiên nhưng state cũ còn ghi 'nologin' kèm
+            # `until` -> `_in_cooldown` vẫn gạt nó ra. Nạp phiên xong mà vẫn bị
+            # gạt thì lượt nạp này chẳng cứu được gì, nên phải gỡ hạn nghỉ đó.
+            go_han = 0
+            with self._clock:
+                for a in gmails:
+                    st = self._state.get(a["email"])
+                    if st and st.get("state") == "nologin" and self._co_phien(a["email"]):
+                        st.pop("until", None); st["state"] = "new"; go_han += 1
+                if go_han:
+                    self._save_state()
+
+            with self._cand_lock:
+                kq = rr.hop_nhat_roster(
+                    self.candidates, gmails,
+                    lay_khoa=lambda a: a.email,
+                    lay_khoa_mong_muon=lambda d: d["email"],
+                    # "Bận" ở nhà máy này = đang được một slot giữ (`self.active`).
+                    # Không dùng `a.busy`: `busy` chỉ True trong lúc `_process`
+                    # chạy, còn giữa hai job của cùng một lượt active thì nó False
+                    # — gỡ đúng lúc đó là kéo tài khoản ra dưới chân slot đang dùng.
+                    dang_ban=lambda a: a.email in self.active,
+                    tao_moi=lambda d: Account(len(self.candidates), d["email"],
+                                              d["password"], d["totp"]),
+                )
+                self.candidates = kq.danh_sach
+
+            self.last_reload_ts = time.time()
+            self.reload_count += 1
+            sau = self._so_lieu_roster()
+            canh_bao = self.canh_bao_lech()
+            self.log(
+                f"♻️ nạp lại nóng roster: {truoc['candidates']} -> {sau['candidates']} ứng viên "
+                f"(+{len(kq.them)} / -{len(kq.bo)}), giữ lại {len(kq.giu_lai_vi_ban)} vì ĐANG BẬN, "
+                f"gỡ hạn nghỉ 'nologin' cho {go_han}; kho {sau['kho_san_sang']}/{sau['configured']} có phiên"
+            )
+            if canh_bao:
+                self.log("⚠️ " + canh_bao)
+            bao = rr.dung_bao_cao(truoc, sau, kq, canh_bao)
+            bao["go_han_nologin"] = go_han
+            return bao
+
     def start(self):
         os.makedirs(POOL_PROFILES, exist_ok=True)
         # CLEAN SLATE: kill sạch chrome pool ẢNH CŨ còn sót (account + TOKEN FACTORY) từ lần chạy trước -> tránh zombie.
@@ -1017,8 +1195,7 @@ class ImagePoolBrowser:
         # CHỈ DÙNG ACCOUNT ĐÃ LOGIN (no-login mode): lọc bỏ account chưa có cookie google -> pool KHÔNG phí slot mở
         # chrome cho gmail chưa login (fail rồi nghỉ). User login thêm ở GUI -> RESTART tool để nạp thêm.
         # ĐẾM tổng + số CHƯA LOGIN (cho /health + GUI hiển thị)
-        self.n_configured = len(gmails)                                          # tổng gmail cấu hình (vd 96)
-        self.n_not_logged = sum(1 for a in gmails if not _profile_logged_in(a["email"]))
+        self._dem_kho(gmails)   # -> n_configured (vd 96), n_not_logged, n_kho_san_sang
         if IMG_NO_LOGIN and not POOL_LOGIN:
             # KHÔNG auto-login -> LỌC BỎ account chưa cookie (khỏi phí slot mở chrome fail rồi nghỉ).
             gmails = [a for a in gmails if _profile_logged_in(a["email"])]
@@ -1074,6 +1251,18 @@ class ImagePoolBrowser:
         ports = "|".join(str(9500 + i) for i in range(self.n_slots))
         while self._running:
             time.sleep(30)   # 90->30s: dọn nhanh hơn, không để rác tích lâu
+            # (0-) CẢNH BÁO KHO LỆCH: chạy chậm 8 lần mà IM LẶNG là lý do lỗi
+            #      07/08/2026 sống được cả ca. Kêu MỘT lần mỗi đợt lệch (kêu mỗi
+            #      30 giây thì thành tiếng ồn, mà tiếng ồn thì bị bỏ qua).
+            try:
+                _cb = self.canh_bao_lech()
+                if _cb and not self._da_canh_bao_lech:
+                    self._da_canh_bao_lech = True
+                    self.log("⚠️ " + _cb)
+                elif not _cb:
+                    self._da_canh_bao_lech = False
+            except Exception:
+                pass
             # (0) TOKEN FACTORY tự tắt khi IDLE: bypass ~99% nên fallback WEB token hiếm dùng. Nếu >IDLE giây không
             #     ai gọi -> stop (đóng 4-5 chrome mint) -> nhẹ. Lần bypass-fail sau _img_token_factory() bật lại.
             global _IMG_TOKFAC, _IMG_TOKFAC_LAST_USE
@@ -1171,6 +1360,8 @@ class ImagePoolBrowser:
                         job = self.q.get(timeout=3)
                     except queue.Empty:
                         continue
+                    if job.get("_dead"):
+                        continue  # client đã timeout bỏ đi -> không đốt quota cho job mồ côi
                     if job.get("_cycles", 0) > JOB_MAX_CYCLES:
                         msg = ("quota reCAPTCHA ẢNH đang cạn (Google-side) - bỏ lượt này, chạy lại sau sẽ tự làm tiếp"
                                if self.quota_blocked() else "quá nhiều lượt - bỏ ảnh")
@@ -1244,6 +1435,15 @@ class ImagePoolBrowser:
                             job["_result"] = (False, {}, outcome[1] if isinstance(outcome, tuple) else str(outcome))
                         with self._clock: self.total_fail += 1
                         job["_event"].set()
+            except Exception as exc:
+                # FIX WEDGE #2: slot KHÔNG được chết im lặng vì exception ngoài dự kiến
+                # (prepare/log/IO...). Trả job dang dở về hàng đợi rồi slot tiếp tục sống.
+                self.log(f"💥 slot {slot}: exception ngoài dự kiến {type(exc).__name__}: {exc} -> slot tiếp tục")
+                _job = locals().get("job")
+                if isinstance(_job, dict) and "_result" not in _job and not _job.get("_requeued_on_crash"):
+                    _job["_requeued_on_crash"] = True
+                    self.q.put(_job)
+                time.sleep(2)
             finally:
                 a.close(); self._release_candidate(a)
 
@@ -1370,6 +1570,9 @@ class ImagePoolBrowser:
                "image_inputs": image_inputs, "_event": threading.Event()}
         self.q.put(job)
         if not job["_event"].wait(timeout=timeout):
+            # FIX WEDGE #4: client đã bỏ đi -> đánh dấu job CHẾT để slot bỏ qua,
+            # không đốt quota cho job mồ côi và không giữ queue phình ảo.
+            job["_dead"] = True
             return False, {}, "image pool: timeout (nhà máy đang chuẩn bị account?) - thử lại lượt sau"
         return job.get("_result", (False, {}, "no result"))
 
@@ -1400,6 +1603,15 @@ class ImagePoolBrowser:
             "quota_blocked": self.quota_blocked(),
             "quota_block_remaining_s": max(0, round(self._quota_blocked_until - time.time())),
             "consec_recaptcha": self._consec_recaptcha,
+            # ── nạp lại nóng + cảnh báo kho lệch (07/08/2026) ──────────────
+            # `kho_san_sang` là số tài khoản trong KHO thật sự có phiên dùng
+            # được; `logged_in` là số đã vào ca được. Hôm 07/08 hai con số này
+            # là 96 và 8 mà KHÔNG ở đâu ghi ra, nên không ai thấy. Nay chúng
+            # nằm cạnh nhau, kèm sẵn câu cảnh báo.
+            "kho_san_sang": self.n_kho_san_sang,
+            "roster_canh_bao": self.canh_bao_lech(),
+            "reload_count": self.reload_count,
+            "last_reload_ts": round(self.last_reload_ts),
         }
 
 
@@ -1436,6 +1648,17 @@ class _Handler(BaseHTTPRequestHandler):
             self._send(400, {"error": "bad json"}); return
         if self.path == "/shutdown":
             self._send(200, {"ok": True}); threading.Thread(target=_FACTORY.stop, daemon=True).start(); return
+        if self.path == "/reload_accounts":
+            # NẠP LẠI NÓNG — đường thay thế cho "khởi động lại để đổi account".
+            # Khởi động lại giết mọi job đang chạy dở của khách; đường này KHÔNG
+            # đụng tài khoản đang bận (xem `ImagePoolBrowser.reload_accounts`).
+            try:
+                self._send(200, _FACTORY.reload_accounts())
+            except Exception as e:
+                # Nạp lại hỏng KHÔNG được phép làm sập nhà máy đang phục vụ.
+                _FACTORY.log(f"nạp lại nóng LỖI: {type(e).__name__}: {e}")
+                self._send(200, {"ok": False, "loi": f"{type(e).__name__}: {e}"})
+            return
         if self.path == "/generate_image":
             if not data.get("out_path"):
                 self._send(400, {"error": "thieu out_path"}); return
