@@ -72,14 +72,14 @@ def test_hai_nhanh_shopapi_deu_di_duong_http(Engine, backend, lui_ve_cli):
 def test_dia_chi_va_model_mac_dinh_dung(Engine):
     eng = Engine({"claude_cli_backend": "api_shop"})
     assert eng.api_base_url == "https://api.shopapi.vn/v1"
-    # `fable` = model viet lach sang tao cua shopapi. Viec o day la VIET PROMPT
-    # ta canh, nen mac dinh phai la no chu khong phai model code/suy luan.
-    assert eng.api_model == "claude-fable-5"
-
-
-def test_doi_duoc_model_khi_muon_re_hon(Engine):
-    eng = Engine({"claude_cli_backend": "api_shop", "shopapi_model": "claude-sonnet-5"})
+    # Chu du an chot `claude-sonnet-5`. Do that cung ung ho: `claude-fable-5`
+    # dang tra 503 engine_unavailable, con sonnet-5 chay on va re nhat.
     assert eng.api_model == "claude-sonnet-5"
+
+
+def test_doi_duoc_model_khi_muon_khac(Engine):
+    eng = Engine({"claude_cli_backend": "api_shop", "shopapi_model": "claude-opus-5"})
+    assert eng.api_model == "claude-opus-5"
 
 
 def test_backend_la_rac_thi_ve_cli_chu_khong_no(Engine):
@@ -177,3 +177,185 @@ def test_tra_ve_rong_thi_bao_hong_chu_khong_nuot(Engine, monkeypatch):
     eng = Engine({"claude_cli_backend": "api_shop", "shopapi_api_key": "sk_live_gia"})
     with pytest.raises(RuntimeError, match="empty content"):
         eng._run_via_api("bat ky")
+
+
+# ── Chính sách thử lại ───────────────────────────────────────────────────────
+#
+# ĐO THẬT 07/08/2026: 20 lượt gọi ở 5 luồng song song vào api.shopapi.vn ->
+# 17 lượt hỏng vì `502 service_unavailable` / `503 engine_unavailable`. Máy chủ
+# tự nói "Vui lòng thử lại sau ít phút" trong khi bản cũ chờ 1s rồi 2s rồi bỏ.
+# Pipeline Excel chạy `chunk_parallel` luồng nên nó CHẮC CHẮN chạm mức đó.
+
+
+class _DemResp:
+    """Đếm số lần bị gọi, luôn trả cùng một mã."""
+
+    def __init__(self, ma, hop=None, retry_after=None):
+        self.status_code = ma
+        self.text = "loi gia"
+        self.headers = {"Retry-After": str(retry_after)} if retry_after else {}
+        self._hop = hop if hop is not None else {}
+        self._hop["n"] = self._hop.get("n", 0)
+
+    def iter_lines(self):
+        return iter(())
+
+    def close(self):
+        pass
+
+
+def _dem_lan_goi(monkeypatch, ma, retry_after=None):
+    """Trả `hop` có `hop['n']` = số lần `requests.post` thực sự bị gọi."""
+    import requests as _rq, time as _t
+    hop = {"n": 0, "ngu": []}
+
+    def post(*a, **k):
+        hop["n"] += 1
+        return _DemResp(ma, retry_after=retry_after)
+
+    monkeypatch.setattr(_rq, "post", post)
+    monkeypatch.setattr(_t, "sleep", lambda s: hop["ngu"].append(s))
+    return hop
+
+
+@pytest.mark.parametrize("ma", sorted({400, 401, 402, 403, 404, 409, 422}))
+def test_loi_do_minh_gui_sai_thi_hong_NGAY_khong_thu_lai(Engine, monkeypatch, ma):
+    """Gửi lại y hệt thì ra y hệt. Thử lại chỉ tổ chậm — và với 402 (hết tiền)
+    còn làm người đọc log tưởng bị trừ tiền nhiều lần."""
+    hop = _dem_lan_goi(monkeypatch, ma)
+    eng = Engine({"claude_cli_backend": "api_shop", "shopapi_api_key": "sk_live_gia",
+                  "shopapi_model_chain": []})
+
+    with pytest.raises(RuntimeError, match=f"HTTP {ma}"):
+        eng._run_via_api("bat ky")
+    assert hop["n"] == 1, f"HTTP {ma} KHONG duoc thu lai, nhung da goi {hop['n']} lan"
+    assert hop["ngu"] == [], "khong duoc cho mot giay nao cho loi khong the cuu"
+
+
+@pytest.mark.parametrize("ma", [429, 500, 502, 503])
+def test_loi_nghen_thi_thu_lai_du_so_lan(Engine, monkeypatch, ma):
+    """502/503 là thứ đã làm hỏng 17/20 lượt — phải kiên nhẫn, không bỏ sớm."""
+    hop = _dem_lan_goi(monkeypatch, ma)
+    eng = Engine({"claude_cli_backend": "api_shop", "shopapi_api_key": "sk_live_gia",
+                  "claude_cli_api_retries": 5, "shopapi_model_chain": []})
+
+    with pytest.raises(RuntimeError, match=f"HTTP {ma}"):
+        eng._run_via_api("bat ky")
+    assert hop["n"] == 5
+
+
+def test_quang_cho_dai_dan_va_co_tran(Engine, monkeypatch):
+    hop = _dem_lan_goi(monkeypatch, 503)
+    eng = Engine({"claude_cli_backend": "api_shop", "shopapi_api_key": "sk_live_gia",
+                  "claude_cli_api_retries": 8, "shopapi_model_chain": []})
+
+    with pytest.raises(RuntimeError):
+        eng._run_via_api("bat ky")
+
+    # So phan NGUYEN: moi quang cho co pha ngau nhien ~1s chong dong bo, nen hai
+    # quang lien tiep da cham tran co the lech nhau chut - do khong phai loi.
+    cho = [int(s) for s in hop["ngu"]]
+    assert cho == sorted(cho), f"quang cho phai DAI DAN: {hop['ngu']}"
+    assert cho[0] >= 2, "nhip dau phai >=2s; 1s la qua ngan cho 'thu lai sau it phut'"
+    assert max(cho) <= 46, "phai co tran, khong duoc cho vo tan"
+    assert sum(cho) >= 60, "tong kien nhan phai qua duoc mot nhip nghen"
+
+
+def test_retry_after_cua_may_chu_thang_con_so_tu_tinh(Engine, monkeypatch):
+    """Máy chủ biết rõ hơn ta bao giờ nó rảnh."""
+    hop = _dem_lan_goi(monkeypatch, 503, retry_after=30)
+    eng = Engine({"claude_cli_backend": "api_shop", "shopapi_api_key": "sk_live_gia",
+                  "claude_cli_api_retries": 3, "shopapi_model_chain": []})
+
+    with pytest.raises(RuntimeError):
+        eng._run_via_api("bat ky")
+    assert all(s >= 30 for s in hop["ngu"]), f"phai ton trong Retry-After: {hop['ngu']}"
+
+
+def test_retry_after_rac_thi_bo_qua_chu_khong_no(Engine, monkeypatch):
+    hop = _dem_lan_goi(monkeypatch, 503, retry_after="lat nua nhe")
+    eng = Engine({"claude_cli_backend": "api_shop", "shopapi_api_key": "sk_live_gia",
+                  "claude_cli_api_retries": 2, "shopapi_model_chain": []})
+
+    with pytest.raises(RuntimeError):
+        eng._run_via_api("bat ky")
+    assert hop["n"] == 2
+
+
+def test_nghen_roi_hoi_lai_duoc_thi_van_tra_ket_qua(Engine, monkeypatch):
+    """503 một nhịp rồi máy chủ tỉnh -> phải ra kết quả, KHÔNG được bỏ cuộc."""
+    import requests as _rq, time as _t
+    hop = {"n": 0}
+
+    def post(*a, **k):
+        hop["n"] += 1
+        if hop["n"] == 1:
+            return _DemResp(503)
+        return _RespGia(201, ['data: {"choices":[{"delta":{"content":"xong"}}]}',
+                              "data: [DONE]"])
+
+    monkeypatch.setattr(_rq, "post", post)
+    monkeypatch.setattr(_t, "sleep", lambda *_: None)
+
+    eng = Engine({"claude_cli_backend": "api_shop", "shopapi_api_key": "sk_live_gia"})
+    assert eng._run_via_api("bat ky") == "xong"
+    assert hop["n"] == 2
+
+
+# ── Chuỗi model dự phòng ─────────────────────────────────────────────────────
+#
+# ĐO THẬT 07/08/2026 — gọi `claude-sonnet-5` và `claude-opus-5` CÙNG LÚC, 12 vòng:
+#     ít nhất một model sống : 12/12
+#     cả hai cùng chết       : 0/12
+# Các model nằm sau cụm xử lý khác nhau nên nghẽn ĐỘC LẬP. Bám chết một model là
+# tự nhận tỉ lệ hỏng của riêng nó; đổi model thì gần như luôn có đường đi.
+
+
+def test_model_chinh_nghen_thi_doi_sang_model_du_phong(Engine, monkeypatch):
+    import requests as _rq, time as _t
+    da_goi = []
+
+    def post(url, headers=None, json=None, **k):
+        m = (json or {}).get("model")
+        da_goi.append(m)
+        if m == "claude-sonnet-5":
+            return _DemResp(503)
+        return _RespGia(200, ['data: {"choices":[{"delta":{"content":"cuu duoc"}}]}',
+                              "data: [DONE]"])
+
+    monkeypatch.setattr(_rq, "post", post)
+    monkeypatch.setattr(_t, "sleep", lambda *_: None)
+
+    eng = Engine({"claude_cli_backend": "api_shop", "shopapi_api_key": "sk_live_gia",
+                  "claude_cli_api_retries": 2})
+    assert eng._run_via_api("bat ky") == "cuu duoc"
+    assert "claude-opus-5" in da_goi, f"phai da thu model du phong: {da_goi}"
+
+
+def test_loi_khong_cuu_duoc_thi_KHONG_doi_model(Engine, monkeypatch):
+    """Sai khoá / hết tiền / prompt hỏng: đổi model cũng ra y hệt, chỉ tốn thời gian."""
+    hop = _dem_lan_goi(monkeypatch, 401)
+    eng = Engine({"claude_cli_backend": "api_shop", "shopapi_api_key": "sk_live_gia"})
+
+    with pytest.raises(RuntimeError, match="HTTP 401"):
+        eng._run_via_api("bat ky")
+    assert hop["n"] == 1, f"401 phai dung ngay, khong doi model: {hop['n']} lan goi"
+
+
+def test_chuoi_model_bo_trung_va_giu_thu_tu(Engine):
+    eng = Engine({"claude_cli_backend": "api_shop",
+                  "shopapi_model": "claude-opus-5"})
+    ds = eng._chuoi_model()
+    assert ds[0] == "claude-opus-5", "model chu du an chon phai di TRUOC"
+    assert len(ds) == len(set(ds)), f"khong duoc lap model: {ds}"
+
+
+def test_tat_duoc_chuoi_model(Engine):
+    eng = Engine({"claude_cli_backend": "api_shop", "shopapi_model_chain": []})
+    assert eng._chuoi_model() == ["claude-sonnet-5"]
+
+
+def test_nhanh_khac_khong_bi_gan_chuoi_model_cua_shopapi(Engine):
+    """VOV/DeepSeek đã có cơ chế riêng — không được lén đổi hành vi của chúng."""
+    eng = Engine({"claude_cli_backend": "api_ds"})
+    assert eng._chuoi_model() == [eng.api_model]

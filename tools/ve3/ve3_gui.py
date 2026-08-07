@@ -1755,7 +1755,7 @@ class SettingsPage(ctk.CTkScrollableFrame):
         self.claude_backend_options = {
             # shopapi dung CHUNG khoa sk_live_ voi anh/video -> khong khoa rieng,
             # khong claude.exe, khong dinh toi OAuth cua extension VS Code.
-            "API shopapi (fable-5)": "api_shop",
+            "API shopapi (sonnet-5)": "api_shop",
             "API shopapi -> CLI": "api_shop_cli",
             "CLI (claude.exe)": "cli",
             "API (VOV)": "api",
@@ -3710,8 +3710,11 @@ Write-Output $kill.Count
         cfg.setdefault("deepseek_parallel_slots", 4)
         cfg.setdefault("vov_direct_parallel_slots", 2)
         cfg.setdefault("project_root", "../../PROJECTS")
-        # Option 2 (Claude Code CLI) engine — only used when excel_engine == "claude_cli".
-        cfg.setdefault("excel_engine", "api")
+        # ⚠ "claude_cli" là tên LỊCH SỬ của engine một-lần-gọi, KHÔNG có nghĩa là
+        # phải chạy claude.exe. Đường vận chuyển do `claude_cli_backend` quyết
+        # định, và mặc định của bản này là `api_shop` (HTTP tới api.shopapi.vn).
+        # Nên cặp mặc định dưới đây = "Excel đi API shopapi, không mở claude.exe".
+        cfg.setdefault("excel_engine", "claude_cli")
         cfg.setdefault("claude_cli_model", "claude-sonnet-4-6")
         cfg.setdefault("claude_cli_min_scene", 3)
         cfg.setdefault("claude_cli_max_scene", 8)
@@ -3721,9 +3724,10 @@ Write-Output $kill.Count
         # per-chunk retry, so a long video finishes ~3x faster without orphaning.
         cfg.setdefault("claude_cli_chunk_parallel", 3)
         cfg.setdefault("claude_cli_chunk_retries", 2)
-        # Claude CLI transport: "cli" (claude.exe) or "api" (VOV, no CLI). The api
-        # backend reuses vov_direct_base_url/api_key already set above.
-        cfg.setdefault("claude_cli_backend", "cli")
+        # Đường vận chuyển của engine Excel. MẶC ĐỊNH `api_shop` = HTTP thẳng tới
+        # api.shopapi.vn bằng CÙNG khoá `sk_live_` đang trả tiền ảnh/video.
+        # Không mở claude.exe, nên cũng không đụng OAuth của extension VS Code.
+        cfg.setdefault("claude_cli_backend", "api_shop")
         cfg.setdefault("claude_cli_api_model", "claude-sonnet-4-6")
         cfg.setdefault("claude_cli_max_parallel", 5)
         # DeepSeek API backend (api_ds / api_ds_cli) — deepseek-v4-pro, highest model.

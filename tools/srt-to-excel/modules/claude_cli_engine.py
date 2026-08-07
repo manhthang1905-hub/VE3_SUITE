@@ -70,6 +70,43 @@ PREFIX_TOPIC_MAP = {
 }
 
 
+#: Mã HTTP mà GỬI LẠI Y HỆT chắc chắn ra kết quả y hệt — hỏng ngay, đừng chờ.
+#:
+#: Theo đúng bảng lỗi của shopapi: 400 sai tham số · 401 khoá hỏng · 402 hết
+#: tiền · 403 nội dung bị từ chối / sai quyền · 404 sai model · 409 xung đột ·
+#: 422 tham số không hỗ trợ. Cột "thử lại được?" của cả bảy đều là KHÔNG.
+#:
+#: Mọi mã còn lại (429, 500, 502, 503) là nghẽn/sự cố tạm — chờ rồi gửi lại.
+_MA_KHONG_THU_LAI = frozenset({400, 401, 402, 403, 404, 409, 422})
+
+#: Trần một quãng chờ giữa hai lần thử (giây). Đủ dài để qua một nhịp nghẽn,
+#: đủ ngắn để một khúc Excel không treo vô tận khi máy chủ chết hẳn.
+_CHO_TOI_DA = 45.0
+
+
+class _LoiKhongCuuDuoc(RuntimeError):
+    """Lỗi mà gửi lại cũng vô ích — phải thoát vòng thử lại NGAY.
+
+    ⚠ Phải là một lớp RIÊNG, đừng thay bằng `raise RuntimeError` trong thân
+    vòng: thân đó nằm trong `try/except Exception` để bắt lỗi mạng, nên một
+    `RuntimeError` thường sẽ bị chính khối đó NUỐT rồi thử lại tiếp — đúng cái
+    nó vừa được dựng lên để tránh. Đã dính đúng một lần lúc viết.
+    """
+
+
+def _doc_retry_after(resp) -> "Optional[float]":
+    """`Retry-After` (giây) máy chủ gửi kèm, hoặc `None`. Rác thì bỏ qua.
+
+    Máy chủ biết rõ hơn ta bao giờ nó rảnh, nên con số này thắng quãng chờ tự
+    tính. Chỉ nhận dạng SỐ GIÂY (dạng HTTP-date rất hiếm, không đáng đỡ).
+    """
+    try:
+        v = (resp.headers or {}).get("Retry-After")
+        return float(str(v).strip()) if v is not None else None
+    except (TypeError, ValueError, AttributeError):
+        return None
+
+
 def _normalize_topic(value: str) -> str:
     import unicodedata
     text = str(value or "").strip().lower()
@@ -167,11 +204,12 @@ class ClaudeCliEngine:
             self.api_key = str(
                 self.config.get("shopapi_api_key") or self._doc_khoa_shopapi() or ""
             ).strip()
-            # `claude-fable-5` = model "sáng tạo, viết lách cao cấp" của shopapi.
-            # Chọn nó vì việc ở đây là VIẾT PROMPT tả cảnh — đó là viết lách sáng
-            # tạo, không phải suy luận hay code. Muốn rẻ hơn thì `claude-sonnet-5`.
+            # `claude-sonnet-5` — chủ dự án chốt, và đo thật cũng ủng hộ:
+            # `claude-fable-5` (model viết lách) đang trả 503 engine_unavailable,
+            # còn sonnet-5 chạy ổn và rẻ nhất trong ba con Claude ở đây
+            # (840₫/4.200₫ mỗi triệu token). Đổi bằng `shopapi_model`.
             self.api_model = str(
-                self.config.get("shopapi_model") or "claude-fable-5"
+                self.config.get("shopapi_model") or "claude-sonnet-5"
             ).strip()
         elif self.backend in ("api_ds", "api_ds_cli"):
             self.api_base_url = str(
@@ -198,6 +236,14 @@ class ClaudeCliEngine:
                 self.config.get("claude_cli_api_model")
                 or self.model or "claude-sonnet-4-6"
             ).strip()
+        # Số lần thử một lời gọi API. Mặc định 6: đo thật ngày 07/08/2026 cho
+        # thấy 5 luồng song song vào shopapi làm 17/20 lượt ăn 502/503, và máy
+        # chủ tự nói "thử lại sau ít phút". 6 lần với quãng lùi tới 45s cho ~2
+        # phút kiên nhẫn — đủ qua một nhịp nghẽn mà không treo cả mẻ.
+        try:
+            self.api_retries = max(1, int(self.config.get("claude_cli_api_retries", 6) or 6))
+        except Exception:
+            self.api_retries = 6
         try:
             self.api_max_tokens = int(self.config.get("claude_cli_api_max_tokens", 16000) or 16000)
         except Exception:
@@ -703,6 +749,58 @@ JSON RULES:
         return self._run_via_cli(prompt, cwd)
 
     def _run_via_api(self, prompt: str) -> str:
+        """Gọi API, và khi một model nghẽn thì ĐỔI SANG MODEL KHÁC.
+
+        ĐO THẬT 07/08/2026 — VÌ SAO PHẢI CÓ CHUỖI MODEL
+        ------------------------------------------------
+        Gọi `claude-sonnet-5` và `claude-opus-5` CÙNG LÚC, 12 vòng:
+
+            ít nhất một model sống : 12/12
+            cả hai cùng chết       : 0/12
+
+        Các model nằm sau những cụm xử lý khác nhau nên chúng **nghẽn độc lập**:
+        vòng 1-3 sonnet chết mà opus sống, vòng 12 thì ngược lại. Bám chết một
+        model là tự nhận tỉ lệ hỏng của riêng nó (đo được ~15% lúc nghẽn); đổi
+        model là gần như luôn có đường đi.
+
+        Riêng chờ-rồi-thử-lại đã kéo 3/20 lên 18/20. Chuỗi model là lớp thứ hai,
+        cho những cửa sổ 503 dài hơn sức kiên nhẫn của một model.
+        """
+        cuoi = None
+        for i, model in enumerate(self._chuoi_model()):
+            try:
+                return self._goi_mot_model(prompt, model)
+            except _LoiKhongCuuDuoc:
+                # Sai khoá / hết tiền / prompt hỏng: đổi model cũng y hệt.
+                raise
+            except Exception as e:
+                cuoi = e
+                if i + 1 < len(self._chuoi_model()):
+                    self._log(f"  [WARN] model {model} khong dung duoc ({str(e)[:120]}) "
+                              f"-> doi sang {self._chuoi_model()[i + 1]}", "WARN")
+        raise cuoi if cuoi else RuntimeError("API backend that bai: khong co model nao")
+
+    def _chuoi_model(self) -> "list":
+        """Model chính rồi tới các model dự phòng, đã bỏ trùng và giữ thứ tự.
+
+        Chỉ shopapi mới có dự phòng sẵn: VOV/DeepSeek đã có cơ chế riêng, thêm
+        vào đây là đổi hành vi của nhánh đang chạy tốt.
+        """
+        ds = [self.api_model]
+        if self.backend in ("api_shop", "api_shop_cli"):
+            them = self.config.get("shopapi_model_chain")
+            if them is None:
+                # `opus-5` là dự phòng: cụm khác `sonnet-5` nên hiếm khi cùng
+                # chết, và vẫn thừa sức cho việc viết prompt tả cảnh.
+                them = ["claude-sonnet-5", "claude-opus-5"]
+            ds.extend(str(m).strip() for m in them if str(m).strip())
+        ra = []
+        for m in ds:
+            if m and m not in ra:
+                ra.append(m)
+        return ra
+
+    def _goi_mot_model(self, prompt: str, model: str) -> str:
         """API transport: POST the same prompt to an OpenAI-compatible endpoint.
         Uses STREAMING so a slow thinking-model behind a proxy with a response-time
         cap does not trip an HTTP 524 — tokens flow incrementally. Only delta.content
@@ -716,15 +814,16 @@ JSON RULES:
         url = f"{self.api_base_url}/chat/completions"
         headers = {"Authorization": f"Bearer {self.api_key}", "Content-Type": "application/json"}
         data = {
-            "model": self.api_model,
+            "model": model,
             "messages": [{"role": "user", "content": prompt}],
             "max_tokens": self.api_max_tokens,
             "temperature": 0.6,
             "stream": True,
         }
-        self._log(f"  -> Calling API ({self.api_model} @ {self.api_base_url}, stream) ...")
-        attempts = 3
+        self._log(f"  -> Calling API ({model} @ {self.api_base_url}, stream) ...")
+        attempts = self.api_retries
         last_error = ""
+        cho_ep = None            # `Retry-After` máy chủ vừa yêu cầu (giây)
         for attempt in range(attempts):
             resp = None
             try:
@@ -740,6 +839,13 @@ JSON RULES:
                 # JSON trông như thành công.
                 if not (200 <= resp.status_code < 300):
                     last_error = f"HTTP {resp.status_code} {resp.text[:160]}"
+                    # Lỗi do MÌNH gửi sai (prompt quá dài, khoá hỏng, hết tiền,
+                    # model không tồn tại) thì gửi lại y hệt cũng ra y hệt. Thử
+                    # lại chỉ tổ chậm thêm và, với 402, dễ hiểu nhầm là hết tiền
+                    # nhiều lần. Hỏng NGAY để lùi về CLI cho nhanh.
+                    if resp.status_code in _MA_KHONG_THU_LAI:
+                        raise _LoiKhongCuuDuoc(f"API backend that bai: {last_error}")
+                    cho_ep = _doc_retry_after(resp)
                 else:
                     parts = []
                     # Decode each SSE line as UTF-8 ourselves — requests' decode_unicode
@@ -767,6 +873,15 @@ JSON RULES:
                         self._log(f"  -> API done (stream, ~{len(content)} chars)")
                         return content
                     last_error = "empty content"
+            except _LoiKhongCuuDuoc:
+                # Phải đứng TRƯỚC `except Exception` — nếu không nó bị nuốt và
+                # vòng thử lại chạy tiếp đúng cái nó cần tránh.
+                if resp is not None:
+                    try:
+                        resp.close()
+                    except Exception:
+                        pass
+                raise
             except Exception as e:
                 last_error = str(e)
             finally:
@@ -776,9 +891,24 @@ JSON RULES:
                     except Exception:
                         pass
             if attempt < attempts - 1:
-                wait = min(20, 2 ** attempt) + random.uniform(0.2, 1.0)
+                # ⚠ QUÃNG CHỜ PHẢI ĐỦ DÀI — ĐO THẬT 07/08/2026.
+                #
+                # Chạy 20 lượt ở 5 luồng song song vào api.shopapi.vn: 17 lượt
+                # hỏng vì `502 service_unavailable` / `503 engine_unavailable`.
+                # Chính máy chủ nói "Vui lòng thử lại sau ít phút", trong khi bản
+                # cũ chờ `2**attempt` tối đa hai nhịp = 1s rồi 2s, xong bỏ cuộc.
+                # Chờ vài giây cho câu trả lời "vài phút nữa" thì gần như chắc
+                # chắn trượt, và pipeline Excel chạy `chunk_parallel` luồng nên
+                # nó CHẮC CHẮN chạm mức song song đó.
+                #
+                # Nay: lùi theo cấp số nhân tới trần `_CHO_TOI_DA`, và `Retry-After`
+                # của máy chủ THẮNG con số tự tính — nó biết rõ hơn ta.
+                wait = min(_CHO_TOI_DA, 2 ** (attempt + 1)) + random.uniform(0.2, 1.0)
+                if cho_ep is not None:
+                    wait = max(wait, min(cho_ep, _CHO_TOI_DA))
                 self._log(f"  [WARN] API fail ({last_error}); retry {attempt + 1}/{attempts} sau {wait:.1f}s", "WARN")
                 time.sleep(wait)
+                cho_ep = None
         raise RuntimeError(f"API backend that bai: {last_error}")
 
     def _run_via_cli(self, prompt: str, cwd: Path) -> str:
