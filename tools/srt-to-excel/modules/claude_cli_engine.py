@@ -84,6 +84,17 @@ _MA_KHONG_THU_LAI = frozenset({400, 401, 402, 403, 404, 409, 422})
 _CHO_TOI_DA = 45.0
 
 
+class _LoiTamThoi(RuntimeError):
+    """Nghẽn / lỗi mạng — thử lại (hoặc đổi model) thì có cửa.
+
+    `cho_ep` là `Retry-After` máy chủ gửi kèm, hoặc `None`.
+    """
+
+    def __init__(self, message, cho_ep=None):
+        super().__init__(message)
+        self.cho_ep = cho_ep
+
+
 class _LoiKhongCuuDuoc(RuntimeError):
     """Lỗi mà gửi lại cũng vô ích — phải thoát vòng thử lại NGAY.
 
@@ -749,36 +760,69 @@ JSON RULES:
         return self._run_via_cli(prompt, cwd)
 
     def _run_via_api(self, prompt: str) -> str:
-        """Gọi API, và khi một model nghẽn thì ĐỔI SANG MODEL KHÁC.
+        """Gọi API. Model nghẽn thì ĐỔI MODEL NGAY, chờ lâu chỉ là phương án cuối.
 
-        ĐO THẬT 07/08/2026 — VÌ SAO PHẢI CÓ CHUỖI MODEL
-        ------------------------------------------------
-        Gọi `claude-sonnet-5` và `claude-opus-5` CÙNG LÚC, 12 vòng:
+        THỨ TỰ LEO THANG — VÌ SAO ĐỔI MODEL PHẢI ĐI TRƯỚC CHỜ
+        ------------------------------------------------------
+        Đo hai lần, ra hai kết luận ghép lại thành thứ tự dưới đây.
 
-            ít nhất một model sống : 12/12
-            cả hai cùng chết       : 0/12
+        (1) Gọi `claude-sonnet-5` và `claude-opus-5` CÙNG LÚC, 12 vòng:
 
-        Các model nằm sau những cụm xử lý khác nhau nên chúng **nghẽn độc lập**:
-        vòng 1-3 sonnet chết mà opus sống, vòng 12 thì ngược lại. Bám chết một
-        model là tự nhận tỉ lệ hỏng của riêng nó (đo được ~15% lúc nghẽn); đổi
-        model là gần như luôn có đường đi.
+                ít nhất một model sống : 12/12
+                cả hai cùng chết       : 0/12
 
-        Riêng chờ-rồi-thử-lại đã kéo 3/20 lên 18/20. Chuỗi model là lớp thứ hai,
-        cho những cửa sổ 503 dài hơn sức kiên nhẫn của một model.
+            Các model nằm sau những cụm xử lý khác nhau nên nghẽn ĐỘC LẬP.
+
+        (2) `engine_unavailable` nghĩa là ĐÚNG CỤM ĐÓ đang chết. Ngồi chờ chính
+            nó hồi là chờ thứ khó tới nhất, trong khi cụm bên cạnh đang rảnh.
+
+        Bản đầu làm ngược: vắt kiệt 6 lần thử trên MỘT model — cộng quãng chờ là
+        2+4+8+16+32 = 62 giây ngủ — RỒI mới đổi model. Log của một lượt chạy
+        thật cho thấy đúng cái giá đó: một khúc mất ~110 giây mà gần hết là nằm
+        chờ, dù model kia đang trả lời bình thường.
+
+        Nay MỖI VÒNG thử LẦN LƯỢT HẾT các model rồi mới ngủ. Sonnet 503 thì
+        Opus được gọi ngay giây sau, không phải một phút sau. Chỉ khi CẢ HAI
+        cùng nghẽn — trường hợp 0/12 ở trên — mới thật sự đáng nằm chờ.
         """
-        cuoi = None
-        for i, model in enumerate(self._chuoi_model()):
-            try:
-                return self._goi_mot_model(prompt, model)
-            except _LoiKhongCuuDuoc:
-                # Sai khoá / hết tiền / prompt hỏng: đổi model cũng y hệt.
-                raise
-            except Exception as e:
-                cuoi = e
-                if i + 1 < len(self._chuoi_model()):
-                    self._log(f"  [WARN] model {model} khong dung duoc ({str(e)[:120]}) "
-                              f"-> doi sang {self._chuoi_model()[i + 1]}", "WARN")
-        raise cuoi if cuoi else RuntimeError("API backend that bai: khong co model nao")
+        import random
+
+        models = self._chuoi_model()
+        cuoi = ""
+        cho_ep = None            # `Retry-After` máy chủ vừa yêu cầu (giây)
+
+        for vong in range(self.api_retries):
+            for model in models:
+                try:
+                    return self._goi_mot_lan(prompt, model)
+                except _LoiKhongCuuDuoc:
+                    # Sai khoá / hết tiền / prompt hỏng: đổi model hay chờ thêm
+                    # đều ra y hệt. Ném thẳng để còn lùi về CLI cho nhanh.
+                    raise
+                except _LoiTamThoi as e:
+                    cuoi = str(e)
+                    cho_ep = e.cho_ep if e.cho_ep is not None else cho_ep
+                    if len(models) > 1:
+                        self._log(f"  [WARN] {model} nghen ({cuoi[:110]}) -> thu model ke tiep",
+                                  "WARN")
+
+            if vong < self.api_retries - 1:
+                # Tới đây nghĩa là CẢ chuỗi model đều nghẽn trong vòng này.
+                #
+                # ⚠ QUÃNG CHỜ PHẢI ĐỦ DÀI. Máy chủ nói đúng chữ "Vui lòng thử
+                # lại sau ít phút", trong khi bản đầu chờ 1s rồi 2s rồi bỏ cuộc
+                # — đo thật: 20 lượt ở 5 luồng song song thì 17 lượt hỏng.
+                # `Retry-After` của máy chủ THẮNG con số tự tính: nó biết rõ hơn.
+                wait = min(_CHO_TOI_DA, 2 ** (vong + 1)) + random.uniform(0.2, 1.0)
+                if cho_ep is not None:
+                    wait = max(wait, min(cho_ep, _CHO_TOI_DA))
+                self._log(f"  [WARN] ca {len(models)} model deu nghen ({cuoi[:110]}); "
+                          f"cho {wait:.1f}s roi thu lai (vong {vong + 1}/{self.api_retries})",
+                          "WARN")
+                time.sleep(wait)
+                cho_ep = None
+
+        raise RuntimeError(f"API backend that bai: {cuoi}")
 
     def _chuoi_model(self) -> "list":
         """Model chính rồi tới các model dự phòng, đã bỏ trùng và giữ thứ tự.
@@ -800,13 +844,21 @@ JSON RULES:
                 ra.append(m)
         return ra
 
-    def _goi_mot_model(self, prompt: str, model: str) -> str:
-        """API transport: POST the same prompt to an OpenAI-compatible endpoint.
-        Uses STREAMING so a slow thinking-model behind a proxy with a response-time
-        cap does not trip an HTTP 524 — tokens flow incrementally. Only delta.content
-        is accumulated (reasoning_content is ignored), so the returned text is the
-        clean answer the callers parse as JSON."""
-        import random
+    def _goi_mot_lan(self, prompt: str, model: str) -> str:
+        """ĐÚNG MỘT lần gọi HTTP. Không tự thử lại, không tự ngủ.
+
+        Chờ và đổi model là việc của :meth:`_run_via_api` — gom hai thứ đó vào
+        đây thì không cách nào xen kẽ model giữa các lần chờ, mà xen kẽ chính là
+        điều làm nên khác biệt (xem chú thích dài ở trên).
+
+        Dùng STREAMING để một model nghĩ lâu sau proxy có trần thời gian không
+        bị cắt ngang bằng 524 — token chảy ra dần. Chỉ gom `delta.content`
+        (`reasoning_content` bỏ qua), nên chuỗi trả về là câu trả lời sạch để
+        nơi gọi phân tích thành JSON.
+
+        Ném :class:`_LoiKhongCuuDuoc` khi gửi lại cũng vô ích, :class:`_LoiTamThoi`
+        khi nghẽn/lỗi mạng.
+        """
         import requests
 
         if not (self.api_base_url and self.api_key):
@@ -821,95 +873,71 @@ JSON RULES:
             "stream": True,
         }
         self._log(f"  -> Calling API ({model} @ {self.api_base_url}, stream) ...")
-        attempts = self.api_retries
-        last_error = ""
-        cho_ep = None            # `Retry-After` máy chủ vừa yêu cầu (giây)
-        for attempt in range(attempts):
-            resp = None
+
+        resp = None
+        try:
             try:
                 resp = requests.post(url, headers=headers, json=data,
                                      timeout=self.timeout_seconds, stream=True)
-                # Nhận MỌI mã 2xx, đừng bắt đúng 200.
-                #
-                # ĐÃ DÍNH THẬT: `api.shopapi.vn` trả **201** cho luồng SSE của
-                # `/v1/chat/completions`. Thân trả về hoàn toàn hợp lệ và token
-                # chảy ra bình thường — chỉ mỗi con số là khác, mà bản cũ so
-                # `!= 200` nên vứt sạch rồi thử lại ba lần cho tới khi hỏng hẳn.
-                # Hỏng kiểu này rất khó đoán: log chỉ kêu "API fail" kèm một mẩu
-                # JSON trông như thành công.
-                if not (200 <= resp.status_code < 300):
-                    last_error = f"HTTP {resp.status_code} {resp.text[:160]}"
-                    # Lỗi do MÌNH gửi sai (prompt quá dài, khoá hỏng, hết tiền,
-                    # model không tồn tại) thì gửi lại y hệt cũng ra y hệt. Thử
-                    # lại chỉ tổ chậm thêm và, với 402, dễ hiểu nhầm là hết tiền
-                    # nhiều lần. Hỏng NGAY để lùi về CLI cho nhanh.
-                    if resp.status_code in _MA_KHONG_THU_LAI:
-                        raise _LoiKhongCuuDuoc(f"API backend that bai: {last_error}")
-                    cho_ep = _doc_retry_after(resp)
-                else:
-                    parts = []
-                    # Decode each SSE line as UTF-8 ourselves — requests' decode_unicode
-                    # defaults to latin-1 for text/event-stream (no charset header),
-                    # which mojibake's curly quotes, accents and CJK (Korean/Japanese).
-                    for raw_line in resp.iter_lines():
-                        if not raw_line:
-                            continue
-                        line = raw_line.decode("utf-8", errors="replace") if isinstance(raw_line, bytes) else raw_line
-                        if not line.startswith("data:"):
-                            continue
-                        payload = line[5:].strip()
-                        if payload == "[DONE]":
-                            break
-                        try:
-                            obj = json.loads(payload)
-                        except Exception:
-                            continue
-                        for ch in (obj.get("choices") or []):
-                            piece = (ch.get("delta") or {}).get("content")
-                            if piece:
-                                parts.append(piece)
-                    content = ("".join(parts)).strip()
-                    if content:
-                        self._log(f"  -> API done (stream, ~{len(content)} chars)")
-                        return content
-                    last_error = "empty content"
-            except _LoiKhongCuuDuoc:
-                # Phải đứng TRƯỚC `except Exception` — nếu không nó bị nuốt và
-                # vòng thử lại chạy tiếp đúng cái nó cần tránh.
-                if resp is not None:
-                    try:
-                        resp.close()
-                    except Exception:
-                        pass
-                raise
             except Exception as e:
-                last_error = str(e)
-            finally:
-                if resp is not None:
+                raise _LoiTamThoi(str(e))
+
+            # Nhận MỌI mã 2xx, đừng bắt đúng 200.
+            #
+            # ĐÃ DÍNH THẬT: `api.shopapi.vn` trả **201** cho luồng SSE của
+            # `/v1/chat/completions`. Thân trả về hoàn toàn hợp lệ và token chảy
+            # ra bình thường — chỉ mỗi con số là khác, mà bản cũ so `!= 200` nên
+            # vứt sạch rồi thử lại cho tới khi hỏng hẳn. Hỏng kiểu này rất khó
+            # đoán: log chỉ kêu "API fail" kèm một mẩu JSON trông như thành công.
+            if not (200 <= resp.status_code < 300):
+                loi = f"HTTP {resp.status_code} {resp.text[:160]}"
+                # Lỗi do MÌNH gửi sai (prompt hỏng, khoá sai, hết tiền, model
+                # không tồn tại): gửi lại y hệt thì ra y hệt.
+                if resp.status_code in _MA_KHONG_THU_LAI:
+                    raise _LoiKhongCuuDuoc(f"API backend that bai: {loi}")
+                raise _LoiTamThoi(loi, _doc_retry_after(resp))
+
+            parts = []
+            # Tự giải mã UTF-8 từng dòng SSE: `decode_unicode` của requests mặc
+            # định latin-1 cho `text/event-stream` (không có charset header), làm
+            # nát dấu tiếng Việt, nháy cong và CJK.
+            try:
+                for raw_line in resp.iter_lines():
+                    if not raw_line:
+                        continue
+                    line = raw_line.decode("utf-8", errors="replace") if isinstance(raw_line, bytes) else raw_line
+                    if not line.startswith("data:"):
+                        continue
+                    payload = line[5:].strip()
+                    if payload == "[DONE]":
+                        break
                     try:
-                        resp.close()
+                        obj = json.loads(payload)
                     except Exception:
-                        pass
-            if attempt < attempts - 1:
-                # ⚠ QUÃNG CHỜ PHẢI ĐỦ DÀI — ĐO THẬT 07/08/2026.
-                #
-                # Chạy 20 lượt ở 5 luồng song song vào api.shopapi.vn: 17 lượt
-                # hỏng vì `502 service_unavailable` / `503 engine_unavailable`.
-                # Chính máy chủ nói "Vui lòng thử lại sau ít phút", trong khi bản
-                # cũ chờ `2**attempt` tối đa hai nhịp = 1s rồi 2s, xong bỏ cuộc.
-                # Chờ vài giây cho câu trả lời "vài phút nữa" thì gần như chắc
-                # chắn trượt, và pipeline Excel chạy `chunk_parallel` luồng nên
-                # nó CHẮC CHẮN chạm mức song song đó.
-                #
-                # Nay: lùi theo cấp số nhân tới trần `_CHO_TOI_DA`, và `Retry-After`
-                # của máy chủ THẮNG con số tự tính — nó biết rõ hơn ta.
-                wait = min(_CHO_TOI_DA, 2 ** (attempt + 1)) + random.uniform(0.2, 1.0)
-                if cho_ep is not None:
-                    wait = max(wait, min(cho_ep, _CHO_TOI_DA))
-                self._log(f"  [WARN] API fail ({last_error}); retry {attempt + 1}/{attempts} sau {wait:.1f}s", "WARN")
-                time.sleep(wait)
-                cho_ep = None
-        raise RuntimeError(f"API backend that bai: {last_error}")
+                        continue
+                    for ch in (obj.get("choices") or []):
+                        piece = (ch.get("delta") or {}).get("content")
+                        if piece:
+                            parts.append(piece)
+            except Exception as e:
+                # Đứt giữa luồng — coi như nghẽn, vòng ngoài lo thử lại.
+                raise _LoiTamThoi(f"dut luong giua chung: {e}")
+
+            content = ("".join(parts)).strip()
+            if not content:
+                # 2xx mà rỗng: từng là dấu hiệu nguồn trên hỏng mà adapter nuốt
+                # mất. Phải báo hỏng để còn đổi model / lùi về CLI, TUYỆT ĐỐI
+                # không trả chuỗi rỗng cho phần dựng Excel.
+                raise _LoiTamThoi("empty content")
+            self._log(f"  -> API done (stream, ~{len(content)} chars)")
+            return content
+        finally:
+            if resp is not None:
+                try:
+                    resp.close()
+                except Exception:
+                    pass
+
 
     def _run_via_cli(self, prompt: str, cwd: Path) -> str:
         # Claude only writes a JSON data file (no code execution). acceptEdits

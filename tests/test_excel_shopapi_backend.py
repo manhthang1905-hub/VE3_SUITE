@@ -359,3 +359,67 @@ def test_nhanh_khac_khong_bi_gan_chuoi_model_cua_shopapi(Engine):
     """VOV/DeepSeek đã có cơ chế riêng — không được lén đổi hành vi của chúng."""
     eng = Engine({"claude_cli_backend": "api_ds"})
     assert eng._chuoi_model() == [eng.api_model]
+
+
+# ── Thứ tự leo thang: ĐỔI MODEL trước, CHỜ sau ───────────────────────────────
+#
+# Bản đầu vắt kiệt 6 lần thử trên MỘT model (2+4+8+16+32 = 62 giây ngủ) RỒI mới
+# đổi model. Log chạy thật: mot khuc mat ~110 giay ma gan het la nam cho, trong
+# khi model kia dang tra loi binh thuong.
+#
+# `engine_unavailable` nghia la DUNG CUM DO dang chet -> ngoi cho chinh no hoi
+# la cho thu kho toi nhat. Va da do: ca hai model cung chet 0/12 vong.
+
+
+def test_doi_model_NGAY_khong_ngu_truoc(Engine, monkeypatch):
+    """Sonnet 503 -> Opus phải được gọi ngay, KHÔNG chờ một giây nào."""
+    import requests as _rq, time as _t
+    da_goi, da_ngu = [], []
+
+    def post(url, headers=None, json=None, **k):
+        m = (json or {}).get("model")
+        da_goi.append(m)
+        if m == "claude-sonnet-5":
+            return _DemResp(503)
+        return _RespGia(200, ['data: {"choices":[{"delta":{"content":"xong"}}]}',
+                              "data: [DONE]"])
+
+    monkeypatch.setattr(_rq, "post", post)
+    monkeypatch.setattr(_t, "sleep", lambda s: da_ngu.append(s))
+
+    eng = Engine({"claude_cli_backend": "api_shop", "shopapi_api_key": "sk_live_gia"})
+    assert eng._run_via_api("bat ky") == "xong"
+    assert da_goi == ["claude-sonnet-5", "claude-opus-5"], da_goi
+    assert da_ngu == [], f"doi model thi KHONG duoc ngu truoc, da ngu: {da_ngu}"
+
+
+def test_chi_ngu_khi_CA_CHUOI_model_deu_nghen(Engine, monkeypatch):
+    """Cả hai cùng chết mới đáng nằm chờ — và mỗi vòng phải thử LẠI cả hai."""
+    import requests as _rq, time as _t
+    da_goi, da_ngu = [], []
+
+    def post(url, headers=None, json=None, **k):
+        da_goi.append((json or {}).get("model"))
+        return _DemResp(503)
+
+    monkeypatch.setattr(_rq, "post", post)
+    monkeypatch.setattr(_t, "sleep", lambda s: da_ngu.append(s))
+
+    eng = Engine({"claude_cli_backend": "api_shop", "shopapi_api_key": "sk_live_gia",
+                  "claude_cli_api_retries": 3})
+    with pytest.raises(RuntimeError):
+        eng._run_via_api("bat ky")
+
+    # 3 vong x 2 model = 6 lan goi; ngu 2 lan (giua cac vong, khong ngu sau vong chot).
+    assert len(da_goi) == 6, da_goi
+    assert da_goi.count("claude-sonnet-5") == 3 and da_goi.count("claude-opus-5") == 3
+    assert len(da_ngu) == 2, f"chi ngu giua cac vong: {da_ngu}"
+
+
+def test_loi_khong_cuu_duoc_dung_ngay_khong_thu_model_con_lai(Engine, monkeypatch):
+    hop = _dem_lan_goi(monkeypatch, 402)
+    eng = Engine({"claude_cli_backend": "api_shop", "shopapi_api_key": "sk_live_gia"})
+
+    with pytest.raises(RuntimeError, match="HTTP 402"):
+        eng._run_via_api("bat ky")
+    assert hop["n"] == 1, f"het tien thi dung ngay, doi model cung the: {hop['n']} lan"
