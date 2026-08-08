@@ -2801,10 +2801,21 @@ Generator/context error:
         return dedup, base_no_ext
 
     def _pool_ref_local(self, ref_name: str) -> bool:
-        """POOL: ref build bằng EMBED base64 từ FILE local (nv/<ref>.png) -> KHÔNG cần media_id.
-        _make_ref (pool) đọc thẳng file này. -> ref coi là CÓ nếu file tồn tại, dù media_id rỗng.
-        (Fix: Fix-4 bỏ upload nv1 -> media_id rỗng -> _build_references báo 'missing' oan -> 0 ảnh.)"""
-        if getattr(self, "veo3top_image_mode", "") != "pool" or not ref_name:
+        """POOL / SHOPAPI: ref build bằng EMBED base64 từ FILE local (nv/<ref>.png)
+        -> KHÔNG cần media_id. `_make_ref` đọc thẳng file này, nên ref coi là CÓ
+        khi file tồn tại, dù media_id rỗng.
+        (Fix: Fix-4 bỏ upload nv1 -> media_id rỗng -> _build_references báo 'missing' oan -> 0 ảnh.)
+
+        ⚠ PHẢI GỒM CẢ "shopapi", ĐÃ DÍNH ĐÚNG LẠI LỖI CŨ (07/08/2026).
+        Hàm này sinh ra để chữa "0 ảnh" cho `pool`, nhưng lại khoá cứng đúng chữ
+        `pool`. Nhánh shopapi cũng bỏ qua media_id (API KHÔNG hiểu mediaId của
+        Flow, ref đi bằng bytes) nên rơi vào y hệt cái bẫy đó: chạy thật ra
+        `missing refs -> nv1` cho CẢ 147 scene, tổng kết `Anh: 0/147`.
+
+        `_make_ref` đã liệt kê cả hai chế độ từ đầu — chỉ mỗi hàm này bị bỏ sót,
+        nên hai bên phải đi cùng nhau, sửa một chỗ là nhớ chỗ kia.
+        """
+        if getattr(self, "veo3top_image_mode", "") not in ("pool", "shopapi") or not ref_name:
             return False
         try:
             for ext in (".png", ".jpg", ".jpeg"):

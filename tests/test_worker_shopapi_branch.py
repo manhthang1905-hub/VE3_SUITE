@@ -367,3 +367,41 @@ def test_thieu_khoa_thi_VAN_doi_server_nhu_cu(tmp_path, nhat_ky, khong_khoa):
     assert w.use_shopapi_for_image is False, "thieu khoa -> phai lui ve duong cu"
     ket = w.run()
     assert "Khong co server URL" in " ".join(ket.get("errors") or [])
+
+
+# ── Ref nhân vật: shopapi cũng embed từ file local ───────────────────────────
+
+
+def test_ref_local_duoc_chap_nhan_khi_di_shopapi(tmp_path, nhat_ky, co_khoa):
+    """CHẠY THẬT 07/08/2026: `missing refs -> nv1` cho CẢ 147 scene, `Anh: 0/147`.
+
+    `_pool_ref_local` sinh ra để chữa đúng lỗi "0 ảnh" này cho `pool`, nhưng lại
+    khoá cứng đúng chữ `pool`. Nhánh shopapi cũng bỏ qua media_id (API KHÔNG
+    hiểu mediaId của Flow — ref đi bằng bytes) nên rơi vào y hệt cái bẫy.
+
+    `_make_ref` đã liệt kê cả hai chế độ từ đầu; chỉ mỗi hàm này bị bỏ sót.
+    """
+    w = _worker(tmp_path, nhat_ky)
+    w.nv_dir.mkdir(parents=True, exist_ok=True)
+    (w.nv_dir / "nv1.png").write_bytes(b"\x89PNG-nhan-vat")
+
+    assert w._pool_ref_local("nv1") is True, (
+        "co file nv/nv1.png ma van bao thieu -> ca me anh se hong sach")
+
+
+def test_khong_co_file_thi_van_bao_thieu(tmp_path, nhat_ky, co_khoa):
+    w = _worker(tmp_path, nhat_ky)
+    w.nv_dir.mkdir(parents=True, exist_ok=True)
+    assert w._pool_ref_local("nv_khong_ton_tai") is False
+
+
+def test_hai_ham_ref_phai_dong_y_voi_nhau(tmp_path, nhat_ky, co_khoa):
+    """`_make_ref` nhúng bytes cho chế độ nào thì `_pool_ref_local` phải nhận
+    chế độ đó — lệch nhau chính là cách sinh ra `missing refs` oan."""
+    w = _worker(tmp_path, nhat_ky)
+    w.nv_dir.mkdir(parents=True, exist_ok=True)
+    (w.nv_dir / "nv1.png").write_bytes(b"\x89PNG-nhan-vat")
+
+    ref = w._make_ref("nv1", "")
+    assert ref.base64_data, "_make_ref phai nhung bytes o che do shopapi"
+    assert w._pool_ref_local("nv1") is True, "nhung duoc bytes thi PHAI coi la co ref"
