@@ -9,14 +9,20 @@ lần là hai lần sai khác nhau, nên gom vào đây.
 File này **không** import `shopapi` ở mức module: máy chưa cài SDK vẫn phải
 `import` được để tool chạy đường cũ bình thường (nhánh mới sẽ tự lùi).
 
-BA CÁI BẪY ĐÃ GHI RÕ TRONG MÃ (đọc trước khi sửa)
--------------------------------------------------
+BỐN CÁI BẪY ĐÃ GHI RÕ TRONG MÃ (đọc trước khi sửa)
+--------------------------------------------------
 1. **Link kết quả chỉ sống 7 ngày** (CONTRACT §2.2) → phải tải ngay về ổ cứng,
    tuyệt đối không lưu URL vào Excel rồi dùng lại tuần sau.
 2. **`n>1` thì ảnh nằm ở `outputs`, KHÔNG phải `output`** — `output` chỉ là file
    đầu tiên (`job.mapper.ts`). Đọc nhầm là mất ảnh mà không báo lỗi.
 3. **Veo3 chỉ nhận `duration: 8`, Seedance chỉ nhận `10`** → xem
    `shopapi_video_client.py`.
+4. **`create_and_wait` GIẤU MẤT `queue_position` / `estimated_seconds`.** Phản
+   hồi `202` của máy chủ có sẵn hai trường đó, nhưng `create_and_wait` nuốt
+   luôn job trung gian và chỉ trả về job đã xong. Đó chính là lý do ngày
+   07/08/2026 tool `dola-seedance-api` bắn 66 job vào một nhà máy tiêu hoá ~16
+   và mất 27 job vì hết hạn NGAY TRONG HÀNG CHỜ (kho tài khoản còn nguyên).
+   :func:`tao_va_cho` tách hai bước ra để đọc được hai con số ấy.
 """
 
 from __future__ import annotations
@@ -38,6 +44,8 @@ __all__ = [
     "ty_le_api",
     "lay_outputs",
     "url_cua_output",
+    "doc_hang_cho",
+    "tao_va_cho",
     "tai_ve",
     "mo_ta_loi",
     "kiem_khoa",
@@ -45,6 +53,7 @@ __all__ = [
     "tran_cung",
     "phan_loai_nghen",
     "BiNghen",
+    "MA_NGHEN_CAP_JOB",
     "DEFAULT_BASE_URL",
     "KEY_ENV_NAMES",
     "KEY_FILE_ENV_NAME",
@@ -86,7 +95,18 @@ MAX_ANH_MOT_JOB = 8
 #: Python ở `packages/sdk-python/src/shopapi/_constants.py`. Ở đây chỉ là bản
 #: DỰ PHÒNG cho máy chưa cài SDK — :func:`tran_cung` luôn ưu tiên đọc từ SDK để
 #: máy chủ nâng trần là tool ăn theo ngay, khỏi phải sửa hai chỗ.
-TRAN_CUNG_MAC_DINH = {"tts": 16, "image": 128, "video": 64}
+#:
+#: ⚠ BẢN CHÉP NÀY SẼ CŨ ĐI. Máy chủ nâng trần là con số ở đây lệch ngay (đã lệch
+#: một lần: ảnh 128 trong khi SDK đã lên 384). Không sao — :func:`tran_cung` LUÔN
+#: đọc SDK trước, nên bản chép chỉ dùng cho máy chưa cài SDK. Đừng viết bài kiểm
+#: gõ cứng con số ở đây; hãy đối chiếu với SDK.
+TRAN_CUNG_MAC_DINH = {"tts": 16, "image": 384, "video": 64}
+
+#: Mã lỗi CẤP JOB nghĩa là **nhà máy hết chỗ**, không phải "việc này hỏng".
+#:
+#: Xem chú thích dài ở :func:`phan_loai_nghen` để biết vì sao nó phải được xếp
+#: vào nhóm nghẽn thay vì nhóm hỏng.
+MA_NGHEN_CAP_JOB = frozenset({"resource_exhausted"})
 
 #: Che mọi chuỗi trông giống khoá khi ghi log. Thà che nhầm còn hơn để lộ.
 _KEY_PATTERN = re.compile(r"\b((?:sk|wk)_[A-Za-z0-9]*_?[A-Za-z0-9\-]{6,})")
@@ -391,6 +411,92 @@ def url_cua_output(output):
     return str(_lay_truong(output, "url") or "")
 
 
+# ── Đọc chỗ đứng trong hàng chờ ───────────────────────────────────────────────
+
+
+def _so_hoac_none(gia_tri, so_nguyen):
+    """Đọc một con số từ phản hồi máy chủ. Thiếu/hỏng kiểu → `None`, không đoán bừa.
+
+    `None` khác hẳn `0`: `None` là "máy chủ không nói", `0` là "hàng rỗng, vào
+    ngay". Coi "không biết" thành "rỗng" là cách êm ái nhất để tắt mất cái cổng
+    nhịp vừa dựng lên.
+    """
+    if gia_tri is None:
+        return None
+    try:
+        return int(gia_tri) if so_nguyen else float(gia_tri)
+    except (TypeError, ValueError):
+        return None
+
+
+def doc_hang_cho(job):
+    """`(queue_position, estimated_seconds)` từ phản hồi TẠO job (CONTRACT §2.1).
+
+    Máy chủ trả sẵn hai trường này trong mọi phản hồi `202`::
+
+        {"id": "job_…", "estimated_seconds": 45, "queue_position": 3}
+
+    `queue_position` = đứng thứ mấy trong hàng; `estimated_seconds` = ước lượng
+    bao lâu nữa tới lượt. Hai con số đó nói ra thứ mà trần song song KHÔNG nói:
+    **hàng chờ trước mặt đang dài bao nhiêu**. Xem
+    :class:`shopapi_batch.CongHangCho`.
+
+    Nhận cả `Model` của SDK lẫn `dict` thuần, và **không bao giờ ném**: một
+    trường thiếu không được phép làm hỏng một job đã trả tiền.
+    """
+    try:
+        return (
+            _so_hoac_none(_lay_truong(job, "queue_position"), True),
+            _so_hoac_none(_lay_truong(job, "estimated_seconds"), False),
+        )
+    except Exception:                       # noqa: BLE001
+        return (None, None)
+
+
+def tao_va_cho(client, ten_tai_nguyen, timeout, on_progress=None, on_hang_cho=None,
+               **tham_so):
+    """`create` rồi `jobs.wait` — **tách hai bước để ĐỌC ĐƯỢC hàng chờ**.
+
+    Làm đúng y việc mà `create_and_wait` của SDK làm bên trong (tạo job, rồi
+    `client.jobs.wait(job["id"], …, estimated_seconds=job["estimated_seconds"])`),
+    chỉ khác một điều: nó **đưa job trung gian ra** qua `on_hang_cho` trước khi
+    bắt đầu chờ.
+
+    VÌ SAO PHẢI TÁCH: `create_and_wait` chỉ trả về job ĐÃ XONG, nên
+    `queue_position` và `estimated_seconds` — hai trường chỉ có trong phản hồi
+    `202` lúc tạo — biến mất không dấu vết. Không đọc được chúng thì tool không
+    có cách nào biết hàng chờ đang dài, và nó sẽ nhồi tiếp cho tới lúc job chết
+    vì hết hạn trong hàng (sự cố 07/08/2026: 66 job, nhà máy tiêu hoá 16, mất
+    27 job, kho tài khoản KHÔNG cạn).
+
+    ⚠ CÓ ĐƯỜNG LÙI: client nào không có đủ `create` + `jobs.wait` (bản SDK cũ,
+    hoặc client giả trong bài kiểm) thì quay về `create_and_wait` như trước.
+    Mất tín hiệu hàng chờ thì tool chạy đúng như bản cũ — chậm hơn về mặt điều
+    nhịp, nhưng **không bao giờ gãy**.
+    """
+    tai_nguyen = getattr(client, ten_tai_nguyen, None)
+    if tai_nguyen is None:
+        raise AttributeError("client khong co '{0}'".format(ten_tai_nguyen))
+
+    tao = getattr(tai_nguyen, "create", None)
+    cho = getattr(getattr(client, "jobs", None), "wait", None)
+    if tao is None or cho is None:
+        return tai_nguyen.create_and_wait(
+            timeout=timeout, on_progress=on_progress, **tham_so)
+
+    job = tao(**tham_so)
+    vi_tri, uoc_giay = doc_hang_cho(job)
+    if on_hang_cho is not None:
+        try:
+            on_hang_cho(vi_tri, uoc_giay)
+        except Exception:                   # noqa: BLE001 — báo nhịp hỏng không giết job
+            pass
+    # `estimated_seconds` cũng là thứ SDK dùng để chọn nhịp hỏi trạng thái đầu
+    # tiên (`_polling.poll_delays`) — truyền tiếp cho khớp `create_and_wait`.
+    return cho(_lay_truong(job, "id"), timeout=timeout, on_progress=on_progress,
+               estimated_seconds=uoc_giay)
+
+
 # ── Tải file kết quả ──────────────────────────────────────────────────────────
 
 
@@ -525,6 +631,19 @@ def phan_loai_nghen(exc):
     if ten in ("EngineUnavailableError", "ServiceUnavailableError"):
         # 503: job KHÔNG được tạo, KHÔNG trừ tiền — chờ rồi gửi lại là đủ.
         return BiNghen(503, getattr(exc, "retry_after", None), exc)
+    if ten == "JobFailedError" and str(getattr(exc, "code", "") or "") in MA_NGHEN_CAP_JOB:
+        # ⚠ `resource_exhausted` TRÔNG NHƯ job hỏng nhưng nghĩa là NHÀ MÁY HẾT CHỖ.
+        #
+        # Worker phía máy chủ ném nó khi không còn máy/tài khoản rảnh
+        # (`workers/shared/shopapi_worker/errors.py`), và nó về tới đây dưới dạng
+        # `JobFailedError` — cùng lớp với "prompt bị chặn", "engine crash". Nếu
+        # xếp nó vào "việc này hỏng" thì tool ghi lỗi rồi **bắn tiếp cái sau**,
+        # tức là đạp ga đúng lúc máy chủ vừa nói hết chỗ.
+        #
+        # Job kiểu này **đã được hoàn 100% tiền**, nên trả việc về đầu hàng chờ
+        # là đúng cả về tiền lẫn về nhịp. Cho mã `429` để vòng dò chia đôi nhịp
+        # (không phải `503`: nhà máy vẫn sống, chỉ là đang chật).
+        return BiNghen(429, getattr(exc, "retry_after", None), exc)
     return None
 
 

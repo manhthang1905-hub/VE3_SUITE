@@ -5842,7 +5842,41 @@ Get-CimInstance Win32_Process |
     def view_image(self, p, t=""):
         if p and Path(p).exists(): ImageViewer(self, p, t)
 
-    #  token 
+    def _chi_dung_shopapi(self, cfg):
+        """CẢ ảnh LẪN video đều đi API shopapi, và máy ĐÃ CÓ khoá?
+
+        ⚠ PHẢI KHỚP TỪNG CHỮ với `ve3_worker._shopapi_only`, đừng để hai bên
+        lệch nhau. Cổng `_build_cfg` chạy TRƯỚC khi worker khởi động, nên nếu
+        cổng khắt khe hơn worker thì cấu hình hợp lệ vẫn bị chặn ngay ở cửa —
+        đúng chuyện đã xảy ra: chọn shopapi cho cả hai khâu mà vẫn bị đòi
+        "Can token hop le", trong khi worker thừa biết là không cần.
+
+        Đòi CẢ HAI khâu, không phải một: còn một khâu đi đường cũ là còn mở
+        Chrome, mà đường cũ thì vẫn cần auth thật.
+
+        Đòi CÓ KHOÁ nữa: thiếu khoá thì worker tự lùi về đường cũ, và đường cũ
+        cần auth — bỏ qua cổng lúc đó là để nó chết sâu hơn ở giữa lượt chạy.
+        """
+        if (cfg.get("veo3top_image_mode") or "").strip().lower() != "shopapi":
+            return False
+        video = (cfg.get("generation_backend") or cfg.get("generation_mode") or "").strip().lower()
+        if video != "shopapi":
+            return False
+        # Nạp thẳng chứ không mượn `SettingsPage._shopapi_common`: hàm đó nằm ở
+        # LỚP KHÁC (trang Cài đặt), gọi từ đây là `AttributeError`.
+        try:
+            import sys as _sys
+            _engine = str(SUITE_ROOT / "veo3top_engine")
+            if _engine not in _sys.path:
+                _sys.path.insert(0, _engine)
+            import shopapi_common as _sc
+            return bool((_sc.doc_khoa() or ("", ""))[0])
+        except Exception:
+            # Thiếu module/kho khoá hỏng -> coi như CHƯA có khoá, giữ nguyên cổng
+            # cũ. Thà bắt khai token còn hơn thả cho chạy rồi chết giữa lượt.
+            return False
+
+    #  token
     def _build_cfg(self):
         c = dict(self.config_data)
         t = str(c.get("flow_bearer_token", "") or "").strip()
@@ -5860,8 +5894,14 @@ Get-CimInstance Win32_Process |
                 for a in all_accounts
             )
         )
-        if not t and not auto_auth_ready:
-            messagebox.showwarning("Flow Auth", "Can token hop le hoac it nhat 1 pair co du gmail bundle va chrome path trong Cai dat.")
+        if not t and not auto_auth_ready and not self._chi_dung_shopapi(c):
+            messagebox.showwarning(
+                "Flow Auth",
+                "Can token hop le hoac it nhat 1 pair co du gmail bundle va chrome path "
+                "trong Cai dat.\n\n"
+                "(Neu muon chay HOAN TOAN qua API shopapi thi dat CA hai: backend video = "
+                "'API shopapi' VA backend anh = 'API shopapi (anh)', roi luu khoa sk_live_ "
+                "o trang Cai dat — luc do khong can token Flow nua.)")
             return None
         if t and not t.startswith("ya29."):
             messagebox.showwarning("Token","Token phi bt u ya29."); return None

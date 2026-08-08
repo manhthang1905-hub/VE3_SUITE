@@ -292,7 +292,10 @@ def test_tran_song_song_lay_tu_v1_me_khong_go_cung(tmp_path, nhat_ky, co_khoa, m
     monkeypatch.setattr(sc, "tran_song_song",
                         lambda loai, api_key=None, mac_dinh=1, client=None: 7)
     w = _worker(tmp_path, nhat_ky, {"max_concurrent": 0})
-    assert w.max_concurrent == 128, "khong ghim -> tran nguoi dung = tran CUNG cua anh"
+    # KHONG go cung con so: may chu nang tran la `tran_cung` an theo ngay
+    # (da lech mot lan - anh 128 -> 384). Doi chieu voi nguon that.
+    assert w.max_concurrent == sc.tran_cung("image"), (
+        "khong ghim -> tran nguoi dung = tran CUNG cua anh")
     assert w._shopapi_luong("image", w.max_concurrent) == 7, "so that phai den tu /v1/me"
 
 

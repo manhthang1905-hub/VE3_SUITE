@@ -125,3 +125,71 @@ def test_excel_dung_dung_model_chu_du_an_chot():
 ])
 def test_khong_con_mac_dinh_nao_tro_ve_pool(khoa, cam):
     assert _gan("_load_config").get(khoa) not in cam
+
+
+# ── Cổng token Flow phải BIẾT về shopapi ─────────────────────────────────────
+#
+# ĐÃ CHẶN NHẦM THẬT: chọn shopapi cho cả ảnh lẫn video, khoá đã lưu, bấm chạy ->
+# "Can token hop le hoac it nhat 1 pair co du gmail bundle va chrome path".
+#
+# Gốc: `_build_cfg` chạy TRƯỚC khi worker khởi động và nó không biết gì về
+# shopapi, trong khi `ve3_worker._shopapi_only` thừa biết là không cần bearer.
+# Cổng khắt khe hơn worker = cấu hình hợp lệ bị chặn ngay ở cửa, và người dùng
+# không có cách nào đi tiếp vì họ ĐÚNG là không cần token.
+
+
+@pytest.fixture
+def cong():
+    """`_chi_dung_shopapi` gọi rời khỏi `self` — nó không đụng thuộc tính nào."""
+    import sys
+    VE3 = Path(__file__).resolve().parents[1] / "tools" / "ve3"
+    if str(VE3) not in sys.path:
+        sys.path.insert(0, str(VE3))
+    import ve3_gui
+    return ve3_gui.VE3App._chi_dung_shopapi
+
+
+CA_HAI_SHOPAPI = {"veo3top_image_mode": "shopapi", "generation_backend": "shopapi"}
+
+
+def test_ca_hai_khau_shopapi_va_co_khoa_thi_KHONG_doi_token(cong):
+    assert cong(None, dict(CA_HAI_SHOPAPI)) is True
+
+
+def test_may_cu_chi_co_generation_mode_van_nhan_ra(cong):
+    """Máy cũ không có `generation_backend` — đọc thiếu là chặn oan."""
+    assert cong(None, {"veo3top_image_mode": "shopapi",
+                       "generation_mode": "shopapi"}) is True
+
+
+@pytest.mark.parametrize("ten, cfg", [
+    ("anh con di pool", {"veo3top_image_mode": "pool", "generation_backend": "shopapi"}),
+    ("video con di server", {"veo3top_image_mode": "shopapi", "generation_backend": "server"}),
+    ("ca hai deu duong cu", {"veo3top_image_mode": "pool", "generation_backend": "server"}),
+    ("chua chon gi", {}),
+])
+def test_con_mot_khau_di_duong_cu_thi_VAN_phai_doi_token(cong, ten, cfg):
+    """Còn một khâu đường cũ là còn mở Chrome, mà đường cũ vẫn cần auth thật."""
+    assert cong(None, cfg) is False, ten
+
+
+def test_chua_luu_khoa_thi_VAN_phai_doi_token(cong, monkeypatch):
+    """Thiếu khoá thì worker tự lùi về đường cũ — mà đường cũ cần auth. Bỏ qua
+    cổng lúc này chỉ để nó chết sâu hơn ở giữa lượt chạy."""
+    import sys
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "veo3top_engine"))
+    import shopapi_common as sc
+    monkeypatch.setattr(sc, "doc_khoa", lambda env=None: ("", ""))
+    assert cong(None, dict(CA_HAI_SHOPAPI)) is False
+
+
+def test_kho_khoa_hong_thi_chan_chu_khong_no(cong, monkeypatch):
+    import sys
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "veo3top_engine"))
+    import shopapi_common as sc
+
+    def no(env=None):
+        raise OSError("kho khoa hong")
+
+    monkeypatch.setattr(sc, "doc_khoa", no)
+    assert cong(None, dict(CA_HAI_SHOPAPI)) is False

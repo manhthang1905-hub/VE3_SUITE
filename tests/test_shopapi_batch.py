@@ -108,10 +108,17 @@ def test_so_luong_bi_chan_tren_boi_tran_nguoi_dung_dat(tran_gia, nhat_ky):
 
 def test_so_luong_khong_bao_gio_vuot_tran_CUNG_cua_loai_job(tran_gia, nhat_ky, sc):
     """Một lời `/v1/me` trả số vô lý cũng không biến thành 9999 luồng."""
+    # KHONG go cung con so: may chu nang tran la `tran_cung` an theo ngay. Da
+    # lech mot lan (anh 128 -> 384) va lam do bai kiem nay du ma van dung.
+    # Doi chieu VOI NGUON THAT, chi doi hoi no la mot tran huu han > 0.
     tran_gia(9999)
-    assert sb.so_luong_song_song("image", log=nhat_ky) == sc.tran_cung("image") == 128
+    tran_anh = sc.tran_cung("image")
+    assert 0 < tran_anh < 9999
+    assert sb.so_luong_song_song("image", log=nhat_ky) == tran_anh
     tran_gia(9999)
-    assert sb.so_luong_song_song("video", log=nhat_ky) == sc.tran_cung("video") == 64
+    tran_video = sc.tran_cung("video")
+    assert 0 < tran_video < 9999
+    assert sb.so_luong_song_song("video", log=nhat_ky) == tran_video
 
 
 def test_hoi_khong_duoc_thi_doan_THAP_chu_khong_dung_im(monkeypatch, sc, nhat_ky):

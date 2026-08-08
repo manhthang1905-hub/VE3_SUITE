@@ -84,6 +84,10 @@ def test_khong_con_khoa_deepseek_nao_trong_kho_ma():
     da_don = ("sk-e3a4138d", "sk-a138987932", "sk-de9ca9b3", "sk-HzpmHV")
     pham = []
     for ten, p in _file_trong_kho():
+        # Chính file này liệt kê các tiền tố -> tự bắt mình. Bài kiểm kia cũng
+        # bỏ qua y hệt; quên một chỗ là đỏ ngay lúc file được `git add`.
+        if Path(ten).name == Path(__file__).name:
+            continue
         noi_dung = p.read_text(encoding="utf-8", errors="replace")
         for tien_to in da_don:
             if tien_to in noi_dung:

@@ -200,10 +200,13 @@ def test_anh_va_video_hoi_TRAN_RIENG_cua_tung_loai(tmp_path, nhat_ky, co_khoa,
     assert w._shopapi_luong("video") == 5
 
 
-def test_khong_ghim_thi_tran_nguoi_dung_la_tran_CUNG_khong_phai_1(tmp_path, nhat_ky, co_khoa):
+def test_khong_ghim_thi_tran_nguoi_dung_la_tran_CUNG_khong_phai_1(tmp_path, nhat_ky, co_khoa, sc):
     """Không ghim = "để máy chủ quyết", chứ không phải "chạy 1 job"."""
     w = _worker(tmp_path, nhat_ky, {"max_concurrent": 0})
-    assert w.max_concurrent == 128
+    # KHONG go cung con so: may chu nang tran la `tran_cung` an theo ngay
+    # (da lech mot lan - anh 128 -> 384). Doi chieu voi nguon that.
+    assert w.max_concurrent == sc.tran_cung("image"), (
+        "khong ghim -> tran nguoi dung = tran CUNG cua anh")
 
 
 def test_khoi_dong_KHONG_hoi_may_chu_nua(tmp_path, nhat_ky, co_khoa, monkeypatch, sc):
