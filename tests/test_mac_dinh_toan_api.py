@@ -250,3 +250,86 @@ def test_khoa_dat_thang_trong_cfg_cung_duoc_chap_nhan(cong_excel, monkeypatch):
     import shopapi_common as sc
     monkeypatch.setattr(sc, "doc_khoa", lambda env=None: ("", ""))
     assert cong_excel(None, dict(EXCEL_API, shopapi_api_key="sk_live_abc123def456ghi")) is True
+
+
+# ── Hàng chờ: phải có "chỗ làm" khi chạy toàn API ────────────────────────────
+#
+# Vong lap hang cho chi giao viec cho mot "pair" (server + tai khoan Flow). Di
+# toan API thi KHONG co server nao, cung KHONG co tai khoan nao -> pair rong ->
+# vong lap quay mai ma khong phat mot viec nao. Khong loi, khong canh bao, chi
+# la khong co gi xay ra — kieu hong kho doan nhat.
+
+
+class _AppGia:
+    """Chỉ mang `config_data` + mượn đúng các hàm pair của `VE3App`.
+
+    Dựng `VE3App` thật cần tkinter + màn hình; các hàm này chỉ đọc
+    `self.config_data` nên mượn sang là chạy được, và vẫn kiểm ĐÚNG mã thật.
+    """
+
+    def __init__(self, config_data):
+        import sys
+        VE3 = Path(__file__).resolve().parents[1] / "tools" / "ve3"
+        if str(VE3) not in sys.path:
+            sys.path.insert(0, str(VE3))
+        import ve3_gui
+        self.config_data = config_data
+        for ten in ("_chi_dung_shopapi", "_so_ma_song_song_shopapi", "_pair_ao_shopapi"):
+            setattr(self, ten, getattr(ve3_gui.VE3App, ten).__get__(self))
+        # Đường pair THẬT còn cần mấy thứ này; bài kiểm không dựng server nào.
+        self.server_status_cache = []
+        self._server_pair_debug_enabled = False
+        self._get_flow_account_map = lambda: {}
+        self._pair_account_name = lambda row, idx: ""
+        self._status_accepts_tasks = lambda st: False
+
+
+def _goi(ten_ham, app, *a, **k):
+    import sys
+    VE3 = Path(__file__).resolve().parents[1] / "tools" / "ve3"
+    if str(VE3) not in sys.path:
+        sys.path.insert(0, str(VE3))
+    import ve3_gui
+    return getattr(ve3_gui.VE3App, ten_ham)(app, *a, **k)
+
+
+CFG_API = {"veo3top_image_mode": "shopapi", "generation_backend": "shopapi",
+           "local_server_list": []}
+
+
+def test_hang_cho_co_cho_lam_khi_chay_toan_api():
+    app = _AppGia(dict(CFG_API))
+    pairs = _goi("_get_server_pairs", app, only_available=True)
+    assert pairs, "khong co pair -> hang cho dung im vinh vien, khong bao gi"
+    assert all(p["available"] for p in pairs)
+    assert len({p["pair_id"] for p in pairs}) == len(pairs), "pair_id phai khac nhau"
+
+
+def test_so_cho_lam_dieu_chinh_duoc():
+    app = _AppGia(dict(CFG_API, shopapi_ma_song_song=5))
+    assert len(_goi("_get_server_pairs", app, only_available=True)) == 5
+
+
+def test_so_cho_lam_rac_thi_ve_mac_dinh_chu_khong_no():
+    app = _AppGia(dict(CFG_API, shopapi_ma_song_song="nhieu vao"))
+    assert len(_goi("_get_server_pairs", app, only_available=True)) == 3
+
+
+def test_cho_lam_ao_KHONG_dung_ServerPool_cho_server_khong_ton_tai():
+    """Danh sách khác rỗng là `_init_server_pool` dựng pool cho một server ma."""
+    app = _AppGia(dict(CFG_API))
+    pair = _goi("_get_server_pairs", app, only_available=True)[0]
+    cfg = _goi("_build_project_pair_cfg", app, dict(CFG_API), pair)
+
+    assert cfg["local_server_list"] == []
+    assert cfg["local_server_url"] == ""
+    assert cfg["generation_backend"] == "shopapi", "khong duoc lam mat backend"
+    assert cfg["veo3top_image_mode"] == "shopapi"
+
+
+def test_da_khai_server_that_thi_KHONG_dung_cho_lam_ao():
+    """Người dùng khai server thật -> tôn trọng, đừng lén thay bằng pair ảo."""
+    app = _AppGia(dict(CFG_API, local_server_list=[
+        {"url": "http://127.0.0.1:8801", "name": "Sv-1", "enabled": True}]))
+    pairs = _goi("_get_server_pairs", app, only_available=False)
+    assert not any(p.get("ao_shopapi") for p in pairs), [p["pair_id"] for p in pairs]

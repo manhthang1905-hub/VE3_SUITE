@@ -5214,7 +5214,47 @@ Get-CimInstance Win32_Process |
                 pass
         return out
 
+    def _so_ma_song_song_shopapi(self):
+        """Bao nhiêu MÃ chạy cùng lúc khi đi toàn API. Mặc định 3."""
+        try:
+            return max(1, int(self.config_data.get("shopapi_ma_song_song", 3) or 3))
+        except (TypeError, ValueError):
+            return 3
+
+    def _pair_ao_shopapi(self):
+        """Vài "chỗ làm" ẢO để hàng chờ có cái mà phát việc khi chạy toàn API.
+
+        ⚠ VÌ SAO PHẢI CÓ — HÀNG CHỜ ĐỨNG IM KHÔNG BÁO GÌ
+        -------------------------------------------------
+        Vòng lặp hàng chờ chỉ giao việc cho một "pair" (server + tài khoản
+        Flow). Đi toàn API thì KHÔNG có server nào, cũng KHÔNG có tài khoản nào
+        — nên `_get_server_pairs` trả về rỗng, `free_pairs` rỗng, và vòng lặp
+        quay vòng mãi mà không bao giờ phát một việc nào. Không lỗi, không cảnh
+        báo, chỉ là không có gì xảy ra: kiểu hỏng khó đoán nhất.
+
+        Pair ảo giữ nguyên cách đếm "mã nào đang chạy" của hàng chờ, chỉ bỏ đi
+        phần server/tài khoản vốn không tồn tại. Số lượng chính là số MÃ chạy
+        song song — song song ở mức job thì đã có trần của máy chủ lo.
+        """
+        return [{
+            "pair_id": "shopapi-{0}".format(i + 1),
+            "server_name": "API shopapi",
+            "server_url": "",
+            "server_config": {},
+            "flow_account_name": "",
+            "flow_account": None,
+            "enabled": True,
+            "available": True,
+            "queue_size": 0,
+            "ao_shopapi": True,      # `_build_project_pair_cfg` đọc cờ này
+        } for i in range(self._so_ma_song_song_shopapi())]
+
     def _get_server_pairs(self, only_available=False):
+        # Đi toàn API mà chưa khai server nào -> dựng chỗ làm ảo, nếu không hàng
+        # chờ sẽ đứng im vĩnh viễn (xem chú thích ở `_pair_ao_shopapi`).
+        if not (self.config_data.get("local_server_list") or []) and \
+                self._chi_dung_shopapi(self.config_data):
+            return self._pair_ao_shopapi()
         account_map = self._get_flow_account_map()
         status_map = {str(s.get("url", "")).rstrip("/"): s for s in (self.server_status_cache or [])}
         pairs = []
@@ -5515,6 +5555,16 @@ Get-CimInstance Win32_Process |
 
     def _build_project_pair_cfg(self, base_cfg, pair):
         cfg = dict(base_cfg)
+        if pair.get("ao_shopapi"):
+            # Chỗ làm ẢO: không có server nào để trỏ tới. Phải để danh sách RỖNG
+            # chứ đừng nhét một mục url="" vào — `_init_server_pool` thấy danh
+            # sách khác rỗng là dựng ServerPool cho một server không tồn tại.
+            cfg["local_server_list"] = []
+            cfg["local_server_url"] = ""
+            cfg["flow_bearer_token"] = ""
+            cfg["flow_project_id"] = ""
+            cfg["flow_project_url"] = ""
+            return cfg
         server_cfg = dict(pair["server_config"])
         server_cfg["flow_account_name"] = pair["flow_account_name"]
         cfg["local_server_list"] = [server_cfg]
@@ -7984,7 +8034,12 @@ Get-CimInstance Win32_Process |
                 # server sv# tạo gì. -> BỎ rà soát server cũ (ping accepting/chrome_ready, chờ bound server) để mã VÀO
                 # LÀM NGAY với account enabled. (Trước đây gate server làm treo tới 5 phút dù pool sẵn sàng.)
                 _pool_mode = str(cfg.get("generation_backend", "") or "").strip() == "veo3top_b_pool"
-                if _pool_mode:
+                # API shopapi: y hệt lý do trên — không có server sv# nào tạo gì,
+                # nên rà trạng thái server chỉ tổ trễ mã vào làm. Pair ở đây là
+                # chỗ làm ẢO (xem `_pair_ao_shopapi`), luôn `available`.
+                if self._chi_dung_shopapi(cfg):
+                    pairs = [p for p in self._get_server_pairs(only_available=False) if p.get("enabled")]
+                elif _pool_mode:
                     pairs = [p for p in self._get_server_pairs(only_available=False) if p.get("enabled")]
                 else:
                     if (_time.time() - float(getattr(self, "server_status_cache_ts", 0.0) or 0.0)) >= 10:
