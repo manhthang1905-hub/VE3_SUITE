@@ -333,3 +333,37 @@ def test_hoi_v1_me_that_bai_thi_khong_lam_chet_luot_chay(tmp_path, nhat_ky, co_k
     w = _worker(tmp_path, nhat_ky, {"max_concurrent": 0})
     assert w.max_concurrent >= 1
     assert w._shopapi_luong("image", w.max_concurrent) >= 1, "mat mang -> doan thap, khong dung im"
+
+
+# ── Không có server Chrome nào vẫn phải chạy được ────────────────────────────
+
+
+def test_khong_co_server_url_van_chay_duoc_khi_anh_di_shopapi(tmp_path, nhat_ky, co_khoa):
+    """Đi toàn API thì KHÔNG bước nào chạm tới một server Chrome nào.
+
+    ⚠ `use_veo3top_for_image` KHÔNG bao gồm shopapi — nó chỉ là
+    `("blank", "account", "pool")`. Chốt chặn "Khong co server URL" trong
+    `run` tha `use_veo3top_for_image` mà quên vế shopapi, nên chạy
+    toàn API vẫn chết ngay ở cửa dù không cần server nào.
+
+    Đây là lớp chặn THỨ BA cùng một kiểu (sau cổng token và cổng "Thieu server"
+    bên GUI) — sửa GUI mà quên chỗ này thì chỉ đẩy lỗi xuống sâu hơn một bước.
+    """
+    w = _worker(tmp_path, nhat_ky, {"local_server_url": "", "local_server_list": []})
+
+    assert w.use_shopapi_for_image is True
+    assert w.use_veo3top_for_image is False, "shopapi KHONG nam trong nhom veo3top"
+    assert w.pool is None, "khong cau hinh server thi khong co pool - dung nhu vay"
+
+    ket = w.run()
+    assert "Khong co server URL" not in " ".join(ket.get("errors") or []), (
+        "chan oan: di toan API thi khong can server Chrome nao")
+
+
+def test_thieu_khoa_thi_VAN_doi_server_nhu_cu(tmp_path, nhat_ky, khong_khoa):
+    """Thiếu khoá -> worker lùi về đường cũ, mà đường cũ THẬT SỰ cần server."""
+    w = _worker(tmp_path, nhat_ky, {"local_server_url": "", "local_server_list": []})
+
+    assert w.use_shopapi_for_image is False, "thieu khoa -> phai lui ve duong cu"
+    ket = w.run()
+    assert "Khong co server URL" in " ".join(ket.get("errors") or [])

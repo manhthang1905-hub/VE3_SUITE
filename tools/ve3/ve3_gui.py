@@ -3336,8 +3336,46 @@ Write-Output $kill.Count
             return provider
         return "deepseek"
 
+    def _excel_di_shopapi(self, cfg):
+        """Bước Excel có đi thẳng LLM của shopapi không?
+
+        Khi đúng, `excel_ai_provider` (DeepSeek / VOV / Claude Pool) KHÔNG được
+        dùng tới một lần nào: `ClaudeCliEngine` tự gọi `api.shopapi.vn` bằng
+        khoá `sk_live_`. Đòi khoá của mấy nguồn kia lúc này là chặn oan.
+        """
+        if str(cfg.get("excel_engine", "") or "").strip().lower() not in ("claude_cli", "claude", "cli"):
+            return False
+        if str(cfg.get("claude_cli_backend", "") or "").strip().lower() not in ("api_shop", "api_shop_cli"):
+            return False
+        if str(cfg.get("shopapi_api_key", "") or "").strip():
+            return True
+        try:
+            import sys as _sys
+            _engine = str(SUITE_ROOT / "veo3top_engine")
+            if _engine not in _sys.path:
+                _sys.path.insert(0, _engine)
+            import shopapi_common as _sc
+            return bool((_sc.doc_khoa() or ("", ""))[0])
+        except Exception:
+            return False
+
     def _validate_excel_ai_config(self, cfg=None):
         cfg = cfg or self.config_data
+        # ⚠ Cổng này ra đời TRƯỚC nhánh shopapi nên nó chỉ biết ba nguồn cũ, và
+        # nhánh rơi cuối cùng là "Can DeepSeek API key". Excel đi shopapi mà vẫn
+        # bị đòi khoá DeepSeek là chặn oan — càng oan sau khi đã dọn sạch khoá
+        # DeepSeek khỏi kho mã.
+        #
+        # `self.config_data` KHÔNG chứa `excel_engine`/`claude_cli_backend` (hai
+        # khoá đó chỉ sinh ra trong `_build_excel_runtime_config`), nên phải hỏi
+        # đúng cấu hình runtime thì mới thấy được sự thật.
+        if cfg is self.config_data:
+            try:
+                cfg = self._build_excel_runtime_config()
+            except Exception:
+                pass
+        if self._excel_di_shopapi(cfg):
+            return True, ""
         provider = self._resolve_excel_ai_provider(cfg)
         if provider == "vov_direct":
             base_url = str(cfg.get("vov_direct_base_url", "") or "").strip()
@@ -6147,7 +6185,10 @@ Get-CimInstance Win32_Process |
 
         cfg = self._build_cfg()
         if not cfg: return
-        if not cfg.get("local_server_url") and not cfg.get("local_server_list"):
+        # Đi toàn API shopapi thì KHÔNG có bước nào chạm tới server Chrome.
+        # Xem chú thích ở `_chi_dung_shopapi`.
+        if (not cfg.get("local_server_url") and not cfg.get("local_server_list")
+                and not self._chi_dung_shopapi(cfg)):
             messagebox.showwarning("Thieu server", "Them server trong Cai dat truoc!"); return
 
         self.config_data.update({
@@ -6682,7 +6723,9 @@ Get-CimInstance Win32_Process |
         cfg = self._build_cfg()
         if not cfg:
             return
-        if not cfg.get("local_server_url") and not cfg.get("local_server_list"):
+        chi_shopapi = self._chi_dung_shopapi(cfg)
+        if (not cfg.get("local_server_url") and not cfg.get("local_server_list")
+                and not chi_shopapi):
             messagebox.showwarning("Thieu server", "Them server trong Cai dat truoc!")
             return
         online_count = sum(1 for s in self.server_status_cache if s.get("available"))

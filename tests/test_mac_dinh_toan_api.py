@@ -193,3 +193,60 @@ def test_kho_khoa_hong_thi_chan_chu_khong_no(cong, monkeypatch):
 
     monkeypatch.setattr(sc, "doc_khoa", no)
     assert cong(None, dict(CA_HAI_SHOPAPI)) is False
+
+
+# ── Cổng "Thiếu server" và cổng "Thiếu cấu hình AI" cũng phải biết shopapi ───
+#
+# Sau khi go duoc cong token, chu du an dam tiep vao "Them server trong Cai dat
+# truoc!" — cung mot loai loi: cong ra doi TRUOC nhanh shopapi.
+#
+# Di toan API thi khong buoc nao cham toi mot server Chrome, va `excel_ai_provider`
+# (DeepSeek/VOV/Claude Pool) khong duoc dung toi mot lan nao.
+
+
+@pytest.fixture
+def cong_excel():
+    import sys
+    VE3 = Path(__file__).resolve().parents[1] / "tools" / "ve3"
+    if str(VE3) not in sys.path:
+        sys.path.insert(0, str(VE3))
+    import ve3_gui
+    return ve3_gui.VE3App._excel_di_shopapi
+
+
+EXCEL_API = {"excel_engine": "claude_cli", "claude_cli_backend": "api_shop"}
+
+
+def test_excel_di_shopapi_thi_khong_doi_khoa_provider_cu(cong_excel):
+    assert cong_excel(None, dict(EXCEL_API)) is True
+
+
+def test_excel_api_shop_cli_cung_tinh(cong_excel):
+    assert cong_excel(None, dict(EXCEL_API, claude_cli_backend="api_shop_cli")) is True
+
+
+@pytest.mark.parametrize("ten, cfg", [
+    ("engine cu (DeepSeek/VOV nhieu buoc)", {"excel_engine": "api", "claude_cli_backend": "api_shop"}),
+    ("van chay claude.exe", {"excel_engine": "claude_cli", "claude_cli_backend": "cli"}),
+    ("di VOV", {"excel_engine": "claude_cli", "claude_cli_backend": "api"}),
+    ("di DeepSeek", {"excel_engine": "claude_cli", "claude_cli_backend": "api_ds"}),
+])
+def test_excel_khong_di_shopapi_thi_van_kiem_nhu_cu(cong_excel, ten, cfg):
+    assert cong_excel(None, cfg) is False, ten
+
+
+def test_excel_chua_co_khoa_thi_van_kiem_nhu_cu(cong_excel, monkeypatch):
+    import sys
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "veo3top_engine"))
+    import shopapi_common as sc
+    monkeypatch.setattr(sc, "doc_khoa", lambda env=None: ("", ""))
+    assert cong_excel(None, dict(EXCEL_API)) is False
+
+
+def test_khoa_dat_thang_trong_cfg_cung_duoc_chap_nhan(cong_excel, monkeypatch):
+    """Không phụ thuộc kho khoá: worker headless nhận khoá qua runtime config."""
+    import sys
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "veo3top_engine"))
+    import shopapi_common as sc
+    monkeypatch.setattr(sc, "doc_khoa", lambda env=None: ("", ""))
+    assert cong_excel(None, dict(EXCEL_API, shopapi_api_key="sk_live_abc123def456ghi")) is True

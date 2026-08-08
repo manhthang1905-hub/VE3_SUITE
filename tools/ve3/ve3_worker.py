@@ -1316,8 +1316,13 @@ Generator/context error:
         """
         result = {"success": False, "total": 0, "completed": 0, "failed": 0, "errors": []}
 
+        # ⚠ `use_veo3top_for_image` KHÔNG bao gồm shopapi — nó chỉ là
+        # `("blank", "account", "pool")`. Thiếu vế shopapi ở đây thì chạy toàn
+        # API vẫn chết với "Khong co server URL", dù không có bước nào cần tới
+        # một server Chrome nào cả.
         if (not self.pool and not self.flowkit_pool and self.generation_backend != "nanopic"
                 and not self.use_veo3top_for_image
+                and not self.use_shopapi_for_image
                 and not self._should_try_nanopic_fallback("No server available")):
             result["errors"].append("Khong co server URL")
             return result
@@ -3690,9 +3695,16 @@ Generator/context error:
         Job hong that thi chi minh no hong, khong keo ca me chet theo.
         """
         sb = _shopapi_nap_batch()
+        # `han_giay` = tool chờ MỘT job tối đa bao lâu. Cổng hàng chờ so nó với
+        # `estimated_seconds` máy chủ trả lúc nhận job: máy chủ nói "còn 1.500
+        # giây nữa mới tới lượt" trong khi ta chỉ chờ được 900/1.600 giây thì
+        # gửi thêm là gửi job đi chết trong hàng. Đây chính là 14 job "vượt quá
+        # thời gian chờ" của sự cố 07/08/2026 — xem `shopapi_batch.CongHangCho`.
+        han_giay = (self.shopapi_video_timeout if loai == "video"
+                    else self.shopapi_image_timeout)
         return sb.chay_ca_me(
             viec, chay_mot, loai, tran_tool=tran_tool, api_key=self.shopapi_key,
-            log=self.log,
+            log=self.log, han_giay=han_giay,
             ngu=lambda giay: self._sleep_with_stop(giay),
             dung_lai=lambda: bool(self._stop_flag),
         )
