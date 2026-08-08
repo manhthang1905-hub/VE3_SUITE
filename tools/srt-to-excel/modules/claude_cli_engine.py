@@ -81,7 +81,7 @@ _MA_KHONG_THU_LAI = frozenset({400, 401, 402, 403, 404, 409, 422})
 
 #: Trần một quãng chờ giữa hai lần thử (giây). Đủ dài để qua một nhịp nghẽn,
 #: đủ ngắn để một khúc Excel không treo vô tận khi máy chủ chết hẳn.
-_CHO_TOI_DA = 45.0
+_CHO_TOI_DA = 60.0
 
 #: MỌI model shopapi đang bán, xếp theo GIÁ TĂNG DẦN (₫ / 1 triệu token output):
 #: sonnet 4.200 · opus 5.600 · fable 8.400 · gpt-5.6 8.400.
@@ -264,14 +264,26 @@ class ClaudeCliEngine:
                 self.config.get("claude_cli_api_model")
                 or self.model or "claude-sonnet-4-6"
             ).strip()
-        # Số lần thử một lời gọi API. Mặc định 6: đo thật ngày 07/08/2026 cho
-        # thấy 5 luồng song song vào shopapi làm 17/20 lượt ăn 502/503, và máy
-        # chủ tự nói "thử lại sau ít phút". 6 lần với quãng lùi tới 45s cho ~2
-        # phút kiên nhẫn — đủ qua một nhịp nghẽn mà không treo cả mẻ.
+        # Số VÒNG thử (mỗi vòng quét hết chuỗi model). Mặc định 10.
+        #
+        # ⚠ 6 VÒNG LÀ KHÔNG ĐỦ — ĐO THẬT 08/08/2026.
+        # Route LLM của shopapi sập từng đợt rồi tự hồi. Bấm giờ trong ~15 phút:
+        #
+        #     13:18  cả 4 model 200
+        #     13:25  prompt lớn, 1 luồng -> 0/2
+        #     13:30  MỌI thứ 503 — kể cả prompt 10 ký tự, max_tokens=100
+        #     13:32  200 trở lại
+        #
+        # Tức là sập TOÀN BỘ, không phân biệt model/kích thước/streaming (đã đo
+        # và loại cả ba). 6 vòng × trần 45s chỉ chịu được ~2 phút, ngắn hơn cửa
+        # sổ sập, nên cả mẻ Excel chết oan dù chỉ cần đợi thêm chút.
+        #
+        # 10 vòng với trần 60s cho ~5 phút kiên nhẫn. Một khúc Excel nằm chờ 5
+        # phút vẫn hơn hẳn hỏng cả mã rồi phải chạy lại từ đầu.
         try:
-            self.api_retries = max(1, int(self.config.get("claude_cli_api_retries", 6) or 6))
+            self.api_retries = max(1, int(self.config.get("claude_cli_api_retries", 10) or 10))
         except Exception:
-            self.api_retries = 6
+            self.api_retries = 10
         try:
             self.api_max_tokens = int(self.config.get("claude_cli_api_max_tokens", 16000) or 16000)
         except Exception:

@@ -257,8 +257,10 @@ def test_quang_cho_dai_dan_va_co_tran(Engine, monkeypatch):
     cho = [int(s) for s in hop["ngu"]]
     assert cho == sorted(cho), f"quang cho phai DAI DAN: {hop['ngu']}"
     assert cho[0] >= 2, "nhip dau phai >=2s; 1s la qua ngan cho 'thu lai sau it phut'"
-    assert max(cho) <= 46, "phai co tran, khong duoc cho vo tan"
-    assert sum(cho) >= 60, "tong kien nhan phai qua duoc mot nhip nghen"
+    assert max(cho) <= 61, "phai co tran, khong duoc cho vo tan"
+    # Cua so sap cua route LLM do duoc la VAI PHUT (08/08/2026), nen tong kien
+    # nhan phai tinh bang phut chu khong phai giay.
+    assert sum(cho) >= 120, f"tong kien nhan qua ngan cho mot cua so sap: {sum(cho)}s"
 
 
 def test_retry_after_cua_may_chu_thang_con_so_tu_tinh(Engine, monkeypatch):
