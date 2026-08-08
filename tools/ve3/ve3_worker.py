@@ -885,10 +885,15 @@ class VE3Worker:
             return None
 
         base = str(self.config.get("shopapi_base_url") or "https://api.shopapi.vn/v1").strip().rstrip("/")
-        # Cùng chuỗi model với engine Excel: các model nghẽn ĐỘC LẬP nhau, nên
-        # con này bận thì con kia gần như luôn rảnh (đo: 12/12 vòng có ít nhất
-        # một model sống, 0/12 cả hai cùng chết).
-        chuoi = self.config.get("shopapi_model_chain") or ["claude-sonnet-5", "claude-opus-5"]
+        # MỌI model shopapi, rẻ trước đắt sau — cùng danh sách với engine Excel
+        # (`claude_cli_engine._CHUOI_MODEL_MAC_DINH`), sửa thì sửa cả hai.
+        #
+        # ⚠ PHẢI ĐỦ CẢ BỐN. Đo thật 08/08/2026: sonnet-5 và opus-5 CÙNG chết
+        # (0/4 mỗi con) trong khi fable-5 vẫn phục vụ. Chuỗi hai model trượt
+        # sạch dù ngay cạnh có model đang rảnh. Cửa sổ nghẽn rất ngắn và rải
+        # không đều giữa các cụm -> càng nhiều cửa để gõ càng khó trượt hết.
+        chuoi = self.config.get("shopapi_model_chain") or [
+            "claude-sonnet-5", "claude-opus-5", "claude-fable-5", "gpt-5.6"]
         timeout_seconds = int(self.config.get("excel_ai_timeout_seconds", 180) or 180)
         headers = {"Authorization": f"Bearer {khoa}", "Content-Type": "application/json"}
 

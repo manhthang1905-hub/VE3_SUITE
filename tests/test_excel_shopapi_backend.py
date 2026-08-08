@@ -410,9 +410,12 @@ def test_chi_ngu_khi_CA_CHUOI_model_deu_nghen(Engine, monkeypatch):
     with pytest.raises(RuntimeError):
         eng._run_via_api("bat ky")
 
-    # 3 vong x 2 model = 6 lan goi; ngu 2 lan (giua cac vong, khong ngu sau vong chot).
-    assert len(da_goi) == 6, da_goi
-    assert da_goi.count("claude-sonnet-5") == 3 and da_goi.count("claude-opus-5") == 3
+    # 3 vong x N model; ngu 2 lan (giua cac vong, khong ngu sau vong chot).
+    so_model = len(eng._chuoi_model())
+    assert so_model >= 4, "chuoi phai gom MOI model shopapi, xem _CHUOI_MODEL_MAC_DINH"
+    assert len(da_goi) == 3 * so_model, da_goi
+    for m in eng._chuoi_model():
+        assert da_goi.count(m) == 3, f"moi vong phai thu lai {m}: {da_goi}"
     assert len(da_ngu) == 2, f"chi ngu giua cac vong: {da_ngu}"
 
 
@@ -423,3 +426,60 @@ def test_loi_khong_cuu_duoc_dung_ngay_khong_thu_model_con_lai(Engine, monkeypatc
     with pytest.raises(RuntimeError, match="HTTP 402"):
         eng._run_via_api("bat ky")
     assert hop["n"] == 1, f"het tien thi dung ngay, doi model cung the: {hop['n']} lan"
+
+
+# ── Chuỗi model phải gồm MỌI model shopapi ───────────────────────────────────
+#
+# ĐO THẬT 08/08/2026, dung luc chu du an chay that:
+#     claude-sonnet-5  0/4  [503, 503, 503, 503]
+#     claude-opus-5    0/4  [503, 503, 503, 503]
+#     claude-fable-5   2/4  [503, 503, 200, 200]   <-- con DUY NHAT con song
+# Chuoi hai model truot sach du ngay canh co model dang phuc vu. Mot phut sau
+# ca bon deu 200 -> cua so nghen RAT NGAN va RAI KHONG DEU giua cac cum.
+
+
+def test_chuoi_gom_moi_model_shopapi(Engine):
+    ds = Engine({"claude_cli_backend": "api_shop"})._chuoi_model()
+    for m in ("claude-sonnet-5", "claude-opus-5", "claude-fable-5", "gpt-5.6"):
+        assert m in ds, f"thieu {m} -> mat mot cua thoat khi cum khac chet: {ds}"
+
+
+def test_re_truoc_dat_sau(Engine):
+    """Chỉ leo lên model đắt khi model rẻ thật sự không dùng được."""
+    ds = Engine({"claude_cli_backend": "api_shop"})._chuoi_model()
+    assert ds.index("claude-sonnet-5") < ds.index("claude-opus-5") < ds.index("claude-fable-5")
+
+
+def test_hai_model_dau_chet_thi_model_thu_ba_van_cuu_duoc(Engine, monkeypatch):
+    """Dung kich ban da xay ra that: sonnet + opus cung 503, fable con song."""
+    import requests as _rq, time as _t
+    da_goi = []
+
+    def post(url, headers=None, json=None, **k):
+        m = (json or {})["model"]
+        da_goi.append(m)
+        if m in ("claude-sonnet-5", "claude-opus-5"):
+            return _DemResp(503)
+        return _RespGia(200, ['data: {"choices":[{"delta":{"content":"cuu duoc"}}]}',
+                              "data: [DONE]"])
+
+    monkeypatch.setattr(_rq, "post", post)
+    monkeypatch.setattr(_t, "sleep", lambda *_: None)
+
+    eng = Engine({"claude_cli_backend": "api_shop", "shopapi_api_key": "sk_live_gia"})
+    assert eng._run_via_api("bat ky") == "cuu duoc"
+    assert da_goi[:3] == ["claude-sonnet-5", "claude-opus-5", "claude-fable-5"], da_goi
+
+
+def test_hai_ban_chuoi_model_phai_KHOP_nhau(Engine):
+    """`ve3_worker._call_shopapi_rewrite` giữ một bản chép của cùng danh sách —
+    lệch nhau là một bên mất cửa thoát mà không ai thấy."""
+    import re as _re
+    from pathlib import Path as _P
+
+    ds_engine = Engine({"claude_cli_backend": "api_shop"})._chuoi_model()
+    nguon = (_P(__file__).resolve().parents[1] / "tools" / "ve3" / "ve3_worker.py").read_text(
+        encoding="utf-8", errors="replace")
+    khoi = nguon.split('shopapi_model_chain") or [', 1)[1].split("]", 1)[0]
+    ds_worker = _re.findall(r'"([^"]+)"', khoi)
+    assert ds_worker == ds_engine, f"engine={ds_engine} worker={ds_worker}"

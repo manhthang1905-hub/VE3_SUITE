@@ -83,6 +83,23 @@ _MA_KHONG_THU_LAI = frozenset({400, 401, 402, 403, 404, 409, 422})
 #: đủ ngắn để một khúc Excel không treo vô tận khi máy chủ chết hẳn.
 _CHO_TOI_DA = 45.0
 
+#: MỌI model shopapi đang bán, xếp theo GIÁ TĂNG DẦN (₫ / 1 triệu token output):
+#: sonnet 4.200 · opus 5.600 · fable 8.400 · gpt-5.6 8.400.
+#:
+#: ⚠ PHẢI ĐỦ CẢ BỐN, ĐỪNG RÚT NGẮN — ĐO THẬT 08/08/2026.
+#: Bản đầu chỉ có `[sonnet-5, opus-5]`. Đúng lúc chủ dự án chạy thật:
+#:
+#:     claude-sonnet-5  0/4  [503, 503, 503, 503]
+#:     claude-opus-5    0/4  [503, 503, 503, 503]
+#:     claude-fable-5   2/4  [503, 503, 200, 200]   <-- con DUY NHAT con song
+#:
+#: Chuỗi hai model trượt sạch, trong khi có một model đang phục vụ bình thường
+#: ngay cạnh. Một phút sau cả bốn đều 200 — nghĩa là cửa sổ nghẽn RẤT NGẮN và
+#: RẢI KHÔNG ĐỀU giữa các cụm. Càng nhiều cửa để gõ càng khó trượt hết.
+#:
+#: Rẻ trước đắt sau: chỉ leo lên model đắt khi model rẻ thật sự không dùng được.
+_CHUOI_MODEL_MAC_DINH = ("claude-sonnet-5", "claude-opus-5", "claude-fable-5", "gpt-5.6")
+
 
 class _LoiTamThoi(RuntimeError):
     """Nghẽn / lỗi mạng — thử lại (hoặc đổi model) thì có cửa.
@@ -834,9 +851,7 @@ JSON RULES:
         if self.backend in ("api_shop", "api_shop_cli"):
             them = self.config.get("shopapi_model_chain")
             if them is None:
-                # `opus-5` là dự phòng: cụm khác `sonnet-5` nên hiếm khi cùng
-                # chết, và vẫn thừa sức cho việc viết prompt tả cảnh.
-                them = ["claude-sonnet-5", "claude-opus-5"]
+                them = list(_CHUOI_MODEL_MAC_DINH)
             ds.extend(str(m).strip() for m in them if str(m).strip())
         ra = []
         for m in ds:
