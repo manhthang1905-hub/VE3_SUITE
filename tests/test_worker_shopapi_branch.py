@@ -405,3 +405,81 @@ def test_hai_ham_ref_phai_dong_y_voi_nhau(tmp_path, nhat_ky, co_khoa):
     ref = w._make_ref("nv1", "")
     assert ref.base64_data, "_make_ref phai nhung bytes o che do shopapi"
     assert w._pool_ref_local("nv1") is True, "nhung duoc bytes thi PHAI coi la co ref"
+
+
+# ── Viết lại prompt vi phạm policy: shopapi phải là nguồn ĐẦU TIÊN ───────────
+#
+# ĐO THẬT 07/08/2026 (TL1-0742): 145/147 anh ra ngon, hai canh chet vi bo loc:
+#     Scene 4: prompt co dau hieu vi pham policy, thu viet lai (vong 1/3)
+#     Scene 4: khong viet lai duoc prompt hop le
+#     Scene 4 FAIL [failed: TERMINAL policy]
+# May NHAN DIEN policy chay dung, nhung khau VIET LAI khong co nguon nao dung
+# duoc: danh sach chi co VOV / Claude Pool / DeepSeek / claude.exe. Chay toan
+# API thi DeepSeek het khoa, claude.exe khong cai -> ba vong deu truot.
+
+
+def _thu_tu_provider(w):
+    """Tên các provider `_call_rewrite_llm` thử, theo đúng thứ tự."""
+    ten = []
+    for n in ("_call_shopapi_rewrite", "_call_claude_cli_rewrite", "_call_vov_direct_rewrite",
+              "_call_claude_pool_rewrite", "_call_deepseek_rewrite"):
+        setattr(w, n, (lambda nn: (lambda *a, **k: (ten.append(nn), None)[1]))(n))
+    w._call_rewrite_llm("viet lai giup")
+    return ten
+
+
+def test_shopapi_dung_DAU_khi_chay_toan_api(tmp_path, nhat_ky, co_khoa):
+    """Luc nay no la nguon DUY NHAT chac chan dung duoc — tool vua goi no hang
+    tram lan bang dung khoa do de tao chinh may tam anh nay."""
+    w = _worker(tmp_path, nhat_ky, {"excel_engine": "claude_cli"})
+    assert _thu_tu_provider(w)[0] == "_call_shopapi_rewrite"
+
+
+def test_thieu_khoa_thi_KHONG_chen_shopapi_len_dau(tmp_path, nhat_ky, khong_khoa):
+    """Không khoá thì nó chắc chắn trả None — đẩy lên đầu chỉ tổ phí một vòng."""
+    w = _worker(tmp_path, nhat_ky, {"excel_engine": "claude_cli"})
+    assert _thu_tu_provider(w)[0] != "_call_shopapi_rewrite"
+
+
+def test_khong_co_khoa_thi_tra_None_de_di_tiep_provider_sau(tmp_path, nhat_ky, khong_khoa):
+    """Giao kèo của mọi provider: thiếu cấu hình -> `None`, KHÔNG ném lỗi."""
+    w = _worker(tmp_path, nhat_ky)
+    assert w._call_shopapi_rewrite("bat ky") is None
+
+
+def test_mot_model_nghen_thi_doi_model_con_lai(tmp_path, nhat_ky, co_khoa, monkeypatch):
+    import requests as _rq
+    da = []
+
+    class _R:
+        def __init__(self, ma, noi_dung=""):
+            self.status_code = ma
+            self._nd = noi_dung
+
+        def json(self):
+            return {"choices": [{"message": {"content": self._nd}}]}
+
+    def post(url, headers=None, json=None, timeout=None):
+        m = (json or {})["model"]
+        da.append(m)
+        return _R(503) if m == "claude-sonnet-5" else _R(200, "cau da viet lai")
+
+    monkeypatch.setattr(_rq, "post", post)
+    w = _worker(tmp_path, nhat_ky)
+    assert w._call_shopapi_rewrite("viet lai") == "cau da viet lai"
+    assert da == ["claude-sonnet-5", "claude-opus-5"], da
+
+
+def test_nhan_ca_ma_201(tmp_path, nhat_ky, co_khoa, monkeypatch):
+    """api.shopapi.vn tung tra 201 — bam dung 200 la vut ket qua hop le."""
+    import requests as _rq
+
+    class _R:
+        status_code = 201
+
+        def json(self):
+            return {"choices": [{"message": {"content": "  cau   moi  "}}]}
+
+    monkeypatch.setattr(_rq, "post", lambda *a, **k: _R())
+    w = _worker(tmp_path, nhat_ky)
+    assert w._call_shopapi_rewrite("viet lai") == "cau moi"

@@ -765,6 +765,20 @@ class VE3Worker:
             providers = [("Claude CLI", self._call_claude_cli_rewrite)] + \
                         [p for p in providers if p[0] != "Claude CLI"]
 
+        # shopapi ĐỨNG ĐẦU khi tool đang chạy toàn API.
+        #
+        # Không phải để "ưu ái": lúc đó nó là nguồn DUY NHẤT chắc chắn dùng
+        # được. claude.exe có thể chưa cài, DeepSeek đã bỏ khoá, VOV/Pool là
+        # dịch vụ ngoài. Còn shopapi thì tool VỪA gọi thành công hàng trăm lần
+        # bằng đúng khoá đó để tạo chính mấy tấm ảnh này.
+        #
+        # Đặt sau lưng chúng nó thì ba vòng viết lại tiêu hết vào các nguồn chết
+        # rồi bỏ cuộc — đúng chuyện đã xảy ra với Scene 4 và Scene 52.
+        if (self.use_shopapi_for_image or self.use_shopapi_for_video) and \
+                (getattr(self, "shopapi_key", "") or "").strip():
+            providers = [("shopapi", self._call_shopapi_rewrite)] + \
+                        [p for p in providers if p[0] != "shopapi"]
+
         for idx, (provider_name, provider_func) in enumerate(providers):
             rewritten = provider_func(instruction, temperature=temperature, max_tokens=max_tokens)
             if rewritten:
@@ -839,6 +853,70 @@ class VE3Worker:
                     return cleaned
             except Exception as e:
                 self.log(f"    [DEEPSEEK] key #{idx} loi: {type(e).__name__}: {e}", "WARN")
+        return None
+
+    def _call_shopapi_rewrite(self, instruction: str, temperature: float = 0.3,
+                              max_tokens: int = 700) -> Optional[str]:
+        """Viết lại prompt bằng LLM của api.shopapi.vn — CÙNG khoá đang trả tiền ảnh.
+
+        ⚠ VÌ SAO PHẢI CÓ — ĐO THẬT 07/08/2026 (project TL1-0742)
+        --------------------------------------------------------
+        145/147 ảnh ra ngon; hai cảnh còn lại chết vì bộ lọc nội dung::
+
+            Scene 4:  prompt co dau hieu vi pham policy, thu viet lai (vong 1/3)
+            Scene 4:  khong viet lai duoc prompt hop le
+            Scene 4 FAIL [failed: TERMINAL policy]
+
+        Máy nhận diện policy chạy đúng, nhưng khâu VIẾT LẠI thì không có nguồn
+        nào dùng được: danh sách provider chỉ có VOV / Claude Pool / DeepSeek /
+        claude.exe. Chạy toàn API thì DeepSeek không còn khoá, claude.exe không
+        cài, nên cả ba vòng viết lại đều trượt và cảnh mất trắng.
+
+        Vô lý ở chỗ: tool ĐANG nói chuyện với một LLM chạy tốt bằng đúng khoá
+        đó, chỉ là chưa ai nối vào đây.
+
+        Trả `None` khi thiếu khoá/SDK để `_call_rewrite_llm` đi tiếp provider sau
+        — đúng giao kèo của các provider còn lại.
+        """
+        import requests
+
+        khoa = (getattr(self, "shopapi_key", "") or "").strip()
+        if not khoa:
+            return None
+
+        base = str(self.config.get("shopapi_base_url") or "https://api.shopapi.vn/v1").strip().rstrip("/")
+        # Cùng chuỗi model với engine Excel: các model nghẽn ĐỘC LẬP nhau, nên
+        # con này bận thì con kia gần như luôn rảnh (đo: 12/12 vòng có ít nhất
+        # một model sống, 0/12 cả hai cùng chết).
+        chuoi = self.config.get("shopapi_model_chain") or ["claude-sonnet-5", "claude-opus-5"]
+        timeout_seconds = int(self.config.get("excel_ai_timeout_seconds", 180) or 180)
+        headers = {"Authorization": f"Bearer {khoa}", "Content-Type": "application/json"}
+
+        for model_name in chuoi:
+            try:
+                resp = requests.post(
+                    f"{base}/chat/completions", headers=headers, timeout=timeout_seconds,
+                    json={
+                        "model": model_name,
+                        "messages": [{"role": "user", "content": instruction}],
+                        "temperature": temperature,
+                        "max_tokens": max_tokens,
+                    })
+            except Exception as e:
+                self.log(f"    [REWRITE] shopapi {model_name} loi mang: {str(e)[:90]}", "WARN")
+                continue
+            # 2xx chu khong phai dung 200: api.shopapi.vn tung tra 201.
+            if not (200 <= resp.status_code < 300):
+                self.log(f"    [REWRITE] shopapi {model_name} HTTP {resp.status_code} -> doi model", "WARN")
+                continue
+            try:
+                choices = (resp.json().get("choices") or [])
+                content = (((choices[0] or {}).get("message") or {}).get("content") or "") if choices else ""
+            except Exception:
+                content = ""
+            rewritten = re.sub(r"\s+", " ", content).strip().strip('"').strip()
+            if rewritten:
+                return rewritten
         return None
 
     def _call_vov_direct_rewrite(self, instruction: str, temperature: float = 0.3, max_tokens: int = 700) -> Optional[str]:
