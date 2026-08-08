@@ -240,3 +240,108 @@ def test_worker_nhan_ra_day_la_loi_policy_de_bat_duong_viet_lai(sc, ten_lop, thu
     msg = sc.mo_ta_loi(_loi_gia(ten_lop, "Mô tả của bạn bị chặn.", **thuoc_tinh))
     # Gọi như hàm thuần: nó chỉ soi chuỗi, không đụng gì tới trạng thái worker.
     assert VE3Worker._is_policy_violation_error(None, msg) is True
+
+
+# ── Tải kết quả: PHẢI thử lại ────────────────────────────────────────────────
+#
+# ĐÃ MẤT ẢNH ĐÃ TRẢ TIỀN VÌ THIẾU (07/08/2026). Nguyên văn:
+#
+#   shopapi-img: tai ket qua ve dia that bai:
+#   RemoteProtocolError: peer closed connection without sending complete message
+#
+# Job da `succeeded`, anh da sinh ra, tien da tru — roi kho luu tru dut ket noi
+# giua luc tai. Ban cu thu DUNG MOT LAN nen mat sach ca 64 giay cho lan so tien
+# do vi mot cu hiccup mang vai mili giay. Day la kieu hong te nhat trong mot me
+# lon: no xay ra SAU KHI moi viec kho da xong.
+
+
+class _LuongGia:
+    """Giả một lượt tải: có thể đứt giữa chừng, hoặc trả mã lỗi."""
+
+    def __init__(self, dem, dut_toi_lan, ma=200):
+        self.dem = dem
+        self.dut_toi_lan = dut_toi_lan
+        self.status_code = ma
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *a):
+        return False
+
+    def iter_bytes(self, n):
+        yield b"PHAN-DAU"
+        if self.dem["n"] <= self.dut_toi_lan:
+            raise RuntimeError("peer closed connection without sending complete message")
+        yield b"-PHAN-CUOI"
+
+
+def _httpx_gia(dem, dut_toi_lan=0, ma=200):
+    class _Client:
+        def __init__(self, **k):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def stream(self, method, url):
+            dem["n"] += 1
+            return _LuongGia(dem, dut_toi_lan, ma)
+
+    import types
+    return types.SimpleNamespace(Client=_Client)
+
+
+def _tai(sc, url, dest, httpx_gia, so_lan=4):
+    """Chạy đúng vòng thử lại của `tai_ve` nhưng tiêm httpx giả (không ra mạng)."""
+    loi = None
+    for lan in range(so_lan):
+        try:
+            return sc._tai_ve_mot_lan(url, str(dest) + ".part", str(dest), 1.0, httpx_gia)
+        except sc._KhongTaiLai:
+            raise
+        except Exception as e:
+            loi = e
+    raise loi
+
+
+def test_dut_giua_chung_thi_tai_lai_chu_khong_mat_anh_da_tra_tien(sc, tmp_path):
+    dem = {"n": 0}
+    dich = tmp_path / "anh.png"
+
+    _tai(sc, "http://kho/anh.png", dich, _httpx_gia(dem, dut_toi_lan=2))
+
+    assert dich.exists(), "phai cuu duoc anh sau khi kho luu tru dut ket noi"
+    assert dich.read_bytes() == b"PHAN-DAU-PHAN-CUOI", "file phai DU, khong duoc cut dau"
+    assert dem["n"] == 3, "phai thu lai den khi duoc, khong bo cuoc o lan dau"
+
+
+def test_khong_bao_gio_de_lai_file_do_dang(sc, tmp_path):
+    """Nơi gọi chỉ kiểm `exists()` — một `.part` sót lại trông y hệt đã tải xong."""
+    dem = {"n": 0}
+    dich = tmp_path / "anh.png"
+
+    with pytest.raises(Exception):
+        _tai(sc, "http://kho/anh.png", dich, _httpx_gia(dem, dut_toi_lan=99), so_lan=2)
+
+    assert not dich.exists()
+    assert not (tmp_path / "anh.png.part").exists(), "phai don .part khi hong"
+
+
+def test_404_thi_dung_ngay_khong_tai_lai(sc, tmp_path):
+    """Link hết hạn/sai thì tải lại cũng vẫn thế — chỉ tổ chậm."""
+    dem = {"n": 0}
+    with pytest.raises(sc._KhongTaiLai):
+        _tai(sc, "http://kho/mat-roi.png", tmp_path / "x.png", _httpx_gia(dem, ma=404))
+    assert dem["n"] == 1
+
+
+def test_5xx_thi_van_tai_lai(sc, tmp_path):
+    """Kho lưu trữ trục trặc tạm — khác hẳn link hỏng."""
+    dem = {"n": 0}
+    with pytest.raises(Exception):
+        _tai(sc, "http://kho/anh.png", tmp_path / "x.png", _httpx_gia(dem, ma=503), so_lan=3)
+    assert dem["n"] == 3

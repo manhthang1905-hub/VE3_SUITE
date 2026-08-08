@@ -30,6 +30,7 @@ from __future__ import annotations
 import os
 import re
 import sys
+import time
 
 __all__ = [
     "bootstrap_sdk",
@@ -500,7 +501,11 @@ def tao_va_cho(client, ten_tai_nguyen, timeout, on_progress=None, on_hang_cho=No
 # ── Tải file kết quả ──────────────────────────────────────────────────────────
 
 
-def tai_ve(url, dest_path, timeout=600.0):
+#: Số lần thử tải một file kết quả. Xem chú thích trong :func:`tai_ve`.
+TAI_VE_SO_LAN = 4
+
+
+def tai_ve(url, dest_path, timeout=600.0, so_lan=None, ngu=None):
     """Tải `url` về `dest_path`, trả lại đường dẫn thật đã ghi.
 
     ⚠ Link kết quả của ShopAPI **sống 7 ngày** rồi bị xoá. Đó là lý do tool tải
@@ -509,6 +514,23 @@ def tai_ve(url, dest_path, timeout=600.0):
 
     Ghi ra `.part` rồi mới đổi tên → không bao giờ để lại file dở dang trông như
     đã tải xong (caller chỉ kiểm `output_path.exists()`).
+
+    ⚠ PHẢI THỬ LẠI — ĐÃ MẤT ẢNH ĐÃ TRẢ TIỀN VÌ THIẾU (07/08/2026)
+    -------------------------------------------------------------
+    Đo thật, nguyên văn::
+
+        shopapi-img: tai ket qua ve dia that bai:
+        RemoteProtocolError: peer closed connection without sending complete message
+
+    Job đã **succeeded**, ảnh đã sinh ra, tiền đã trừ — rồi kho lưu trữ đứt kết
+    nối giữa lúc tải. Bản cũ chỉ thử ĐÚNG MỘT LẦN nên ném lỗi luôn, và cả 64
+    giây chờ lẫn số tiền đó bay sạch vì một cú hiccup mạng vài mili giây.
+
+    Đây là kiểu hỏng tệ nhất trong một mẻ lớn: mỗi lần trượt là mất tiền thật,
+    và nó xảy ra ở chỗ **sau khi mọi việc khó đã xong**.
+
+    Chỉ thử lại lỗi MẠNG và `5xx`. `404` thì thôi — link hết hạn hoặc sai, gọi
+    lại chỉ tổ chậm.
     """
     folder = os.path.dirname(os.path.abspath(str(dest_path)))
     if folder:
@@ -520,15 +542,36 @@ def tai_ve(url, dest_path, timeout=600.0):
     except ImportError:
         httpx = None
 
+    lan_toi_da = int(so_lan or TAI_VE_SO_LAN)
+    cho = ngu or time.sleep
+    loi_cuoi = None
+    for lan in range(lan_toi_da):
+        try:
+            return _tai_ve_mot_lan(url, temp_path, dest_path, timeout, httpx)
+        except _KhongTaiLai:
+            raise
+        except Exception as exc:
+            loi_cuoi = exc
+            if lan < lan_toi_da - 1:
+                cho(min(8.0, 2.0 ** lan))
+    raise loi_cuoi
+
+
+class _KhongTaiLai(IOError):
+    """Kho lưu trữ trả `4xx` — tải lại cũng vẫn thế (link hết hạn / sai)."""
+
+
+def _tai_ve_mot_lan(url, temp_path, dest_path, timeout, httpx):
+    """Đúng MỘT lượt tải. Dọn `.part` khi hỏng để lần sau bắt đầu sạch."""
     try:
         if httpx is not None:
             with httpx.Client(timeout=timeout, follow_redirects=True) as http:
                 with http.stream("GET", url) as response:
                     if response.status_code >= 400:
-                        raise IOError(
-                            "Kho luu tru tra ma {0} khi tai ket qua. Link ket qua chi "
-                            "song 7 ngay.".format(response.status_code)
-                        )
+                        loi = ("Kho luu tru tra ma {0} khi tai ket qua. Link ket qua chi "
+                               "song 7 ngay.".format(response.status_code))
+                        # 4xx: link het han/sai -> tai lai cung the. 5xx thi thu lai.
+                        raise (_KhongTaiLai(loi) if response.status_code < 500 else IOError(loi))
                     with open(temp_path, "wb") as handle:
                         for chunk in response.iter_bytes(_CHUNK):
                             handle.write(chunk)
@@ -536,9 +579,8 @@ def tai_ve(url, dest_path, timeout=600.0):
             import requests  # dự phòng: requests đã có sẵn trong requirements.txt
             response = requests.get(url, stream=True, timeout=timeout)
             if response.status_code >= 400:
-                raise IOError(
-                    "Kho luu tru tra ma {0} khi tai ket qua.".format(response.status_code)
-                )
+                loi = "Kho luu tru tra ma {0} khi tai ket qua.".format(response.status_code)
+                raise (_KhongTaiLai(loi) if response.status_code < 500 else IOError(loi))
             with open(temp_path, "wb") as handle:
                 for chunk in response.iter_content(_CHUNK):
                     if chunk:
