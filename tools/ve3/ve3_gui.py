@@ -2171,7 +2171,10 @@ class SettingsPage(ctk.CTkScrollableFrame):
             ctk.CTkLabel(self.sv_frame, text="-- no server pairs --", font=("",10), text_color=T3).grid(row=0, column=0, columnspan=6, pady=2)
             return
         for i, s in enumerate(sl):
-            url = s["url"] if isinstance(s, dict) else s
+            # Account-only rows (for example ShopAPI/Flow workers) legitimately
+            # have no local server URL.  Do not let the settings page crash the
+            # whole application while rendering those rows.
+            url = str(s.get("url", "") or "") if isinstance(s, dict) else str(s or "")
             nm = s.get("name", f"Sv-{i+1}") if isinstance(s, dict) else f"Sv-{i+1}"
             en = s.get("enabled", True) if isinstance(s, dict) else True
             chrome_name = Path(str(s.get("chrome_path", "") or "")).name if isinstance(s, dict) else "-"

@@ -268,7 +268,19 @@ def labs_cookie_header(cdp_cookies):
 def bearer_from_cookie(cookie, timeout=25):
     """Refresh bearer TỪ cookie labs.google (KHÔNG mở chrome) — giống veo3top.
     GET /fx/api/auth/session với cookie -> access_token. Cookie sống lâu (tuần), bearer ~1h.
-    Trả (bearer, email) hoặc (None, None) nếu cookie hết hạn."""
+    Trả (bearer, email) hoặc (None, None) nếu cookie hết hạn.
+    
+    ═══ BẢN VÁ 2026-08-10: TỰ REFRESH KHI PHIÊN HẾT HẠN ═══
+    
+    Phát hiện: khi NextAuth session-token hết hạn (expires < now), endpoint VẪN trả
+    200 + access_token (stale, 401 khi dùng). NHƯNG response kèm Set-Cookie chứa
+    session-token MỚI. Gọi lại với token mới → bearer TƯƠI, expires +24h.
+    
+    Trước bản vá: expires < now → trả (None, None) → phien_kiem kết án CHẾT →
+    recovery mở Chrome login → fail vì thiếu module → nghỉ 1h → toàn bộ factory chết.
+    
+    Sau bản vá: expires < now → đọc Set-Cookie → thay session-token → gọi lại →
+    bearer mới → KHÔNG CẦN Chrome. Giống người dùng bấm F5 trên trình duyệt."""
     if not cookie:
         return None, None
     H = {"Cookie": cookie, "User-Agent": UA, "Referer": "https://labs.google/", "Accept": "application/json"}
@@ -281,12 +293,18 @@ def bearer_from_cookie(cookie, timeout=25):
             j = r.json() or {}
             # BUG FIX (2026-07-05): endpoint trả 200 + access_token CẢ KHI cookie ĐÃ HẾT HẠN (field "expires"
             # ở quá khứ) -> token đó CHẾT (401 khi submit). Trước bỏ qua "expires" -> tưởng refresh thành công nhưng
-            # bearer chết -> account coi là sống rồi 401 hàng loạt. Giờ: expires quá khứ/sắp hết -> coi COOKIE CHẾT.
+            # bearer chết -> account coi là sống rồi 401 hàng loạt.
             exp = j.get("expires")
             if exp:
                 try:
                     from datetime import datetime
                     if datetime.fromisoformat(str(exp).replace("Z", "+00:00")).timestamp() < time.time() + 120:
+                        # ═══ MỚI: thử TỰ REFRESH bằng Set-Cookie thay vì bỏ cuộc ═══
+                        # NextAuth trả Set-Cookie chứa session-token MỚI khi session hết hạn.
+                        # Lấy token mới -> gọi lại -> bearer tươi. KHÔNG cần Chrome.
+                        refreshed = _try_refresh_from_set_cookie(r, cookie, kw)
+                        if refreshed:
+                            return refreshed  # (bearer, email) hoặc (bearer, email, new_cookie)
                         return None, None
                 except Exception:
                     pass
@@ -294,6 +312,62 @@ def bearer_from_cookie(cookie, timeout=25):
     except Exception:
         pass
     return None, None
+
+
+def _try_refresh_from_set_cookie(response, old_cookie, kw):
+    """Đọc Set-Cookie từ response, tìm session-token mới, gọi lại lấy bearer tươi.
+    Trả (bearer, email) nếu thành công, None nếu không."""
+    import re as _re
+    set_cookie = response.headers.get("set-cookie", "")
+    if not set_cookie:
+        return None
+    m = _re.search(r"__Secure-next-auth\.session-token=([^;]+)", set_cookie)
+    if not m:
+        return None
+    new_token = m.group(1)
+    # Thay session-token cũ bằng mới trong cookie string
+    new_cookie = _re.sub(
+        r"__Secure-next-auth\.session-token=[^;]+",
+        "__Secure-next-auth.session-token=" + new_token,
+        old_cookie
+    )
+    # Gọi lại với cookie mới
+    try:
+        H2 = {"Cookie": new_cookie, "User-Agent": UA, "Referer": "https://labs.google/", "Accept": "application/json"}
+        r2 = _cffi.get("https://labs.google/fx/api/auth/session", headers=H2, **kw)
+        if r2.status_code == 200:
+            j2 = r2.json() or {}
+            bearer = j2.get("access_token")
+            email = (j2.get("user") or {}).get("email")
+            exp2 = j2.get("expires", "")
+            if bearer and exp2:
+                from datetime import datetime
+                if datetime.fromisoformat(str(exp2).replace("Z", "+00:00")).timestamp() > time.time() + 120:
+                    # Cập nhật lại Set-Cookie nếu có (token có thể refresh lần 2)
+                    sc2 = r2.headers.get("set-cookie", "")
+                    m2 = _re.search(r"__Secure-next-auth\.session-token=([^;]+)", sc2)
+                    if m2:
+                        new_cookie = _re.sub(
+                            r"__Secure-next-auth\.session-token=[^;]+",
+                            "__Secure-next-auth.session-token=" + m2.group(1),
+                            new_cookie
+                        )
+                    # Lưu cookie mới vào global để auth_cache._refresh_from_cookie có thể cập nhật
+                    _LAST_REFRESHED_COOKIE[email or ""] = new_cookie
+                    return bearer, email
+    except Exception:
+        pass
+    return None
+
+
+# Cache cookie mới nhất sau khi refresh (để auth_cache cập nhật)
+_LAST_REFRESHED_COOKIE = {}
+
+
+def get_refreshed_cookie(email):
+    """Lấy cookie đã được refresh gần nhất cho email (nếu có). Dùng bởi auth_cache."""
+    return _LAST_REFRESHED_COOKIE.pop(email, None)
+
 
 
 def cookie_liveness(cookie, timeout=25):
@@ -328,7 +402,14 @@ def cookie_liveness(cookie, timeout=25):
         try:
             from datetime import datetime
             if datetime.fromisoformat(str(exp).replace("Z", "+00:00")).timestamp() < time.time() + 120:
-                return "dead"        # 200 + token nhưng expires quá khứ = chết thật
+                # BẢN VÁ 2026-08-10: Trước đây trả "dead" ngay — nhưng NextAuth thường trả
+                # Set-Cookie chứa session-token MỚI. Nếu có -> cookie CÒN CỨU ĐƯỢC (bearer_from_cookie
+                # sẽ tự refresh) -> trả "alive" thay vì "dead" để phien_kiem KHÔNG kết án oan.
+                import re as _re
+                sc = r.headers.get("set-cookie", "")
+                if sc and _re.search(r"__Secure-next-auth\.session-token=", sc):
+                    return "alive"  # phiên hết hạn nhưng CÓ THỂ tự refresh → không kết án
+                return "dead"        # 200 + token nhưng expires quá khứ VÀ không refresh được = chết thật
         except Exception:
             pass
     return "alive"

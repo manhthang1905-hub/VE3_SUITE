@@ -27,8 +27,10 @@ import os
 
 try:                       # chạy trong tool: import cùng thư mục veo3top_engine
     import shopapi_common as _sc
+    import shopapi_batch as _mb
 except ImportError:        # chạy như một gói: import tương đối
     from . import shopapi_common as _sc  # type: ignore
+    from . import shopapi_batch as _mb   # type: ignore
 
 __all__ = ["generate", "ENGINE", "DURATION"]
 
@@ -106,17 +108,43 @@ def generate(image_path, prompt, out_path, aspect=None, seed=None, timeout=1600,
         except Exception:
             pass
 
+    def _bao_hang_cho(vi_tri, uoc_giay):
+        """Máy chủ vừa nhận job -> nói ngay hàng dài bao nhiêu cho cổng của mẻ.
+
+        Hai con số này (`queue_position`, `estimated_seconds`) đi kèm sẵn trong
+        phản hồi `202`, không tốn thêm lời gọi nào. Không đọc chúng chính là lỗi
+        đã làm hỏng 27 job ngày 07/08/2026 (66 job bắn vào nhà máy tiêu hoá ~16;
+        33 job chết vì hết hạn NGAY TRONG HÀNG CHỜ, kho tài khoản còn nguyên).
+        Gọi ngoài mẻ thì `bao_hang_cho` không làm gì cả.
+        """
+        _mb.bao_hang_cho(vi_tri, uoc_giay)
+        if vi_tri is not None:
+            log("    [shopapi-vid] may chu nhan job | dung thu {0} trong hang"
+                "{1}".format(vi_tri,
+                             ", uoc {0:.0f}s toi luot".format(uoc_giay)
+                             if uoc_giay is not None else ""))
+        if uoc_giay is not None and float(uoc_giay) > float(timeout):
+            # Đúng cảnh 14 job "vuot qua thoi gian cho" hom 07/08 - noi TO.
+            log("    [shopapi-vid] CANH BAO: may chu uoc {0:.0f}s moi toi luot nhung tool "
+                "chi cho duoc {1:.0f}s -> job nay co the het han NGAY TRONG HANG CHO"
+                .format(float(uoc_giay), float(timeout)), "WARN")
+
     try:
-        job = client.videos.create_and_wait(
+        job = _sc.tao_va_cho(
+            client, "videos",
+            timeout=float(timeout),
+            on_progress=_bao_tien_do,
+            on_hang_cho=_bao_hang_cho,
             prompt=prompt,
             engine=ENGINE,       # ⛔ đi đôi với DURATION - xem đầu file
             duration=DURATION,   # ⛔ veo3 CHI nhan 8; seedance CHI nhan 10
             aspect_ratio=ty_le,
             image_url=image_url,
-            timeout=float(timeout),
-            on_progress=_bao_tien_do,
         )
     except Exception as exc:
+        # `429`/`resource_exhausted` -> ca me lui nhip, khong rieng luong nay.
+        if _sc.phan_loai_nghen(exc) is not None:
+            _mb.bao_nghen(getattr(exc, "retry_after", None))
         _nem_neu_nghen(exc, nem_khi_nghen)
         return False, {}, "shopapi-vid: {0}".format(_sc.mo_ta_loi(exc))
 

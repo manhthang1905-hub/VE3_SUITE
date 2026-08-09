@@ -863,6 +863,128 @@ class _Handler(BaseHTTPRequestHandler):
         self._send(404, {"error": "not found"})
 
 
+def _kill_zombie_on_port(port, my_pid=None):
+    """Kill zombie python processes holding `port` (trừ `my_pid`).
+
+    `taskkill /F` thường bị Access Denied với zombie processes từ worker cũ.
+    Dùng WMI (`wmic process delete`) như fallback — đã chứng minh hoạt động.
+    """
+    import subprocess, re
+    if my_pid is None:
+        my_pid = os.getpid()
+    for attempt in range(3):
+        try:
+            out = subprocess.check_output(
+                ["netstat", "-ano"], timeout=10,
+                creationflags=0x08000000,
+            ).decode("utf-8", errors="replace")
+        except Exception:
+            return
+        pids = set()
+        for line in out.splitlines():
+            if f":{port}" in line and "LISTENING" in line:
+                parts = line.split()
+                if parts:
+                    try:
+                        pid = int(parts[-1])
+                        if pid and pid != my_pid:
+                            pids.add(pid)
+                    except ValueError:
+                        pass
+        if not pids:
+            return  # Port is free
+        _log(f"zombie cleanup: port {port} held by PIDs {pids} (attempt {attempt+1})")
+        for pid in pids:
+            # Try taskkill first
+            subprocess.run(
+                ["taskkill", "/F", "/PID", str(pid)],
+                capture_output=True, timeout=5, creationflags=0x08000000,
+            )
+        time.sleep(2)
+        # Check if still held
+        try:
+            out2 = subprocess.check_output(
+                ["netstat", "-ano"], timeout=10, creationflags=0x08000000,
+            ).decode("utf-8", errors="replace")
+            still_held = any(f":{port}" in l and "LISTENING" in l for l in out2.splitlines())
+        except Exception:
+            still_held = True
+        if still_held:
+            # Fallback: WMI delete
+            for pid in pids:
+                try:
+                    subprocess.run(
+                        ["wmic", "process", "where", f"ProcessId={pid}", "delete"],
+                        capture_output=True, timeout=10, creationflags=0x08000000,
+                    )
+                except Exception:
+                    pass
+            time.sleep(3)
+        else:
+            _log(f"zombie cleanup: port {port} is now free")
+            return
+    _log(f"zombie cleanup: could not free port {port} after 3 attempts")
+
+
+def _session_keepalive_loop(factory, interval=4*3600):
+    """Background thread: refresh NextAuth sessions mỗi `interval` giây.
+
+    Mỗi account: gọi bearer_from_cookie (tự refresh qua Set-Cookie).
+    Nếu fail → dùng ChromeCDP.warm_flow() (SSO re-auth, không cần password).
+    Chạy daemon — tự tắt khi factory tắt.
+    """
+    import auth_cache
+    time.sleep(120)  # Chờ factory ổn định 2 phút trước khi bắt đầu
+    while getattr(factory, '_running', True):
+        _log(f"session-keepalive: bắt đầu refresh {len(factory.accounts)} accounts")
+        ok_count = 0
+        for acc in list(factory.accounts):
+            email = getattr(acc, 'email', None)
+            if not email:
+                continue
+            try:
+                cached = auth_cache.get(email)
+                if not cached or not cached.get('cookie'):
+                    continue
+                cookie = cached['cookie']
+                bearer, got_email = fc.bearer_from_cookie(cookie)
+                if bearer:
+                    ok_count += 1
+                    _log(f"session-keepalive: {email} OK (HTTP refresh)")
+                else:
+                    _log(f"session-keepalive: {email} HTTP fail, trying warm_flow...")
+                    # Fallback: Chrome warm_flow
+                    try:
+                        from cdp_chrome import ChromeCDP
+                        chrome_exe = getattr(acc, 'chrome_exe', None)
+                        profile_dir = getattr(acc, 'profile_dir', None)
+                        cdp_port = getattr(acc, 'cdp_port', 19500)
+                        if chrome_exe and profile_dir:
+                            cdp = ChromeCDP(chrome_exe, profile_dir, cdp_port, offscreen=True)
+                            if cdp.connect(launch_timeout=30):
+                                if cdp.warm_flow(attempts=3):
+                                    new_bearer = cdp.bearer()
+                                    if new_bearer:
+                                        cookies = cdp.cookies()
+                                        ck = '; '.join(f"{c['name']}={c['value']}" for c in cookies
+                                                       if 'labs.google' in c.get('domain', ''))
+                                        project = cdp.first_project_id()
+                                        auth_cache.save(email, new_bearer, ck, project)
+                                        ok_count += 1
+                                        _log(f"session-keepalive: {email} OK (warm_flow)")
+                                cdp.close(kill=True)
+                    except Exception as ex:
+                        _log(f"session-keepalive: {email} warm_flow error: {ex}")
+            except Exception as ex:
+                _log(f"session-keepalive: {email} error: {ex}")
+        _log(f"session-keepalive: {ok_count}/{len(factory.accounts)} refreshed")
+        # Sleep in chunks so we can stop quickly
+        for _ in range(interval // 30):
+            if not getattr(factory, '_running', True):
+                return
+            time.sleep(30)
+
+
 def _kill_video_chromes():
     """Tree-kill chrome token factory VIDEO (veo3tok_970x — PORT video base 9700). KHÔNG đụng ảnh (974x) / tool khác."""
     import subprocess
@@ -892,9 +1014,13 @@ def main():
             return
     except Exception:
         pass
+    _kill_zombie_on_port(args.port)  # KILL ZOMBIE: dọn python zombie giữ port (WMI fallback)
     _kill_video_chromes()   # CLEAN SLATE: dọn token chrome video sót từ lần trước (tránh zombie tích tụ)
     _FACTORY = VideoFactory(token_chromes=args.token_chromes)
     _FACTORY.start()
+    # SESSION KEEPALIVE: tự refresh sessions mỗi 4h (ngăn hết hạn NextAuth)
+    _ka = threading.Thread(target=_session_keepalive_loop, args=(_FACTORY,), daemon=True, name="session-keepalive")
+    _ka.start()
     import atexit, signal
     atexit.register(_kill_video_chromes)   # BACKSTOP zombie khi tắt
     def _on_sig(*_a):

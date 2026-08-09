@@ -89,7 +89,7 @@ class ChromeCDP:
         #  - tắt PrivacySandboxSettings4 + WebRTC MDNS + media... -> fingerprint sạch hơn (bớt lộ bot).
         # CLEAN MODE (VEO3TOP_CLEAN_FLAGS=1): bỏ cờ lộ-bot (--test-type/--no-sandbox/--disable-gpu) + BẬT GPU thật
         #  -> token reCAPTCHA điểm CAO hơn (giống Chrome người dùng). Dùng cho ẢNH (reCAPTCHA IMAGE khắt khe hơn video).
-        clean = os.environ.get("VEO3TOP_CLEAN_FLAGS", "0") == "1"
+        clean = os.environ.get("VEO3TOP_CLEAN_FLAGS", "1") == "1"
         if clean:
             # TỐI GIẢN như Chrome người dùng thật: CHỈ những cờ tối cần thiết để điều khiển CDP.
             # KHÔNG cờ lộ-bot (không --test-type/--no-sandbox/--disable-gpu/AutomationControlled/disable-features...)
@@ -133,7 +133,7 @@ class ChromeCDP:
         else:
             # direct: ép IPv4 residential + Fake DNS Google (điểm reCAPTCHA cao) — như token chrome blank.
             args.append("--source-restrictions=no-ipv6")
-            if os.environ.get("VEO3TOP_FAKE_DNS", "1") != "0":
+            if os.environ.get("VEO3TOP_FAKE_DNS", "0") != "0":
                 args += ["--dns-over-https-mode=secure",
                          "--dns-over-https-templates=https://dns.google/dns-query"]
         if self.offscreen:
@@ -144,6 +144,9 @@ class ChromeCDP:
             # HIỆN (tắt ẩn) = đưa cửa sổ ra GIỮA-TRÊN màn hình, KHÔNG lệch/off-screen -> theo dõi được chrome khi debug
             args.append("--window-position=340,110")
             args.append("--window-size=1200,860")
+        # Ép ngôn ngữ Chrome khớp với locale override (tránh Google hiện tiếng Việt/Thái
+        # khi OS là Asia/Bangkok — thêm tín hiệu bất nhất cho bot detection).
+        args.append(f"--lang={os.environ.get('VEO3TOP_LOCALE', 'en-US')}")
         args.append(FLOW_URL)
         self._proc = subprocess.Popen(args)
         _register_pid(self.port, self._proc.pid)   # để GUI dọn được khi tắt (kể cả orphan)
@@ -159,7 +162,35 @@ class ChromeCDP:
             return False
         self.ws = websocket.create_connection(ws_url, max_size=None)
         self._cmd_raw("Runtime.enable")
+        self._apply_tz_override()
         return True
+
+    # ---- CDP timezone/locale override ----
+    def _apply_tz_override(self):
+        """Ép timezone/locale cho Chrome qua CDP — KHÔNG phụ thuộc múi giờ Windows.
+
+        ═══ VÌ SAO CẦN ═══
+
+        Chrome kế thừa timezone từ OS. Khi Windows đặt Asia/Bangkok (UTC+7) mà
+        profile stealth lưu America/New_York + en-US thì Google thấy mâu thuẫn
+        → trả CAPTCHA "unusual traffic". Bản vá này ép CDP Emulation để Chrome
+        LUÔN báo timezone Mỹ — khớp với fingerprint đã lưu, khớp với hành vi
+        trước khi đổi múi giờ Windows.
+
+        Biến môi trường (tuỳ chọn):
+          VEO3TOP_TZ      mặc định America/New_York
+          VEO3TOP_LOCALE   mặc định en-US
+        """
+        tz = os.environ.get("VEO3TOP_TZ", "America/New_York")
+        locale = os.environ.get("VEO3TOP_LOCALE", "en-US")
+        try:
+            self._cmd_raw("Emulation.setTimezoneOverride", timezoneId=tz)
+        except Exception:
+            pass
+        try:
+            self._cmd_raw("Emulation.setLocaleOverride", locale=locale)
+        except Exception:
+            pass
 
     # ---- CDP w/ reconnect ----
     def _cmd_raw(self, method, **params):
@@ -180,6 +211,7 @@ class ChromeCDP:
             try:
                 self.ws = websocket.create_connection(ws_url, max_size=None)
                 self._cmd_raw("Runtime.enable")
+                self._apply_tz_override()
                 return True
             except Exception:
                 time.sleep(1)

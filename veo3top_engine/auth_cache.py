@@ -100,6 +100,12 @@ class AuthCache:
         d["ts"] = time.time()
         if email:
             d["email"] = email
+        # BẢN VÁ 2026-08-10: Nếu bearer_from_cookie đã TỰ REFRESH session-token (Set-Cookie)
+        # thì cập nhật cookie mới vào cache — lần sau không cần refresh lại.
+        new_cookie = fc.get_refreshed_cookie(email or account)
+        if new_cookie:
+            d["cookie"] = new_cookie
+            self.log(f"[authcache] {account}: cookie ĐÃ TỰ REFRESH (NextAuth session-token mới, không Chrome)")
         self._save(account, d)
         self.log(f"[authcache] {account}: refresh bearer TỪ COOKIE (không mở chrome)")
         return d

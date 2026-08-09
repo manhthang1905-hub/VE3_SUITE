@@ -46,6 +46,7 @@ thay phần "chạy một job" bằng một hàm do nơi gọi đưa vào.
 
 from __future__ import annotations
 
+import math
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -59,8 +60,15 @@ __all__ = [
     "so_luong_song_song",
     "chay_ca_me",
     "trong_me",
+    "bao_hang_cho",
+    "bao_nghen",
+    "CongHangCho",
     "CHO_KHI_DUNG",
     "CHO_TOI_DA",
+    "HE_SO_DANG_BAY",
+    "HE_SO_NGUONG_VI_TRI",
+    "BIEN_AN_TOAN_HAN",
+    "LUI_NHIP_GIAY",
 ]
 
 #: Ngủ bao lâu mỗi lần trước khi hỏi lại, khi nhà máy đang dừng.
@@ -78,8 +86,303 @@ CHO_KHI_DUNG = 30.0
 #: chạy sau nhặt lại được, không mất gì.
 CHO_TOI_DA = 300.0
 
+#: Được phép để **bao nhiêu job ĐANG BAY** so với trần chạy song song.
+#:
+#: "Đang bay" = đã gửi lên máy chủ, chưa nhận kết quả — gồm cả job đang chạy lẫn
+#: job còn nằm xếp hàng. Trần song song KHÔNG nói gì về con số này.
+#:
+#: VÌ SAO 1,5: 1,0 thì cái ghế vừa trống phải chờ trọn một vòng mạng mới có
+#: người ngồi (nhà máy ngồi không, mất công suất); 4,0 thì đúng bằng ca
+#: 07/08/2026 (66 ÷ 16 ≈ 4,1) — đệm dày tới mức job xếp hàng lâu hơn cả hạn chờ
+#: của chính nó rồi chết trong hàng. Nửa vòng là đủ lấp chỗ trống ngay lập tức
+#: mà không dựng ra một hàng chờ chết người.
+HE_SO_DANG_BAY = 1.5
+
+#: `queue_position` vượt quá `trần × hệ số này` thì **NGỪNG GỬI HẲN**.
+#:
+#: Đứng thứ `trần + 1` nghĩa là phải chờ trọn một lượt dựng của cả xưởng mới tới
+#: lượt. Nhồi thêm lúc đó không làm ai nhanh lên một giây nào.
+HE_SO_NGUONG_VI_TRI = 1.0
+
+#: Nhân `estimated_seconds` với biên này rồi mới so với hạn chờ của job.
+#: Ước lượng của máy chủ là LẠC QUAN (chưa tính khách chen vào sau), nên còn
+#: dưới 20% biên thì coi như đã hết.
+BIEN_AN_TOAN_HAN = 1.2
+
+#: Ăn `429` / `resource_exhausted` thì cả mẻ im ngần này giây trước khi gửi tiếp.
+LUI_NHIP_GIAY = 15.0
+
 #: Cờ "luồng này đang chạy trong một mẻ" — xem :func:`trong_me`.
+#: Cũng giữ luôn cổng hàng chờ của mẻ đang chạy — xem :func:`bao_hang_cho`.
 _cuc_bo = threading.local()
+
+
+class CongHangCho:
+    """Gác cổng: **giữ số job ĐANG BAY trong tầm máy chủ tiêu hoá được**.
+
+    ═══ VÌ SAO CẦN THÊM LỚP NÀY, ĐÃ CÓ `NhipDo` RỒI ═══
+
+    `NhipDo` (AIMD) là vòng dò **theo sau**: nó chỉ biết có nghẽn khi một job đã
+    xong (đo thời gian nằm hàng chờ) hoặc khi đã ăn `429`. Ngày 07/08/2026 trên
+    máy chủ thật, tín hiệu đó **không bao giờ tới**: 33 job nằm xếp hàng cho tới
+    lúc hết hạn, chưa chạy một giây nào, nên không có job nào "xong êm" để báo
+    độ trễ, và máy chủ cũng chẳng trả `429` — nó nhận job bình thường rồi để
+    chúng chết già trong hàng. Tổng kết 20 phút: 66 job bắn ra, nhà máy tiêu
+    hoá ~16, **27 job hỏng** (14 "vượt quá thời gian chờ" + 13 "không còn đủ
+    thời gian để thử lại"), **kho tài khoản KHÔNG hề cạn**.
+
+    Cổng này là tín hiệu **đi trước**: nó đọc `queue_position` /
+    `estimated_seconds` mà máy chủ đã trả sẵn ngay lúc nhận job, nên biết hàng
+    dài **trước khi** job đầu tiên kịp chết.
+
+    Hai lớp bổ sung cho nhau, không thay thế nhau: `NhipDo` chỉnh *tốc độ*,
+    cổng này chặn *số lượng đang bay*. Bỏ lớp nào cũng để lọt một kiểu hỏng.
+
+    **Thuần tuý, không tự gọi mạng, không tự ngủ** — đồng hồ tiêm được, nên bài
+    kiểm dựng lại nguyên buổi 07/08 trong vài mili-giây.
+    """
+
+    def __init__(self, tran=1, han_giay=0.0, he_so_dang_bay=None,
+                 he_so_nguong_vi_tri=None, bien_an_toan=None, lui_nhip_giay=None,
+                 cho_khi_dung=None, _dong_ho=time.monotonic):
+        # ⚠ `None` = "đọc hằng số của module NGAY LÚC NÀY", cố ý không gán thẳng
+        # hằng số làm giá trị mặc định của tham số. Mặc định của tham số được
+        # chốt lúc `def` chạy, nên `monkeypatch.setattr(sb, "LUI_NHIP_GIAY", 0)`
+        # sẽ **không có tác dụng** — và bài kiểm nào cần rút ngắn quãng lùi nhịp
+        # sẽ lặng lẽ chờ thật 15 giây thay vì báo lỗi.
+        #: Hạn chờ của MỘT job (giây). `0` = không so hạn.
+        self._han_giay = max(0.0, float(han_giay or 0.0))
+        self._he_so_bay = max(1.0, float(
+            HE_SO_DANG_BAY if he_so_dang_bay is None else he_so_dang_bay))
+        self._he_so_vi_tri = max(0.0, float(
+            HE_SO_NGUONG_VI_TRI if he_so_nguong_vi_tri is None else he_so_nguong_vi_tri))
+        self._bien = max(1.0, float(
+            BIEN_AN_TOAN_HAN if bien_an_toan is None else bien_an_toan))
+        self._lui_giay = max(0.0, float(
+            LUI_NHIP_GIAY if lui_nhip_giay is None else lui_nhip_giay))
+        self._cho_khi_dung = max(0.0, float(
+            CHO_KHI_DUNG if cho_khi_dung is None else cho_khi_dung))
+        self._dong_ho = _dong_ho
+
+        self._tran = max(0, int(tran))
+        self._dang_bay = 0
+        self._vi_tri = None
+        self._uoc_giay = None
+        self._dung_toi = 0.0
+        self._ly_do = ""
+        self._khoa = threading.Lock()
+
+    # ── Đọc trạng thái ───────────────────────────────────────────────────────
+
+    @property
+    def dang_bay(self):
+        """Bao nhiêu job ĐÃ GỬI mà CHƯA xong — con số mà ca 07/08 nói tới."""
+        with self._khoa:
+            return self._dang_bay
+
+    @property
+    def vi_tri_hang_cho(self):
+        """`queue_position` mới nhất máy chủ trả. `None` = chưa gửi job nào."""
+        with self._khoa:
+            return self._vi_tri
+
+    def tran_dang_bay(self):
+        """Trần số job đang bay = `ceil(trần × hệ số)`, tối thiểu 1."""
+        with self._khoa:
+            return self._tran_dang_bay()
+
+    def cho_bao_lau(self):
+        """Còn mấy giây nữa mới được gửi tiếp. `0.0` = gửi được ngay."""
+        with self._khoa:
+            return max(0.0, self._dung_toi - self._dong_ho())
+
+    def ly_do(self):
+        """Vì sao cổng đang đóng — câu để đẩy thẳng lên log/GUI."""
+        with self._khoa:
+            self._cho_phep()
+            return self._ly_do
+
+    def mo_ta(self):
+        """Một dòng cho log. **Người dùng phải thấy là đang chờ, không phải treo.**"""
+        with self._khoa:
+            con = max(0.0, self._dung_toi - self._dong_ho())
+            phan = ["dang bay {0}/{1}".format(self._dang_bay, self._tran_dang_bay()),
+                    "tran may chu {0}".format(self._tran)]
+            if self._vi_tri is not None:
+                phan.append("dung thu {0} trong hang".format(self._vi_tri))
+            if self._uoc_giay is not None:
+                phan.append("uoc cho {0:.0f}s".format(self._uoc_giay))
+            if con > 0:
+                phan.append("dang lui nhip, con {0:.0f}s".format(con))
+            return " | ".join(phan)
+
+    # ── Tín hiệu vào ─────────────────────────────────────────────────────────
+
+    def dat_tran(self, tran):
+        """Trần mới đọc từ `GET /v1/me`. `0` = nhà máy loại đó đang dừng."""
+        if tran is None:
+            return
+        with self._khoa:
+            tran = max(0, int(tran))
+            self._tran = tran
+            if tran == 0:
+                self._dung_toi = max(self._dung_toi,
+                                     self._dong_ho() + self._cho_khi_dung)
+                self._ly_do = (
+                    "nha may DANG DUNG (tran song song = 0) -> cho {0:.0f}s roi hoi lai; "
+                    "job gui luc nay bi tu choi o cua va KHONG bi tru tien"
+                    .format(self._cho_khi_dung))
+
+    def ghi_nhan_tao(self, vi_tri=None, uoc_giay=None):
+        """Máy chủ vừa nhận một job — **đọc hai trường mà không tool nào chịu đọc**.
+
+        Gọi ngay sau phản hồi `202`, trước cả lúc bắt đầu chờ kết quả: đó là
+        khoảnh khắc duy nhất tool biết hàng chờ dài bao nhiêu mà không tốn thêm
+        một lời gọi nào.
+
+        Trường nào máy chủ không trả (`None`) thì **giữ nguyên con số đang
+        biết** — không đoán bừa, và tuyệt đối không coi "không biết" là "rỗng".
+        """
+        with self._khoa:
+            if vi_tri is not None:
+                try:
+                    self._vi_tri = max(0, int(vi_tri))
+                except (TypeError, ValueError):
+                    pass
+            if uoc_giay is not None:
+                try:
+                    self._uoc_giay = max(0.0, float(uoc_giay))
+                except (TypeError, ValueError):
+                    pass
+
+    def bi_nghen(self, cho=None):
+        """`429` / `resource_exhausted` → **lùi nhịp cho cả mẻ**, không gửi lại ngay.
+
+        Một luồng ăn `429` rồi tự nghỉ là chưa đủ: các luồng còn lại vẫn bắn
+        tiếp thì máy chủ vẫn nhận đủ chừng ấy job ngay sau câu "tôi đang ngộp".
+        """
+        with self._khoa:
+            giay = self._lui_giay if cho is None else max(0.0, float(cho))
+            self._dung_toi = max(self._dung_toi, self._dong_ho() + giay)
+            self._ly_do = (
+                "may chu bao qua tai (429 / resource_exhausted) -> ca me nghi {0:.0f}s "
+                "roi gui tiep, KHONG gui lai ngay".format(giay))
+
+    def nha_may_dung(self, cho=None):
+        """`503 engine_unavailable` — không còn máy xử lý nào online."""
+        with self._khoa:
+            giay = self._cho_khi_dung if cho is None else max(0.0, float(cho))
+            self._tran = 0
+            self._dung_toi = max(self._dung_toi, self._dong_ho() + giay)
+            self._ly_do = (
+                "nha may DANG DUNG (503) -> cho {0:.0f}s roi tham do lai bang dung 1 job; "
+                "job bi tu choi o cua KHONG bi tru tien".format(giay))
+
+    # ── Giữ chỗ / trả chỗ ────────────────────────────────────────────────────
+
+    def giu_cho(self, xin=1):
+        """Xin `xin` chỗ, trả về số chỗ **thật sự giữ được** (có thể 0).
+
+        Kiểm tra và giữ chỗ nằm TRONG CÙNG một khoá: tách ra hai bước thì mọi
+        luồng đều thấy "còn chỗ" rồi cùng gửi — đúng kiểu lỗi đẻ ra 66 job.
+        """
+        with self._khoa:
+            duoc = min(max(0, int(xin)), self._cho_phep())
+            self._dang_bay += duoc
+            return duoc
+
+    def tra_cho(self, so=1):
+        """Một job rời khỏi bầu trời (xong, hỏng, hay bị trả về hàng chờ).
+
+        Cũng **rút ngắn hàng chờ đang biết đi một**: job của ta ra khỏi hàng thì
+        người phía sau nhích lên. Không có luật này thì một `queue_position` cũ
+        khoá cổng vĩnh viễn (số mới chỉ có khi gửi job mới, mà job mới thì đang
+        bị chính nó chặn) — vòng luẩn quẩn, tool treo.
+        """
+        with self._khoa:
+            self._dang_bay = max(0, self._dang_bay - max(0, int(so)))
+            if self._vi_tri is not None:
+                self._vi_tri = max(0, self._vi_tri - max(0, int(so)))
+
+    # ── Bên trong (gọi khi ĐANG giữ `_khoa`) ─────────────────────────────────
+
+    def _tran_dang_bay(self):
+        return max(1, int(math.ceil(max(1, self._tran) * self._he_so_bay)))
+
+    def _cho_phep(self):
+        con = self._dung_toi - self._dong_ho()
+        if con > 0:
+            # Quãng lùi nhịp THẮNG TẤT CẢ, kể cả chốt thăm dò bên dưới: máy chủ
+            # vừa nói "đừng gửi nữa" thì trời trống cũng không phải cái cớ.
+            if not self._ly_do:
+                self._ly_do = "dang lui nhip, con {0:.0f}s".format(con)
+            return 0
+
+        n = self._cho_phep_thuong()
+        if n > 0:
+            return n
+
+        # CHỐT CHỐNG TREO: cổng đóng mà trời TRỐNG thì cho qua đúng MỘT job.
+        # Mọi con số ở trên đều đến từ lần gửi TRƯỚC, nên không job nào bay thì
+        # không bao giờ có số mới — một `queue_position` xấu sẽ khoá cổng vĩnh
+        # viễn. Job thăm dò mang về con số tươi và phá được vòng đó.
+        # KHÔNG áp dụng khi `tran == 0`: lúc đó job thăm dò chắc chắn ăn 503.
+        if self._dang_bay == 0 and self._tran > 0:
+            return 1
+        return 0
+
+    def _cho_phep_thuong(self):
+        self._ly_do = ""
+
+        if self._tran <= 0:
+            self._ly_do = ("nha may DANG DUNG (tran song song = 0) -> khong gui job "
+                           "vao cho chac chan bi tu choi")
+            return 0
+
+        nguong = max(1, int(math.ceil(self._tran * self._he_so_vi_tri)))
+        if self._vi_tri is not None and self._vi_tri > nguong:
+            self._ly_do = (
+                "HANG CHO DANG DAI (job vua gui dung thu {0}, nguong {1}) -> NGUNG gui "
+                "them, doi bot. Nhoi tiep vao hang nay chi de job moi chet vi het han "
+                "- su co 07/08/2026 mat 27 job dung kieu do".format(self._vi_tri, nguong))
+            return 0
+
+        if (self._han_giay > 0 and self._uoc_giay is not None
+                and self._uoc_giay * self._bien > self._han_giay):
+            self._ly_do = (
+                "may chu uoc phai cho {0:.0f}s moi toi luot, ma han cho mot job chi co "
+                "{1:.0f}s -> gui them luc nay la gui job di chet trong hang"
+                .format(self._uoc_giay, self._han_giay))
+            return 0
+
+        con_cho = self._tran_dang_bay() - self._dang_bay
+        if con_cho <= 0:
+            self._ly_do = (
+                "dang co {0} job bay tren may chu (tran {1} = tran song song {2} x {3:.1f}) "
+                "-> cho bot roi gui tiep".format(
+                    self._dang_bay, self._tran_dang_bay(), self._tran, self._he_so_bay))
+            return 0
+        return con_cho
+
+
+def bao_hang_cho(vi_tri, uoc_giay):
+    """Nhánh gửi job báo về "hàng đang dài bao nhiêu" — cho cổng của mẻ đang chạy.
+
+    Cùng kiểu với :func:`trong_me`: cờ nằm ở `threading.local` nên mỗi luồng
+    trong lô tự tìm đúng cổng của mẻ mình, và **gọi ngoài mẻ thì không làm gì
+    cả** — `shopapi_image_client.generate_image` gọi lẻ một phát vẫn chạy y như
+    cũ, không cần biết cổng là gì.
+    """
+    cong = getattr(_cuc_bo, "cong", None)
+    if cong is not None:
+        cong.ghi_nhan_tao(vi_tri, uoc_giay)
+
+
+def bao_nghen(cho=None):
+    """Nhánh gửi job báo về một cú `429` / `resource_exhausted`."""
+    cong = getattr(_cuc_bo, "cong", None)
+    if cong is not None:
+        cong.bi_nghen(cho)
 
 
 def trong_me():
@@ -279,7 +582,7 @@ def so_luong_song_song(loai, tran_tool=None, client=None, api_key=None, log=prin
 # ── Chạy cả mẻ ───────────────────────────────────────────────────────────────
 
 
-def _boc(chay_mot, viec, gia_tri_khi_hong, log):
+def _boc(chay_mot, viec, gia_tri_khi_hong, log, cong=None):
     """Chạy MỘT việc sao cho **không có gì lọt ra ngoài** làm chết cả mẻ.
 
     Trả `("nghen", BiNghen)` hoặc `("xong", giá_trị)`. Không bao giờ ném.
@@ -292,6 +595,8 @@ def _boc(chay_mot, viec, gia_tri_khi_hong, log):
       scene còn lại không có tội gì mà phải chết theo.
     """
     _cuc_bo.trong_me = True
+    # Cắm cổng của mẻ vào luồng này để `bao_hang_cho` / `bao_nghen` tìm thấy nó.
+    _cuc_bo.cong = cong
     try:
         return "xong", chay_mot(viec)
     except _sc.BiNghen as nghen:
@@ -309,12 +614,13 @@ def _boc(chay_mot, viec, gia_tri_khi_hong, log):
         return "xong", gia_tri_khi_hong
     finally:
         _cuc_bo.trong_me = False
+        _cuc_bo.cong = None
 
 
 def chay_ca_me(viec, chay_mot, loai, tran_tool=None, client=None, api_key=None,
                log=print, ngu=time.sleep, dung_lai=None,
                cho_khi_dung=CHO_KHI_DUNG, cho_toi_da=CHO_TOI_DA,
-               gia_tri_khi_hong=False, nhip=None):
+               gia_tri_khi_hong=False, nhip=None, cong=None, han_giay=0.0):
     """Chạy cả mẻ `viec` bằng `chay_mot`, tự dò nhịp. Trả kết quả **ĐÚNG THỨ TỰ ĐƯA VÀO**.
 
     `chay_mot(mot_viec)` làm trọn một việc (gửi job, chờ, tải file, ghi Excel,
@@ -335,6 +641,18 @@ def chay_ca_me(viec, chay_mot, loai, tran_tool=None, client=None, api_key=None,
 
     `nhip` để tiêm vòng dò riêng (bài kiểm soi nhịp, hoặc dùng chung một vòng dò
     cho nhiều mẻ nối tiếp — vòng dò càng sống lâu càng bám sát nhà máy).
+
+    ⚠ `cong` (:class:`CongHangCho`) LÀ LỚP CHẶN THỨ HAI, đừng gỡ vì thấy `nhip`
+    đã có rồi. `nhip` chỉ biết có nghẽn **sau khi** một job xong êm (đo độ trễ
+    hàng chờ) hoặc **sau khi** ăn `429`. Ngày 07/08/2026 cả hai tín hiệu đó đều
+    không bao giờ tới: 33 job nằm xếp hàng cho tới lúc hết hạn nên chẳng job nào
+    "xong êm" để báo, và máy chủ cũng không trả `429` — nó nhận job rồi để chúng
+    chết già trong hàng. `cong` đọc `queue_position` / `estimated_seconds` ngay
+    lúc máy chủ NHẬN job, nên nó thấy hàng dài **trước khi** có job nào chết.
+
+    `han_giay` là hạn chờ của MỘT job (thường chính là `timeout` mà nơi gọi
+    truyền cho `generate`). Có nó thì cổng chặn được cả trường hợp máy chủ nói
+    thẳng "còn 1.500 giây nữa mới tới lượt" trong khi ta chỉ chờ được 1.200.
     """
     tong = len(viec)
     if tong == 0:
@@ -343,6 +661,7 @@ def chay_ca_me(viec, chay_mot, loai, tran_tool=None, client=None, api_key=None,
     ket_qua = {}
     con_lai = list(range(tong))
     nhip = nhip if nhip is not None else _tao_nhip()
+    cong = cong if cong is not None else CongHangCho(han_giay=han_giay)
     da_cho = 0.0
     lo_thu = 0
 
@@ -355,7 +674,10 @@ def chay_ca_me(viec, chay_mot, loai, tran_tool=None, client=None, api_key=None,
         # ⚠ NGỦ TRƯỚC, HỎI SAU. Đang trong quãng dừng thì `GET /v1/me` không đổi
         # được gì cả — trần chỉ mở lại khi có máy xử lý báo danh, chứ không phải
         # vì ta hỏi nhiều hơn. Hỏi trong lúc chờ là tự đốt hạn mức đọc trạng thái.
-        cho = float(nhip.cho_bao_lau())
+        # ⚠ HAI quãng chờ, không phải một: `nhip` chờ vì nhà máy dừng, `cong` chờ
+        # vì hàng đang dài / vừa ăn 429. Lấy cái LỚN HƠN — cả hai đều là "đừng
+        # gửi bây giờ", và bỏ qua một cái là bỏ qua đúng lý do quan trọng hơn.
+        cho = max(float(nhip.cho_bao_lau()), float(cong.cho_bao_lau()))
         if cho > 0:
             if da_cho >= cho_toi_da:
                 log("API shopapi: nha may {0} DUNG qua lau (da cho {1:.0f}s) -> bo {2} viec con lai. "
@@ -363,9 +685,10 @@ def chay_ca_me(viec, chay_mot, loai, tran_tool=None, client=None, api_key=None,
                     .format(loai, da_cho, len(con_lai)), "ERROR")
                 break
             buoc = min(cho, cho_khi_dung)
-            log("API shopapi: nha may {0} dang DUNG -> cho {1:.0f}s roi hoi lai "
-                "(con {2} viec, da cho {3:.0f}/{4:.0f}s)"
-                .format(loai, buoc, len(con_lai), da_cho, cho_toi_da), "WARN")
+            log("API shopapi: me {0} dang CHO -> {1:.0f}s roi hoi lai "
+                "(con {2} viec, da cho {3:.0f}/{4:.0f}s) | {5}"
+                .format(loai, buoc, len(con_lai), da_cho, cho_toi_da,
+                        cong.ly_do() or cong.mo_ta()), "WARN")
             ngu(buoc)
             da_cho += buoc
             continue
@@ -373,38 +696,72 @@ def chay_ca_me(viec, chay_mot, loai, tran_tool=None, client=None, api_key=None,
         # Trần máy chủ là mức CHẶN TRÊN, đọc lại MỖI LÔ (không phải mỗi job:
         # nhóm đọc trạng thái có hạn mức riêng). `dat_tran(0)` tự chuyển vòng dò
         # sang trạng thái "nhà máy đang dừng" -> vòng sau rơi vào nhánh ngủ trên.
-        nhip.dat_tran(_hoi_tran(loai, tran_tool, client=client, api_key=api_key, log=log))
+        tran = _hoi_tran(loai, tran_tool, client=client, api_key=api_key, log=log)
+        nhip.dat_tran(tran)
+        cong.dat_tran(tran)
+        # ⚠ CỔNG CẮT SAU NHỊP. `nhip.cho_phep()` nói "chạy nhanh tới đâu";
+        # `cong.giu_cho()` nói "hàng chờ còn nuốt được mấy job nữa". Lô thật là
+        # phần giao của hai câu đó — và `giu_cho` GIỮ CHỖ luôn, nên không có khe
+        # nào cho hai luồng cùng thấy "còn chỗ" rồi cùng gửi.
         n = int(nhip.cho_phep())
+        # ⚠ CẮT THEO SỐ VIỆC CÒN LẠI **TRƯỚC KHI** GIỮ CHỖ, đừng làm ngược.
+        # `lo = con_lai[:n]` tự cắt bớt, nên xin 6 chỗ khi chỉ còn 5 việc là giữ
+        # 6 mà chỉ trả 5 — mỗi lô cuối rò một chỗ, và sau vài mẻ nối tiếp thì
+        # cổng khoá cứng vì tưởng còn job đang bay. Bài
+        # `test_cong_nha_HET_cho_du_lo_an_429` bắt được đúng lỗi này.
+        n = min(n, len(con_lai))
+        if n > 0:
+            n = cong.giu_cho(n)
         if n <= 0:
-            if nhip.cho_bao_lau() <= 0:
-                # Không đời nào tới đây với `NhipDo` thật, nhưng nếu một bản nhịp
-                # khác trả 0 mà không đặt quãng dừng thì vòng này sẽ quay tít.
+            if nhip.cho_bao_lau() <= 0 and cong.cho_bao_lau() <= 0:
+                # Cổng đóng vì hàng dài chứ không vì một quãng dừng có hạn -> phải
+                # tự ngủ, nếu không vòng này quay tít và đốt CPU.
+                log("API shopapi: me {0} -> NGUNG gui them ({1}); cho {2:.0f}s roi hoi lai "
+                    "({3} viec con lai, da cho {4:.0f}/{5:.0f}s)"
+                    .format(loai, cong.ly_do() or cong.mo_ta(), cho_khi_dung,
+                            len(con_lai), da_cho, cho_toi_da), "WARN")
+                if da_cho >= cho_toi_da:
+                    log("API shopapi: hang cho {0} van dai qua lau -> bo {1} viec con lai. "
+                        "Chung van con nguyen trong Excel, lan chay sau nhat lai duoc."
+                        .format(loai, len(con_lai)), "ERROR")
+                    break
                 ngu(cho_khi_dung)
                 da_cho += cho_khi_dung
             continue
 
         lo, con_lai = con_lai[:n], con_lai[n:]
         lo_thu += 1
-        log("API shopapi: me {0} lo {1} -> ban {2} job CUNG LUC ({3} viec con lai)"
-            .format(loai, lo_thu, len(lo), len(con_lai)))
+        log("API shopapi: me {0} lo {1} -> ban {2} job CUNG LUC ({3} viec con lai) | {4}"
+            .format(loai, lo_thu, len(lo), len(con_lai), cong.mo_ta()))
 
         tra_lai = []
-        with ThreadPoolExecutor(max_workers=len(lo)) as pool:
-            tuong_lai = {pool.submit(_boc, chay_mot, viec[i], gia_tri_khi_hong, log): i
-                         for i in lo}
-            for tl in as_completed(tuong_lai):
-                i = tuong_lai[tl]
-                trang_thai, gia_tri = tl.result()
-                if trang_thai == "nghen":
-                    # Bị từ chối NGAY Ở CỬA: chưa tốn tiền, việc chưa mất.
-                    tra_lai.append(i)
-                    if gia_tri.ma == 429:
-                        nhip.bi_chan(gia_tri.cho)
-                    else:
-                        nhip.nha_may_dung(gia_tri.cho)
-                    continue
-                ket_qua[i] = gia_tri
-                nhip.xong()
+        try:
+            with ThreadPoolExecutor(max_workers=len(lo)) as pool:
+                tuong_lai = {
+                    pool.submit(_boc, chay_mot, viec[i], gia_tri_khi_hong, log, cong): i
+                    for i in lo
+                }
+                for tl in as_completed(tuong_lai):
+                    i = tuong_lai[tl]
+                    trang_thai, gia_tri = tl.result()
+                    if trang_thai == "nghen":
+                        # Bị từ chối NGAY Ở CỬA: chưa tốn tiền, việc chưa mất.
+                        tra_lai.append(i)
+                        if gia_tri.ma == 429:
+                            nhip.bi_chan(gia_tri.cho)
+                            cong.bi_nghen(gia_tri.cho)
+                        else:
+                            nhip.nha_may_dung(gia_tri.cho)
+                            cong.nha_may_dung(gia_tri.cho)
+                        continue
+                    ket_qua[i] = gia_tri
+                    nhip.xong()
+        finally:
+            # ⚠ TRẢ ĐÚNG SỐ CHỖ ĐÃ GIỮ, và trả trong `finally`. Rò chỗ ở đây là
+            # cổng chỉ tăng mà không giảm -> tới lúc nào đó khoá cứng cả mẻ mà
+            # không một dòng nào nói vì sao. Trả THỪA cũng hỏng: cổng tưởng trời
+            # trống rồi bắn quá tay trở lại. `len(lo)` là con số duy nhất đúng.
+            cong.tra_cho(len(lo))
 
         if tra_lai:
             log("API shopapi: me {0} - {1} viec bi tu choi o cua ({2}) -> TRA VE DAU HANG CHO, "
