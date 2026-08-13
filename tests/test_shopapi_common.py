@@ -100,9 +100,15 @@ def test_khong_co_khoa_o_dau_ca_thi_tra_rong(sc, tmp_path):
 def test_che_khoa_va_redact_khong_de_lo_khoa(sc):
     che = sc.che_khoa(KHOA_GIA)
     assert KHOA_GIA not in che
-    assert che.startswith("sk_live_")
+    # Giữ TIỀN TỐ để người đọc log biết đang nói tới khoá nào, nhưng đừng ghim
+    # cứng `sk_live_`: khoá giả cố ý mang tiền tố khác để GitHub Push Protection
+    # thôi nhận nhầm là khoá Stripe thật (xem `conftest.KHOA_GIA`).
+    assert che.startswith(KHOA_GIA.split("_")[0] + "_"), "che mat ca tien to thi log kho doc"
     dong_log = "loi khi goi voi key {0} tren /v1/images".format(KHOA_GIA)
     assert KHOA_GIA not in sc.redact(dong_log)
+    # Khoá THẬT dạng `sk_live_…` cũng phải bị che — đó mới là thứ đáng lo.
+    that = "sk_live_" + "A" * 32
+    assert that not in sc.redact("bearer " + that)
 
 
 # ── Dịch lỗi sang tiếng Việt ─────────────────────────────────────────────────

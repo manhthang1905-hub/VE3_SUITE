@@ -25,8 +25,15 @@ for _p in (str(VE3_DIR), str(ENGINE_DIR)):
 
 # ── Khoá giả ─────────────────────────────────────────────────────────────────
 
-#: Khoá GIẢ. Có tiền tố `sk_live_` để bài kiểm che khoá chạy đúng nhánh thật,
-#: nhưng nó không tồn tại trên máy chủ nào.
+#: Khoá GIẢ, KHÔNG tồn tại trên máy chủ nào.
+#:
+#: ⚠ TIỀN TỐ CỐ Ý KHÔNG PHẢI `sk_live_`. Chuỗi dạng `sk_live_<20+ ký tự>`
+#: bị GitHub Push Protection nhận là khoá Stripe thật và CHẶN CẢ LƯỢT ĐẨY —
+#: máy quét không có cách nào biết đây là đồ giả. Ngày 14/08/2026 nó chặn
+#: đúng 17 commit của cả đợt việc này.
+#:
+#: `sk_gia_` vẫn khớp `_KEY_PATTERN` (`(?:sk|wk)_[A-Za-z0-9]*_?[A-Za-z0-9-]{6,}`)
+#: nên bài kiểm che khoá vẫn chạy đúng nhánh thật.
 KHOA_GIA = "sk_gia_KHOAGIAKHONGDUNGDUOC1234567890"
 
 
