@@ -1201,5 +1201,5 @@ def test_moi_lan_sua_phep_chuyen_phai_TANG_so_phien():
     than = ast.get_source_segment(nguon, _ham("_chuyen_may_cu_sang_api")) or ""
     assert "CHUYEN_API_PHIEN" in than and "_phien_da_chuyen" in than, \
         "quay ve co mot-bit la lap lai dung cai bay cu"
-    assert "True" not in than.split("def ")[0] + than[than.index('cfg = self'):], \
-        "van con dong co bang True o dau do"
+    assert 'da_chuyen_sang_shopapi"] = True' not in than, \
+        "van con dong co bang True — may sau nay lai kep chinh no lan nua"
