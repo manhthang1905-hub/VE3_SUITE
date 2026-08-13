@@ -24,6 +24,7 @@ mặt trong file hay không.
 from __future__ import annotations
 
 import json
+import pathlib
 import subprocess
 import sys
 from pathlib import Path
@@ -96,6 +97,31 @@ def main():
 
     print()
     print("=" * 68)
+    print(" SDK shopapi — THU BAT BUOC PHAI CO")
+    print("=" * 68)
+    # SDK CHUA len PyPI: `pip install shopapi` KHONG co tac dung. No chi den
+    # duoc may khac neu nam san trong repo o `_sdk/`. Thieu no thi tool bao
+    # "thieu SDK" va khong gui noi mot job nao.
+    kem = GOC / "_sdk" / "shopapi" / "__init__.py"
+    print("  _sdk/shopapi ket repo : {0}".format("CO" if kem.is_file() else "THIEU"))
+    try:
+        sys.path.insert(0, str(GOC / "veo3top_engine"))
+        import shopapi_common as _sc
+        ok_sdk = _sc.bootstrap_sdk()
+        print("  bootstrap_sdk()       : {0}".format(ok_sdk))
+        if ok_sdk:
+            import shopapi as _s
+            print("  nap SDK tu            : {0}".format(pathlib.Path(_s.__file__).parent))
+    except Exception as e:
+        ok_sdk = False
+        print("  bootstrap_sdk()       : LOI {0}: {1}".format(type(e).__name__, e))
+    if not ok_sdk:
+        thieu_sdk = True
+    else:
+        thieu_sdk = False
+
+    print()
+    print("=" * 68)
     print(" CODE SHOPAPI DA VE MAY CHUA (bang chung THAT, khong nhin so)")
     print("=" * 68)
     thieu = []
@@ -114,7 +140,17 @@ def main():
 
     print()
     print("=" * 68)
-    if not thieu and sha_may and sha_git and not sha_git.startswith("LOI"):
+    if thieu_sdk:
+        print(" KET LUAN: THIEU SDK shopapi. Tool khong gui duoc job nao.")
+        print()
+        print(" SDK CHUA len PyPI -> `pip install shopapi` VO DUNG. No phai nam trong repo.")
+        print(" Cap nhat lai de lay thu muc `_sdk/`:")
+        if sha_may:
+            print("     git fetch origin main && git reset --hard origin/main")
+        else:
+            print("     tai https://github.com/{0}/archive/refs/heads/main.zip".format(REPO))
+            print("     giai nen de len, GIU LAI: PROJECTS/, tools/ve3/config/")
+    elif not thieu and sha_may and sha_git and not sha_git.startswith("LOI"):
         if sha_may == sha_git:
             print(" KET LUAN: DA CO BAN MOI NHAT. Neu giao dien chua doi -> DONG VA MO LAI tool.")
         else:

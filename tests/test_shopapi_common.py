@@ -351,3 +351,39 @@ def test_5xx_thi_van_tai_lai(sc, tmp_path):
     with pytest.raises(Exception):
         _tai(sc, "http://kho/anh.png", tmp_path / "x.png", _httpx_gia(dem, ma=503), so_lan=3)
     assert dem["n"] == 3
+
+
+# ── SDK phải ĐI KÈM repo ─────────────────────────────────────────────────────
+
+
+def test_SDK_di_kem_trong_repo():
+    """`shopapi` CHƯA lên PyPI — `pip install shopapi` không có tác dụng.
+
+    Máy khác chỉ nhận được SDK nếu nó nằm sẵn trong repo. Ngày 14/08/2026 repo
+    KHÔNG kèm `_sdk/`, nên máy này chạy được chỉ vì `sdk_search_paths` có một
+    đường dẫn tuyệt đối tới kho mã shopapi (ổ D, thư mục `New folder/shopapi`) —
+    thứ duy nhất máy chủ dự án mới có. Mọi máy khác báo "thiếu SDK" và tool
+    không gửi nổi một job nào.
+    """
+    from pathlib import Path
+    goc = Path(__file__).resolve().parents[1]
+    assert (goc / "_sdk" / "shopapi" / "__init__.py").is_file(), (
+        "repo khong kem SDK -> may khac cap nhat xong van khong chay duoc")
+
+
+def test_SDK_tim_duoc_KHONG_can_duong_dan_rieng_cua_may_nay(sc):
+    """Bản kèm repo phải được ưu tiên TRƯỚC đường dẫn tuyệt đối của máy chủ dự án."""
+    import os
+    from pathlib import Path
+    goc = Path(__file__).resolve().parents[1]
+    duong = sc.sdk_search_paths()
+    co = [p for p in duong if os.path.isdir(os.path.join(p, "shopapi"))]
+    assert co, "khong tim thay SDK o bat ky dau"
+    kem = str(goc / "_sdk")
+    assert any(os.path.normcase(p) == os.path.normcase(kem) for p in co), \
+        "ban kem repo khong nam trong danh sach tim thay"
+    # Bản kèm repo phải đứng TRƯỚC mọi đường dẫn trỏ ra ngoài thư mục tool.
+    ngoai = [p for p in co if not os.path.normcase(p).startswith(os.path.normcase(str(goc)))]
+    if ngoai:
+        assert co.index(kem) < min(co.index(p) for p in ngoai), \
+            "duong dan rieng cua may nay thang ban kem repo -> may khac van thieu SDK"

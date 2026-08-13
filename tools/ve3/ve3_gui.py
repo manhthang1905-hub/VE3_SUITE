@@ -138,6 +138,24 @@ def quen_khoa_shopapi():
     _khoa_cache["den"] = 0.0
 
 
+def cau_hinh_toan_api(cfg):
+    """Cấu hình CHỌN đi API cho cả ảnh lẫn video? (KHÔNG hỏi tới khoá)
+
+    Tách khỏi `che_do_toan_api` vì hai câu hỏi khác nhau và cần trả lời khác
+    nhau: *"người dùng muốn đi đường nào"* và *"đi được chưa"*.
+
+    Gộp hai câu đó làm một thì máy chưa dán khoá sẽ lặng lẽ hiện giao diện của
+    đường Chrome — `TRẠM ẢNH · acc Pro`, `TRẠM VIDEO · acc Ultra`, tám ô đứng
+    `-` — trong khi cấu hình đã là API. Người dùng không có cách nào biết thứ
+    duy nhất còn thiếu là dán khoá. Đã xảy ra thật trên máy thứ hai ngày
+    14/08/2026: code mới đã về, số phiên bản đúng, mà màn hình vẫn y như cũ.
+    """
+    if (cfg.get("veo3top_image_mode") or "").strip().lower() != "shopapi":
+        return False
+    video = (cfg.get("generation_backend") or cfg.get("generation_mode") or "").strip().lower()
+    return video == "shopapi"
+
+
 def che_do_toan_api(cfg):
     """CẢ ảnh LẪN video đều đi API shopapi, và máy đã có khoá?
 
@@ -150,12 +168,7 @@ def che_do_toan_api(cfg):
     Đó đúng là kiểu hỏng mà cả phiên 11/08/2026 đi chữa — thứ sai mà không có
     triệu chứng. Để hàm ở cấp module thì không lớp nào gọi hụt được nữa.
     """
-    if (cfg.get("veo3top_image_mode") or "").strip().lower() != "shopapi":
-        return False
-    video = (cfg.get("generation_backend") or cfg.get("generation_mode") or "").strip().lower()
-    if video != "shopapi":
-        return False
-    return _co_khoa_shopapi()
+    return cau_hinh_toan_api(cfg) and _co_khoa_shopapi()
 
 
 def _co_khoa_shopapi():
@@ -1063,23 +1076,60 @@ class HomePage(ctk.CTkScrollableFrame):
     }
 
     def _dat_nhan_tram(self):
-        """Đặt nhãn hai bảng trạm theo CHẾ ĐỘ đang chạy. Gọi lại khi đổi chế độ."""
+        """Đặt nhãn hai bảng trạm theo CHẾ ĐỘ đang chạy. Gọi lại khi đổi chế độ.
+
+        BA trạng thái, không phải hai:
+
+          * cấu hình API + CÓ khoá  -> bảng API, chạy bình thường
+          * cấu hình API + THIẾU khoá -> vẫn bảng API, nhưng nói thẳng là thiếu
+            khoá. Bản trước rơi thẳng về bảng pool, và người dùng nhìn thấy
+            `TRẠM ẢNH · acc Pro` với tám ô `-` mà không có manh mối nào rằng thứ
+            duy nhất còn thiếu là dán khoá. Máy thứ hai ngày 14/08/2026 đứng
+            đúng ở đây: code mới đã về, số phiên bản đúng, màn hình y như cũ.
+          * cấu hình đường Chrome  -> bảng pool, đúng như trước.
+        """
+        cfg = getattr(self.app, "config_data", {}) or {}
         try:
-            di_api = che_do_toan_api(getattr(self.app, "config_data", {}) or {})
+            chon_api = cau_hinh_toan_api(cfg)
+            co_khoa = _co_khoa_shopapi() if chon_api else False
         except Exception:
-            di_api = False
-        bo = self.NHAN_TRAM_API if di_api else self.NHAN_TRAM_POOL
+            chon_api = co_khoa = False
+        di_api = chon_api and co_khoa
+        self._thieu_khoa_api = chon_api and not co_khoa
+        # Chọn API mà thiếu khoá thì VẪN dùng nhãn API — bảng phải khớp thứ người
+        # dùng đã chọn, rồi mới nói vì sao chưa chạy được.
+        bo = self.NHAN_TRAM_API if chon_api else self.NHAN_TRAM_POOL
         for k, cap in (getattr(self, "pool_caps", {}) or {}).items():
             if k in bo:
                 try: cap.configure(text=bo[k])
                 except Exception: pass
-        tieu_de = ({"img_issue": "🖼️ ẢNH · API shopapi", "vid_issue": "🎬 VIDEO · API shopapi"}
-                   if di_api else
-                   {"img_issue": "🖼️ TRẠM ẢNH · acc Pro", "vid_issue": "🎬 TRẠM VIDEO · acc Ultra"})
+        if self._thieu_khoa_api:
+            tieu_de = {"img_issue": "🖼️ ẢNH · API shopapi — CHƯA CÓ KHOÁ",
+                       "vid_issue": "🎬 VIDEO · API shopapi — CHƯA CÓ KHOÁ"}
+        elif chon_api:
+            tieu_de = {"img_issue": "🖼️ ẢNH · API shopapi",
+                       "vid_issue": "🎬 VIDEO · API shopapi"}
+        else:
+            tieu_de = {"img_issue": "🖼️ TRẠM ẢNH · acc Pro",
+                       "vid_issue": "🎬 TRẠM VIDEO · acc Ultra"}
         for k, lb in (getattr(self, "pool_titles", {}) or {}).items():
             if k in tieu_de:
                 try: lb.configure(text=tieu_de[k])
                 except Exception: pass
+
+        # Thiếu khoá: hai ô "vấn đề" nói thẳng phải làm gì. Không có dòng này thì
+        # bảng chỉ đứng `-` và người dùng đoán mò.
+        if self._thieu_khoa_api:
+            cau = ("⛔ CHƯA DÁN KHOÁ API. Cấu hình đã chọn đi API shopapi cho cả ảnh lẫn "
+                   "video, nhưng máy này chưa có khoá nên không gửi được job nào. "
+                   "Vào Settings → ô 'Khoá API shopapi' → dán khoá → Lưu khoá.")
+            try:
+                self.after(0, lambda: self._apply_pool_health(
+                    {k: "-" for k in (self.pool_caps or {})}
+                    | {"img_issue": (cau, RED), "vid_issue": (cau, RED)},
+                    "Chưa có khoá API shopapi — xem Settings"))
+            except Exception:
+                pass
         return di_api
 
     def app_client_jobs_list(self, so=100):
