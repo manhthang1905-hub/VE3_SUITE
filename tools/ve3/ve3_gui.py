@@ -138,6 +138,36 @@ def quen_khoa_shopapi():
     _khoa_cache["den"] = 0.0
 
 
+#: Hai bảng chọn backend trên Settings. Ở CẤP MODULE, cố ý.
+#:
+#: ⚠ HAI BỘ TỪ VỰNG NÀY KHÔNG GIỐNG NHAU, và đó là cái bẫy đã cắn thật.
+#: Video dùng `veo3top_b_pool`; ẢNH dùng `pool`. Video dùng `server`; ảnh dùng
+#: `""`. Ai nhìn lướt sẽ tưởng chung một danh sách.
+#:
+#: Ngày 14/08/2026 tôi viết `_chuyen_may_cu_sang_api` với MỘT danh sách gõ tay
+#: — toàn giá trị của video. Máy thứ hai lên đúng bản 528, video được chuyển
+#: sang shopapi, còn `veo3top_image_mode: pool` thì không khớp phần tử nào nên
+#: đứng yên. `cau_hinh_toan_api` đòi CẢ HAI, nên nó trả False và giao diện vẫn
+#: nguyên `TRẠM ẢNH`/`TRẠM VIDEO` — sửa xong mà y như chưa sửa.
+#:
+#: Nên giờ danh sách "backend cũ" được SUY RA từ chính hai bảng này (mọi thứ
+#: khác `shopapi`), không ai gõ tay nữa. Thêm backend mới vào bảng là phần
+#: chuyển đường tự biết.
+BACKEND_VIDEO = {
+    "API shopapi": "shopapi", "Server": "server", "NanoPic": "nanopic",
+    "FlowKit": "flowkit", "Combined": "combined", "Veo3top": "veo3top",
+    "Veo3top-B": "veo3top_b", "Veo3top-B-Ultra": "veo3top_b_ultra",
+    "Veo3top-B-Pool (nha may chung)": "veo3top_b_pool",
+}
+BACKEND_ANH = {
+    "API shopapi (anh)": "shopapi", "Mac dinh": "", "Veo3top-B (anh)": "blank",
+    "Veo3top-B-Ultra (anh)": "account", "Veo3top-B-Pool (anh)": "pool",
+}
+#: Mọi backend KHÔNG phải shopapi = đường Chrome/VM cũ.
+BACKEND_VIDEO_CU = frozenset(v for v in BACKEND_VIDEO.values() if v != "shopapi")
+BACKEND_ANH_CU = frozenset(v for v in BACKEND_ANH.values() if v != "shopapi")
+
+
 def cau_hinh_toan_api(cfg):
     """Cấu hình CHỌN đi API cho cả ảnh lẫn video? (KHÔNG hỏi tới khoá)
 
@@ -2253,10 +2283,10 @@ class SettingsPage(ctk.CTkScrollableFrame):
         }
         self.claude_backend_labels = {v: k for k, v in self.claude_backend_options.items()}
         # "API shopapi" = goi thang api.shopapi.vn (MAC DINH cua ban nay, khong mo Chrome).
-        self.generation_backend_options = {"API shopapi": "shopapi", "Server": "server", "NanoPic": "nanopic", "FlowKit": "flowkit", "Combined": "combined", "Veo3top": "veo3top", "Veo3top-B": "veo3top_b", "Veo3top-B-Ultra": "veo3top_b_ultra", "Veo3top-B-Pool (nha may chung)": "veo3top_b_pool"}
+        self.generation_backend_options = dict(BACKEND_VIDEO)
         self.generation_backend_labels = {v: k for k, v in self.generation_backend_options.items()}
         # Backend TAO ANH (ban thang Flow API giong video). "" = dung backend anh cu (server/local token).
-        self.image_backend_options = {"API shopapi (anh)": "shopapi", "Mac dinh": "", "Veo3top-B (anh)": "blank", "Veo3top-B-Ultra (anh)": "account", "Veo3top-B-Pool (anh)": "pool"}
+        self.image_backend_options = dict(BACKEND_ANH)
         self.image_backend_labels = {v: k for k, v in self.image_backend_options.items()}
         self.grid_columnconfigure(0, weight=1)
 
@@ -4188,11 +4218,6 @@ Write-Output $kill.Count
         self._duong_di_cho_bao.append(dong)
         ghi_log_file(dong, "INFO")
 
-    #: Backend cũ đi Chrome/VM. Máy nào còn nằm ở đây là chưa từng được chuyển
-    #: sang API — `settings.yaml` bị `updater` bảo vệ nên cập nhật không với tới.
-    BACKEND_CU = ("server", "nanopic", "flowkit", "combined",
-                  "veo3top", "veo3top_b", "veo3top_b_ultra", "veo3top_b_pool")
-
     def _chuyen_may_cu_sang_api(self):
         """Máy cũ vẫn để backend Chrome/pool → chuyển sang API shopapi MỘT LẦN.
 
@@ -4217,8 +4242,13 @@ Write-Output $kill.Count
 
         1. **Chạy đúng một lần.** Ghi cờ `da_chuyen_sang_shopapi` vào cấu hình.
            Ai cố ý quay về pool sau đó sẽ KHÔNG bị ép lại lần hai.
-        2. **Chỉ chuyển từ backend cũ đã biết** (:data:`BACKEND_CU`). Giá trị lạ
-           thì để yên — không đoán hộ.
+        2. **Chỉ chuyển từ backend cũ đã biết** — :data:`BACKEND_VIDEO_CU` cho
+           video, :data:`BACKEND_ANH_CU` cho ảnh. HAI danh sách, vì hai bộ từ
+           vựng khác nhau: video là `veo3top_b_pool`, ảnh là `pool`. Bản đầu
+           dùng chung một danh sách gõ tay (toàn giá trị video) nên ảnh không
+           bao giờ được chuyển, `cau_hinh_toan_api` đòi cả hai nên vẫn trả
+           False, và máy 528 vẫn hiện `TRẠM ẢNH`/`TRẠM VIDEO` y như chưa sửa.
+           Giá trị lạ thì để yên — không đoán hộ.
         3. **Chép lưu trước khi ghi**, kèm dấu thời gian, cạnh file gốc.
         4. **Nói to.** In ra log và ghi vào `logs/`, kèm đường dẫn bản lưu và
            cách quay về.
@@ -4228,8 +4258,8 @@ Write-Output $kill.Count
             return
         vid = (cfg.get("generation_backend") or cfg.get("generation_mode") or "").strip().lower()
         anh = (cfg.get("veo3top_image_mode") or "").strip().lower()
-        doi_vid = vid in self.BACKEND_CU
-        doi_anh = anh in self.BACKEND_CU
+        doi_vid = vid in BACKEND_VIDEO_CU
+        doi_anh = anh in BACKEND_ANH_CU
         if not (doi_vid or doi_anh):
             cfg["da_chuyen_sang_shopapi"] = True   # đã ở API sẵn — đóng cửa, khỏi hỏi lại
             return

@@ -968,7 +968,6 @@ def _app_chuyen(cfg, tmp_path, monkeypatch):
     monkeypatch.setattr(ve3_gui, "ghi_log_file", lambda *a, **k: None)
 
     class _App:
-        BACKEND_CU = ve3_gui.VE3App.BACKEND_CU
         _chuyen_may_cu_sang_api = ve3_gui.VE3App._chuyen_may_cu_sang_api
 
         def __init__(self):
@@ -982,8 +981,10 @@ def _app_chuyen(cfg, tmp_path, monkeypatch):
 
 
 def test_may_cu_de_pool_thi_duoc_CHUYEN_sang_api(tmp_path, monkeypatch):
+    # ⚠ Ảnh là `pool`, video là `veo3top_b_pool` — HAI bộ từ vựng khác nhau.
+    # Đây đúng là cấu hình của máy thứ hai đêm 14/08/2026.
     cfg = {"generation_backend": "veo3top_b_pool", "generation_mode": "veo3top_b_pool",
-           "veo3top_image_mode": "veo3top_b_pool"}
+           "veo3top_image_mode": "pool"}
     app, ve3_gui = _app_chuyen(cfg, tmp_path, monkeypatch)
     app._chuyen_may_cu_sang_api()
     assert cfg["generation_backend"] == "shopapi"
@@ -995,7 +996,7 @@ def test_may_cu_de_pool_thi_duoc_CHUYEN_sang_api(tmp_path, monkeypatch):
 
 def test_chuyen_xong_thi_KHONG_ep_lan_hai(tmp_path, monkeypatch):
     """Ai cố ý quay về pool sau đó phải được tôn trọng."""
-    cfg = {"generation_backend": "veo3top_b_pool", "veo3top_image_mode": "veo3top_b_pool"}
+    cfg = {"generation_backend": "veo3top_b_pool", "veo3top_image_mode": "pool"}
     app, _ = _app_chuyen(cfg, tmp_path, monkeypatch)
     app._chuyen_may_cu_sang_api()
     cfg["generation_backend"] = "veo3top_b_pool"      # người dùng tự chọn lại
@@ -1007,7 +1008,7 @@ def test_chuyen_xong_thi_KHONG_ep_lan_hai(tmp_path, monkeypatch):
 
 
 def test_chuyen_thi_CHEP_LUU_cau_hinh_cu_truoc(tmp_path, monkeypatch):
-    cfg = {"generation_backend": "server", "veo3top_image_mode": "server"}
+    cfg = {"generation_backend": "server", "veo3top_image_mode": "blank"}
     app, _ = _app_chuyen(cfg, tmp_path, monkeypatch)
     app._chuyen_may_cu_sang_api()
     luu = list((tmp_path / "config").glob("settings.yaml.truoc-api-*"))
@@ -1077,3 +1078,69 @@ def test_xoa_khoa_HOI_LAI_va_KIEM_LAI_sau_khi_xoa():
     assert than.count("doc_khoa") >= 2, "phai doc_khoa LAI sau khi xoa de biet xoa hut hay khong"
     assert "SHOPAPI_KEY" in than, "xoa hut thi phai chi dich danh bien moi truong con giu khoa"
     assert "che_khoa" in than and "showinfo" in than and "showwarning" in than
+
+
+# ── Hai bộ từ vựng backend: KHÔNG được gõ tay lần nữa ────────────────────────
+
+
+def _ve3_gui():
+    import sys
+    VE3 = Path(__file__).resolve().parents[1] / "tools" / "ve3"
+    if str(VE3) not in sys.path:
+        sys.path.insert(0, str(VE3))
+    import ve3_gui
+    return ve3_gui
+
+
+@pytest.mark.parametrize("anh", sorted({"", "blank", "account", "pool"}))
+def test_MOI_backend_anh_cu_deu_duoc_chuyen(anh, tmp_path, monkeypatch):
+    """Bẫy đã cắn thật: `veo3top_image_mode: pool` không khớp danh sách của VIDEO.
+
+    Video dùng `veo3top_b_pool`, ảnh dùng `pool`. Bản đầu của
+    `_chuyen_may_cu_sang_api` chỉ có một danh sách gõ tay — toàn giá trị video.
+    Máy 528 chuyển được video, ảnh đứng yên, `cau_hinh_toan_api` đòi CẢ HAI nên
+    vẫn False: tool tiếp tục tạo ảnh lẫn video bằng Chrome/pool, giao diện vẫn
+    `TRẠM ẢNH`/`TRẠM VIDEO`, sửa xong y như chưa sửa.
+    """
+    cfg = {"generation_backend": "veo3top_b_pool", "veo3top_image_mode": anh}
+    app, ve3_gui = _app_chuyen(cfg, tmp_path, monkeypatch)
+    app._chuyen_may_cu_sang_api()
+    assert cfg["veo3top_image_mode"] == "shopapi", "backend anh {0!r} bi bo quen".format(anh)
+    assert ve3_gui.cau_hinh_toan_api(cfg), "cong API van dong -> van chay pool Chrome"
+
+
+@pytest.mark.parametrize("vid", sorted({"server", "nanopic", "flowkit", "combined",
+                                        "veo3top", "veo3top_b", "veo3top_b_ultra",
+                                        "veo3top_b_pool"}))
+def test_MOI_backend_video_cu_deu_duoc_chuyen(vid, tmp_path, monkeypatch):
+    cfg = {"generation_backend": vid, "veo3top_image_mode": "pool"}
+    app, ve3_gui = _app_chuyen(cfg, tmp_path, monkeypatch)
+    app._chuyen_may_cu_sang_api()
+    assert cfg["generation_backend"] == "shopapi", "backend video {0!r} bi bo quen".format(vid)
+    assert ve3_gui.cau_hinh_toan_api(cfg)
+
+
+def test_danh_sach_backend_cu_SUY_RA_tu_bang_chon_khong_go_tay():
+    """Thêm backend mới vào bảng chọn thì phần chuyển đường phải tự biết.
+
+    `VE3_SUITE` liệt kê backend bằng tay ở gần chục chỗ, và mỗi lần thêm một
+    backend là một lớp lặng lẽ bỏ sót nó. Ở đây thì không: hai tập "backend cũ"
+    được sinh ra từ chính hai bảng chọn.
+    """
+    g = _ve3_gui()
+    assert g.BACKEND_VIDEO_CU == frozenset(
+        v for v in g.BACKEND_VIDEO.values() if v != "shopapi")
+    assert g.BACKEND_ANH_CU == frozenset(
+        v for v in g.BACKEND_ANH.values() if v != "shopapi")
+    assert "shopapi" not in g.BACKEND_VIDEO_CU and "shopapi" not in g.BACKEND_ANH_CU
+    # Bằng chứng hai bộ từ vựng THẬT SỰ khác nhau — đừng gộp làm một lần nữa.
+    assert "pool" in g.BACKEND_ANH_CU and "pool" not in g.BACKEND_VIDEO_CU
+    assert "veo3top_b_pool" in g.BACKEND_VIDEO_CU and "veo3top_b_pool" not in g.BACKEND_ANH_CU
+    assert "" in g.BACKEND_ANH_CU, "'Mac dinh' cua anh la duong cu, phai duoc chuyen"
+
+
+def test_Settings_dung_CHUNG_bang_chon_o_cap_module():
+    """Bảng chọn dựng riêng trong `SettingsPage` thì hai bên lệch nhau lúc nào không hay."""
+    nguon = VE3_GUI.read_text(encoding="utf-8", errors="replace")
+    assert "self.generation_backend_options = dict(BACKEND_VIDEO)" in nguon
+    assert "self.image_backend_options = dict(BACKEND_ANH)" in nguon
