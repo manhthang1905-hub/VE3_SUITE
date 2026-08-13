@@ -49,7 +49,8 @@ from __future__ import annotations
 import math
 import threading
 import time
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor
+from concurrent.futures import wait as futures_wait
 
 try:                       # chạy trong tool: import cùng thư mục veo3top_engine
     import shopapi_common as _sc
@@ -485,16 +486,48 @@ class _NhipDoDuPhong:
         self._tham_do = True
 
 
-def _tao_nhip():
+def _tao_nhip(bat_dau=None):
     """`NhipDo` của SDK khi có; không có thì bản dự phòng ở trên.
 
     Ưu tiên bản của SDK vì nó còn nhìn được **thời gian job nằm hàng chờ** —
     tín hiệu nghẽn nhìn thấy TRƯỚC khi phải ăn `429`.
+
+    ═══ VÌ SAO BẮT ĐẦU Ở TRẦN MÁY CHỦ, KHÔNG PHẢI Ở 1 ═══
+
+    `NHIP_DAU = 1` của SDK có lý do chính đáng, và docstring của nó nói rõ:
+    hàng trăm tool lạ cùng khởi động buổi sáng mà mỗi cái vọt thẳng lên trần
+    thì chúng dựng ra đúng cơn nghẽn mà chúng định tránh. Đúng — CHO MỘT SDK
+    CÔNG CỘNG.
+
+    Ở đây thì sai, và sai rất đắt. Đo ngày 11/08/2026:
+
+      * `GET /v1/me` cấp **691 chỗ ảnh / 374 chỗ video**, và nói nguyên văn:
+        *"đang chừa 77 chỗ cho khách mới, và hiện chỉ có bạn đang dùng — gửi
+        tối đa 691 job cùng lúc thì chúng chạy NGAY."*
+      * Luật tăng là **+1 mỗi lô mượt**, nên muốn đạt nhịp N phải chạy hết
+        N(N+1)/2 job. Một mã 87 scene bò tới nhịp 12 là hết việc; chạm 691 cần
+        ~239.000 job liên tục — không bao giờ tới.
+      * Kết quả đo trên chính lớp này: bình quân **6,7 job cùng lúc = 1% chỗ
+        được cấp**. Số này khớp với 5,6 job/lúc đo ở log nhà máy.
+      * Quy ra thời gian: 4.206 job còn tồn chạy hết trong **~33 tiếng** thay vì
+        **~10 phút**.
+
+    Máy chủ ĐÃ tính phần chia (sức chứa trừ dự phòng, chia cho số khách đang
+    chờ) và ĐÃ chừa sẵn chỗ cho khách mới. Client dò lại từ 1 là đề phòng hai
+    lần cho cùng một chuyện, mà lần thứ hai thì mù — nó không biết nhà máy rộng
+    bao nhiêu, chỉ biết bò lên từng bước.
+
+    Nên: **bắt đầu ở đúng con số máy chủ cấp**, rồi để AIMD làm việc nó giỏi
+    nhất là ĐI XUỐNG khi thực tế phản đối (429 chia đôi, 503 dừng hẳn, hàng chờ
+    dài thì hạ). Chặn trên vẫn nguyên vẹn: `_hoi_tran` đã kẹp qua cả trần cứng
+    lẫn trần người dùng trước khi con số tới được đây.
     """
     try:
         _sc.bootstrap_sdk()
         from shopapi._nhip_do import NhipDo
-        return NhipDo()
+        if bat_dau is None:
+            return NhipDo()
+        return NhipDo(bat_dau=max(1, int(bat_dau)))
     except Exception:
         return _NhipDoDuPhong()
 
@@ -502,8 +535,36 @@ def _tao_nhip():
 # ── Hỏi trần ─────────────────────────────────────────────────────────────────
 
 
-def _hoi_tran(loai, tran_tool=None, client=None, api_key=None, log=print):
+#: Chờ job xong lâu nhất ngần này giây rồi ngoi lên kiểm `dung_lai` một lượt.
+#:
+#: Đây là độ trễ tối đa từ lúc khách bấm Dừng tới lúc tool thôi gửi thêm. Ngắn
+#: hơn thì vòng ngoài quay không; dài hơn thì nút Dừng trông như bị kẹt.
+NHIP_KIEM_DUNG = 2.0
+
+#: Giữ trần đã đọc ngần này giây trước khi hỏi `/v1/me` lại.
+#:
+#: ⚠ CON SỐ NÀY LÀ HÀNG RÀO CHỐNG TỰ BẮN VÀO CHÂN, ĐỪNG HẠ VỀ 0.
+#:
+#: Từ khi bỏ hàng rào mỗi lô (xem `_thu_hoach`), vòng lặp không còn quay 13 lần
+#: cho một mẻ 88 việc mà quay gần một lần cho MỖI JOB xong — tức ~88 lượt hỏi
+#: `/v1/me` thay vì 13, nhân với 8 tiến trình mã chạy song song.
+#:
+#: CONTRACT.md §8.2b liệt kê đúng chuyện này vào mục việc-đừng-làm: *"Hỏi GET
+#: /v1/me trước mỗi request. Thừa, và tự đốt hạn mức đọc trạng thái."* Đốt hết
+#: hạn mức thì `_hoi_tran` bắt đầu trả về mức đoán, và mức đoán kéo nhịp xuống —
+#: tức là tối ưu thông lượng xong lại tự bóp thông lượng, qua một đường vòng mà
+#: không có dòng log nào nối hai đầu lại.
+#:
+#: 15 giây: trần máy chủ đổi theo số khách đang chờ, không đổi theo từng giây.
+TRAN_TTL = 15.0
+
+
+def _hoi_tran(loai, tran_tool=None, client=None, api_key=None, log=print,
+              truoc_do=None):
     """Một lời hỏi `/v1/me`, đã chặn trên. Trả `0` khi nhà máy đang dừng.
+
+    `truoc_do` là trần đọc được lần gần nhất. Hỏi không được thì trả LẠI con số
+    đó thay vì tụt về `1` — xem khối cảnh báo trong thân hàm.
 
     Ba mức chặn, theo đúng thứ tự nghiêm ngặt dần:
 
@@ -524,8 +585,24 @@ def _hoi_tran(loai, tran_tool=None, client=None, api_key=None, log=print):
         tran = -1
 
     if tran < 0:
+        # ⚠ HỎNG MỘT LƯỢT ĐỌC KHÔNG PHẢI LÀ "NHÀ MÁY CHỈ CÒN MỘT CHỖ".
+        #
+        # Bản trước trả thẳng `1` với lý do "đoán thấp còn hơn đứng im". Lý do đó
+        # đúng cho lượt đọc ĐẦU TIÊN, khi ta chưa biết gì. Từ lượt thứ hai trở đi
+        # nó thành một cái bẫy: `NhipDo.dat_tran(1)` KÉO NHỊP XUỐNG 1 ngay lập
+        # tức, và luật tăng +1 mỗi lô nghĩa là một cú mạng chập nửa giây đổi lấy
+        # cả phần còn lại của mẻ chạy ở tốc độ bò.
+        #
+        # Trần vừa đọc được cách đây mươi giây là ước lượng tốt hơn hẳn số 1, và
+        # nếu nhà máy thật sự đã hẹp lại thì `429`/`503` sẽ nói — đó mới là tín
+        # hiệu đáng tin, vì nó đến từ chính lượt gửi thật.
+        if truoc_do and int(truoc_do) > 0:
+            log("API shopapi: khong hoi duoc GET /v1/me cho '{0}' -> GIU trần cũ {1} "
+                "(tut ve 1 la tu bop minh vi mot cu mang chap)"
+                .format(loai, int(truoc_do)), "WARN")
+            return int(truoc_do)
         log("API shopapi: khong hoi duoc GET /v1/me cho '{0}' -> tam chay 1 job "
-            "(doan thap con hon dung im)".format(loai), "WARN")
+            "(chua tung doc duoc lan nao; doan thap con hon dung im)".format(loai), "WARN")
         tran = 1
     if tran == 0:
         return 0
@@ -660,16 +737,126 @@ def chay_ca_me(viec, chay_mot, loai, tran_tool=None, client=None, api_key=None,
 
     ket_qua = {}
     con_lai = list(range(tong))
-    nhip = nhip if nhip is not None else _tao_nhip()
+    #: Trần đọc gần nhất + lúc đọc. Vòng lặp hỏi qua `_doc_tran`, không hỏi thẳng.
+    _tran_moi_nhat = [0, 0.0]
+
+    def _doc_tran():
+        """Trần hiện tại, hỏi lại `/v1/me` nhiều nhất mỗi `TRAN_TTL` giây.
+
+        Xem khối cảnh báo ở `TRAN_TTL`: bỏ hàng rào làm vòng lặp quay gần một
+        lần mỗi job xong, nên hỏi thẳng ở đây là hỏi ~88 lần một mẻ thay vì 13.
+        """
+        gio = time.monotonic()
+        if _tran_moi_nhat[0] > 0 and (gio - _tran_moi_nhat[1]) < TRAN_TTL:
+            return _tran_moi_nhat[0]
+        t = _hoi_tran(loai, tran_tool, client=client, api_key=api_key, log=log,
+                      truoc_do=_tran_moi_nhat[0])
+        # `0` = nhà máy ĐANG DỪNG. KHÔNG nhớ nó: nhớ số 0 thì lượt sau đọc phải
+        # số 0 đã cũ và tưởng nhà máy vẫn chết, trong khi nó có thể vừa sống lại.
+        if t > 0:
+            _tran_moi_nhat[0], _tran_moi_nhat[1] = t, gio
+        return t
+
+    if nhip is None:
+        # HỎI TRẦN TRƯỚC KHI DỰNG VÒNG DÒ. Máy chủ đã tính sẵn phần của ta (sức
+        # chứa trừ dự phòng, chia cho số khách đang chờ), nên đó là điểm xuất
+        # phát đúng — xem khối `why` dài trong `_tao_nhip`. Bắt đầu ở 1 rồi bò
+        # lên là bỏ phí 99% chỗ được cấp, và mẻ nào cũng bò lại từ đầu.
+        _tran_dau = _doc_tran()
+        nhip = _tao_nhip(bat_dau=_tran_dau)
+        if _tran_dau > 0:
+            log("API shopapi: me {0} bat dau o {1} job cung luc (dung bang tran may chu "
+                "dang cap; AIMD chi con viec HA XUONG khi thuc te phan doi)"
+                .format(loai, _tran_dau))
     cong = cong if cong is not None else CongHangCho(han_giay=han_giay)
     da_cho = 0.0
     lo_thu = 0
+    #: Job đã gửi, chưa biết kết quả. Đây là thứ thay cho hàng rào cũ.
+    dang_bay = {}
+    #: Một pool sống suốt cả mẻ. `ThreadPoolExecutor` dựng luồng LƯỜI nên đặt
+    #: rộng bằng trần cứng không tốn gì: số luồng thật sự mở ra luôn bằng số job
+    #: đang bay, mà số đó đã bị `nhip` + `cong` chặn ở trên rồi.
+    try:
+        _tran_pool = max(1, int(_sc.tran_cung(loai)))
+    except Exception:
+        _tran_pool = 64
+    pool = ThreadPoolExecutor(max_workers=_tran_pool,
+                              thread_name_prefix="shopapi-{0}".format(loai))
 
-    while con_lai:
+    def _thu_hoach(cho_it_nhat_mot):
+        """Nhặt job đã xong, trả chỗ, báo nhịp. Trả danh sách việc cần gửi lại.
+
+        ═══ VÌ SAO KHÔNG CÒN CHỜ HẾT CẢ LÔ ═══
+
+        Bản trước dựng một `ThreadPoolExecutor` MỚI cho mỗi lô rồi `as_completed`
+        cho tới hết — tức là **hàng rào**: job xong sớm nằm không đợi job chậm
+        nhất, và cả lô chỉ nhanh bằng cái chậm nhất của nó. Với video p50 59
+        giây mà đuôi tới 226 giây, mỗi lô mất gần bốn lần thời gian đáng phải mất.
+
+        Tệ hơn: nhịp chỉ tăng SAU khi trọn một lô xong, nên hàng rào còn làm
+        chậm cả tốc độ dò lên. Hai cái cộng lại là lý do một mẻ 87 scene chỉ đạt
+        6,7 job cùng lúc trong khi máy chủ đang mời 691.
+
+        Giờ: chờ job ĐẦU TIÊN xong là lấp chỗ ngay.
+        """
+        if not dang_bay:
+            return []
+        if cho_it_nhat_mot:
+            # ⚠ CÓ HẠN CHỜ, không chờ trắng. `futures_wait` không hạn thì bấm
+            # Dừng xong tool vẫn đứng đó tới lúc job chậm nhất xong — với video
+            # đuôi 226 giây thì đó là gần bốn phút không phản hồi. Hết hạn mà
+            # chưa có cái nào xong cũng không sao: vòng ngoài kiểm `dung_lai`
+            # rồi quay lại đây.
+            xong_roi, _ = futures_wait(list(dang_bay), timeout=NHIP_KIEM_DUNG,
+                                       return_when=FIRST_COMPLETED)
+        else:
+            xong_roi = [f for f in list(dang_bay) if f.done()]
+        lai = []
+        for f in xong_roi:
+            i = dang_bay.pop(f, None)
+            if i is None:
+                continue
+            cong.tra_cho(1)   # trả ĐÚNG một chỗ, ngay khi job đó rời hàng
+            try:
+                trang_thai, gia_tri = f.result()
+            except Exception as e:  # `_boc` đã nuốt hết, đây chỉ là lưới cuối
+                log("API shopapi: job {0} nem ngoai le lot luoi ({1}: {2})"
+                    .format(i, type(e).__name__, e), "ERROR")
+                ket_qua[i] = gia_tri_khi_hong
+                continue
+            if trang_thai == "nghen":
+                # Bị từ chối NGAY Ở CỬA: chưa tốn tiền, việc chưa mất.
+                lai.append(i)
+                if gia_tri.ma == 429:
+                    nhip.bi_chan(gia_tri.cho)
+                    cong.bi_nghen(gia_tri.cho)
+                else:
+                    nhip.nha_may_dung(gia_tri.cho)
+                    cong.nha_may_dung(gia_tri.cho)
+                continue
+            ket_qua[i] = gia_tri
+            nhip.xong()
+        return lai
+
+    try:
+      while con_lai or dang_bay:
         if dung_lai is not None and dung_lai():
             log("API shopapi: nhan lenh DUNG -> bo {0} viec con lai cua me {1}"
                 .format(len(con_lai), loai), "WARN")
             break
+
+        # ⚠ NHẶT KẾT QUẢ TRƯỚC MỌI THỨ KHÁC, kể cả trước khi xét có phải ngủ không.
+        #
+        # Job đang bay là job KHÁCH ĐÃ TRẢ TIỀN. Nếu nhà máy vừa báo dừng
+        # (`503` từ một job khác) thì `cho > 0` và vòng lặp rơi vào nhánh ngủ bên
+        # dưới — những job đang bay vẫn về đích trong lúc đó, nhưng không ai nhặt.
+        # Ngủ đủ lâu thì `da_cho` chạm `cho_toi_da`, vòng lặp `break`, và kết quả
+        # của chúng bị vứt: khách mất tiền cho ảnh đã dựng xong.
+        #
+        # Nhặt ở đây là KHÔNG CHỜ, nên nó không làm chậm nhánh nào cả.
+        _lai_som = _thu_hoach(cho_it_nhat_mot=False)
+        if _lai_som:
+            con_lai = sorted(_lai_som) + con_lai
 
         # ⚠ NGỦ TRƯỚC, HỎI SAU. Đang trong quãng dừng thì `GET /v1/me` không đổi
         # được gì cả — trần chỉ mở lại khi có máy xử lý báo danh, chứ không phải
@@ -678,6 +865,10 @@ def chay_ca_me(viec, chay_mot, loai, tran_tool=None, client=None, api_key=None,
         # vì hàng đang dài / vừa ăn 429. Lấy cái LỚN HƠN — cả hai đều là "đừng
         # gửi bây giờ", và bỏ qua một cái là bỏ qua đúng lý do quan trọng hơn.
         cho = max(float(nhip.cho_bao_lau()), float(cong.cho_bao_lau()))
+        # Còn job đang bay thì KHÔNG ngủ trọn quãng: phải quay lại nhặt. Quãng
+        # dừng là lệnh "đừng GỬI THÊM", không phải "đừng nhận hàng về".
+        if cho > 0 and dang_bay:
+            cho = min(cho, NHIP_KIEM_DUNG)
         if cho > 0:
             if da_cho >= cho_toi_da:
                 log("API shopapi: nha may {0} DUNG qua lau (da cho {1:.0f}s) -> bo {2} viec con lai. "
@@ -696,23 +887,35 @@ def chay_ca_me(viec, chay_mot, loai, tran_tool=None, client=None, api_key=None,
         # Trần máy chủ là mức CHẶN TRÊN, đọc lại MỖI LÔ (không phải mỗi job:
         # nhóm đọc trạng thái có hạn mức riêng). `dat_tran(0)` tự chuyển vòng dò
         # sang trạng thái "nhà máy đang dừng" -> vòng sau rơi vào nhánh ngủ trên.
-        tran = _hoi_tran(loai, tran_tool, client=client, api_key=api_key, log=log)
+        tran = _doc_tran()
         nhip.dat_tran(tran)
         cong.dat_tran(tran)
         # ⚠ CỔNG CẮT SAU NHỊP. `nhip.cho_phep()` nói "chạy nhanh tới đâu";
         # `cong.giu_cho()` nói "hàng chờ còn nuốt được mấy job nữa". Lô thật là
         # phần giao của hai câu đó — và `giu_cho` GIỮ CHỖ luôn, nên không có khe
         # nào cho hai luồng cùng thấy "còn chỗ" rồi cùng gửi.
-        n = int(nhip.cho_phep())
+        # ⚠ TRỪ ĐI SỐ JOB ĐANG BAY. `cho_phep()` là trần cho TỔNG số job đang
+        # chạy, không phải cho mỗi lần gửi. Quên trừ là mỗi vòng lại xin thêm
+        # trọn một trần nữa, và tool vượt trần máy chủ trong vài vòng.
+        n = max(0, int(nhip.cho_phep()) - len(dang_bay))
         # ⚠ CẮT THEO SỐ VIỆC CÒN LẠI **TRƯỚC KHI** GIỮ CHỖ, đừng làm ngược.
-        # `lo = con_lai[:n]` tự cắt bớt, nên xin 6 chỗ khi chỉ còn 5 việc là giữ
-        # 6 mà chỉ trả 5 — mỗi lô cuối rò một chỗ, và sau vài mẻ nối tiếp thì
-        # cổng khoá cứng vì tưởng còn job đang bay. Bài
-        # `test_cong_nha_HET_cho_du_lo_an_429` bắt được đúng lỗi này.
+        # Xin 6 chỗ khi chỉ còn 5 việc là giữ 6 mà chỉ trả 5 — mỗi lượt cuối rò
+        # một chỗ, và sau vài mẻ nối tiếp thì cổng khoá cứng vì tưởng còn job
+        # đang bay. Bài `test_cong_nha_HET_cho_du_lo_an_429` bắt đúng lỗi này.
         n = min(n, len(con_lai))
         if n > 0:
             n = cong.giu_cho(n)
         if n <= 0:
+            if dang_bay:
+                # CÒN JOB ĐANG BAY thì không được ngủ: chỉ cần MỘT cái xong là
+                # có chỗ trống ngay. Đây chính là chỗ thay cho hàng rào cũ.
+                tra_lai = _thu_hoach(cho_it_nhat_mot=True)
+                if tra_lai:
+                    log("API shopapi: me {0} - {1} viec bi tu choi o cua ({2}) -> TRA VE "
+                        "DAU HANG CHO, KHONG mat viec, KHONG bi tru tien"
+                        .format(loai, len(tra_lai), nhip.mo_ta()), "WARN")
+                    con_lai = sorted(tra_lai) + con_lai
+                continue
             if nhip.cho_bao_lau() <= 0 and cong.cho_bao_lau() <= 0:
                 # Cổng đóng vì hàng dài chứ không vì một quãng dừng có hạn -> phải
                 # tự ngủ, nếu không vòng này quay tít và đốt CPU.
@@ -731,43 +934,59 @@ def chay_ca_me(viec, chay_mot, loai, tran_tool=None, client=None, api_key=None,
 
         lo, con_lai = con_lai[:n], con_lai[n:]
         lo_thu += 1
-        log("API shopapi: me {0} lo {1} -> ban {2} job CUNG LUC ({3} viec con lai) | {4}"
-            .format(loai, lo_thu, len(lo), len(con_lai), cong.mo_ta()))
+        # ⚠ GỬI TỪNG CÁI VÀ CHỊU ĐƯỢC LỖI GIỮA CHỪNG.
+        #
+        # `ThreadPoolExecutor.submit` ném `RuntimeError` khi hệ điều hành không
+        # tạo nổi luồng nữa. Ở nhịp cũ (12 luồng) chuyện đó không bao giờ xảy ra;
+        # ở nhịp mới thì một máy chạy 8 tiến trình mã × 88 luồng là 704 luồng, và
+        # đó là vùng mà Windows bắt đầu từ chối.
+        #
+        # Để lỗi bay thẳng ra thì việc đã bốc khỏi `con_lai` biến mất không dấu
+        # vết: khách trả tiền cho một scene không bao giờ được gửi đi, và Excel
+        # vẫn ghi "chưa làm" nên lần sau chạy lại mới ra. Trả nó về hàng chờ và
+        # HẠ NHỊP mới đúng — máy đã hết luồng thì xin thêm chỗ cũng vô nghĩa.
+        gui_duoc = 0
+        for vi_tri, i in enumerate(lo):
+            try:
+                dang_bay[pool.submit(_boc, chay_mot, viec[i], gia_tri_khi_hong,
+                                     log, cong)] = i
+            except Exception as e:  # noqa: BLE001 — hết luồng / pool đã đóng
+                con_lai = lo[vi_tri:] + con_lai
+                cong.tra_cho(len(lo) - vi_tri)
+                nhip.bi_chan()
+                log("API shopapi: me {0} khong mo them duoc luong ({1}: {2}) -> tra {3} "
+                    "viec ve hang cho va HA NHIP. Neu lap lai, ha `shopapi_ma_song_song` "
+                    "hoac `max_concurrent` trong settings.yaml."
+                    .format(loai, type(e).__name__, e, len(lo) - vi_tri), "ERROR")
+                break
+            gui_duoc += 1
+        log("API shopapi: me {0} lo {1} -> ban them {2} job ({3} dang bay, {4} viec con lai) | {5}"
+            .format(loai, lo_thu, gui_duoc, len(dang_bay), len(con_lai), cong.mo_ta()))
+        if not gui_duoc:
+            # Không gửi nổi cái nào mà cũng không có gì đang bay -> phải nghỉ,
+            # nếu không vòng này quay tít và đốt CPU đúng lúc máy đang ngộp.
+            if not dang_bay:
+                ngu(cho_khi_dung)
+                da_cho += cho_khi_dung
+            continue
 
-        tra_lai = []
-        try:
-            with ThreadPoolExecutor(max_workers=len(lo)) as pool:
-                tuong_lai = {
-                    pool.submit(_boc, chay_mot, viec[i], gia_tri_khi_hong, log, cong): i
-                    for i in lo
-                }
-                for tl in as_completed(tuong_lai):
-                    i = tuong_lai[tl]
-                    trang_thai, gia_tri = tl.result()
-                    if trang_thai == "nghen":
-                        # Bị từ chối NGAY Ở CỬA: chưa tốn tiền, việc chưa mất.
-                        tra_lai.append(i)
-                        if gia_tri.ma == 429:
-                            nhip.bi_chan(gia_tri.cho)
-                            cong.bi_nghen(gia_tri.cho)
-                        else:
-                            nhip.nha_may_dung(gia_tri.cho)
-                            cong.nha_may_dung(gia_tri.cho)
-                        continue
-                    ket_qua[i] = gia_tri
-                    nhip.xong()
-        finally:
-            # ⚠ TRẢ ĐÚNG SỐ CHỖ ĐÃ GIỮ, và trả trong `finally`. Rò chỗ ở đây là
-            # cổng chỉ tăng mà không giảm -> tới lúc nào đó khoá cứng cả mẻ mà
-            # không một dòng nào nói vì sao. Trả THỪA cũng hỏng: cổng tưởng trời
-            # trống rồi bắn quá tay trở lại. `len(lo)` là con số duy nhất đúng.
-            cong.tra_cho(len(lo))
-
+        # Nhặt những cái ĐÃ xong (không chờ) để lấp chỗ ngay vòng sau. Chỉ khi
+        # đã bắn hết việc mới chịu đứng lại chờ — lúc đó không còn gì để lấp.
+        tra_lai = _thu_hoach(cho_it_nhat_mot=not con_lai)
         if tra_lai:
             log("API shopapi: me {0} - {1} viec bi tu choi o cua ({2}) -> TRA VE DAU HANG CHO, "
                 "KHONG mat viec, KHONG bi tru tien"
                 .format(loai, len(tra_lai), nhip.mo_ta()), "WARN")
-        # Về ĐẦU hàng chờ để việc bị hoãn không tụt xuống cuối mẻ rồi chờ mãi.
-        con_lai = sorted(tra_lai) + con_lai
+            # Về ĐẦU hàng chờ để việc bị hoãn không tụt xuống cuối mẻ rồi chờ mãi.
+            con_lai = sorted(tra_lai) + con_lai
+    finally:
+        # ⚠ TRẢ CHỖ CHO MỌI JOB CÒN BAY, kể cả khi thoát vì `dung_lai` hay lỗi.
+        # Rò chỗ ở đây là cổng chỉ tăng không giảm -> mẻ SAU khoá cứng mà không
+        # một dòng nào nói vì sao. `cong` sống lâu hơn một mẻ nên đây là thật.
+        if dang_bay:
+            cong.tra_cho(len(dang_bay))
+        # Không chờ job dở: `dung_lai` nghĩa là khách bấm Dừng, đứng đợi thêm
+        # vài phút nữa là đúng thứ họ vừa bảo đừng làm.
+        pool.shutdown(wait=False)
 
     return [ket_qua.get(i) for i in range(tong)]

@@ -24,6 +24,7 @@ một engine** ứng với `duration`. Engine đó chết thì job chết theo, 
 from __future__ import annotations
 
 import os
+import re
 
 try:                       # chạy trong tool: import cùng thư mục veo3top_engine
     import shopapi_common as _sc
@@ -55,6 +56,68 @@ def _nem_neu_nghen(exc, nem):
         raise nghen
 
 
+#: Mã file trong URL kho: `.../2026/08/11/upl_rh0kp0npms36fw99a7spkldj.png?X-Amz-...`
+_RE_MA_UPLOAD = re.compile(r"/(upl_[A-Za-z0-9]+)")
+
+
+def _ma_upload(url):
+    """Moi mã `upl_...` ra khỏi URL kho. `None` nếu URL không phải của kho ta.
+
+    `client.uploads.upload_file` chỉ trả về URL, không trả mã — mà muốn gọi
+    `DELETE /v1/uploads/{id}` thì phải có mã. Đọc từ URL là đường duy nhất không
+    phải chép lại ruột SDK (create -> _put -> confirm), và nó an toàn theo hướng
+    đúng: không khớp thì trả `None` và ta chỉ đơn giản không dọn.
+
+    Neo vào dấu `/` phía trước để không nhặt nhầm chuỗi `upl_` nằm trong tham số
+    chữ ký của URL.
+    """
+    m = _RE_MA_UPLOAD.search(str(url or ""))
+    return m.group(1) if m else None
+
+
+def _don_upload(client, upload_id, log):
+    """Xoá ảnh khung đầu khỏi kho sau khi video đã về đĩa.
+
+    ═══ VÌ SAO PHẢI DỌN, VÀ VÌ SAO CHỈ DỌN LÚC ĐÃ XONG ═══
+
+    Mỗi job video upload MỘT ảnh khung đầu. CONTRACT.md §6 đặt hai trần cho kho
+    của một khách:
+
+        số file còn sống : 200
+        tổng dung lượng  : 500 MB
+
+    File đã có job dùng sống **2 giờ kể từ lần dùng gần nhất**, và client trước
+    nay không xoá cái nào. Đo ngày 11/08/2026: 456 video/giờ × 2 giờ = ~900 file
+    còn sống trên trần 200. Chưa nổ vì mới chạy 41 phút, nhưng nó chắc chắn nổ,
+    và nó nổ theo kiểu khó đoán nhất: job mới bị từ chối ở khâu upload, tức là
+    hỏng ở một chỗ chẳng liên quan gì tới nội dung hay tới nhà máy.
+
+    Contract nói thẳng đường chữa: *"Muốn giải phóng hạn mức sớm hơn thì gọi
+    `DELETE /v1/uploads/{id}` — không bắt buộc, nhưng nhanh hơn ngồi chờ hết
+    hạn."*
+
+    CHỈ DỌN KHI VIDEO ĐÃ VỀ ĐĨA. Job hỏng thì `chay_ca_me` trả nó về hàng chờ và
+    chạy lại — xoá ảnh lúc đó là biến một lần thử lại bình thường thành hỏng
+    vĩnh viễn ("khong thay anh scene").
+
+    KHÔNG BAO GIỜ làm hỏng job vì dọn không được. Video đã nằm trên đĩa và khách
+    đã trả tiền; một lời gọi dọn trượt chỉ có nghĩa là file đó chờ hết 2 giờ như
+    trước, đúng bằng hành vi cũ.
+
+    ⚠ Ảnh THAM CHIẾU của đường tạo ẢNH thì KHÔNG dọn kiểu này: một ảnh nhân vật
+    được dùng lại cho hàng chục scene, và hạn của nó trượt theo mỗi lần dùng.
+    Xoá sau scene đầu là cắt chân những scene sau.
+    """
+    if not upload_id:
+        return
+    try:
+        client.uploads.delete(upload_id)
+    except Exception as exc:  # noqa: BLE001 — dọn trượt KHÔNG phải lỗi của job
+        log("    [shopapi-vid] khong don duoc anh khung dau {0} ({1}) — no se tu het "
+            "han sau 2 gio, khong anh huong video vua tai ve"
+            .format(upload_id, _sc.mo_ta_loi(exc)), "WARN")
+
+
 def generate(image_path, prompt, out_path, aspect=None, seed=None, timeout=1600,
              log=print, api_key=None, client=None, nem_khi_nghen=False):
     """Gửi 1 job video tới API shopapi. Trả `(success, info, error)` — KHỚP `_submit_video`.
@@ -81,6 +144,9 @@ def generate(image_path, prompt, out_path, aspect=None, seed=None, timeout=1600,
         log("    [shopapi-vid] bo qua seed={0}: API video khong nhan tham so nay".format(seed))
 
     image_url = None
+    #: Mã file vừa upload cho RIÊNG job này — để dọn sau khi video về đĩa.
+    #: `None` khi khách tự đưa URL sẵn (không phải của ta, không được xoá).
+    upload_id = None
     if image_path:
         if isinstance(image_path, str) and image_path.lower().startswith(("http://", "https://")):
             image_url = image_path
@@ -96,6 +162,7 @@ def generate(image_path, prompt, out_path, aspect=None, seed=None, timeout=1600,
                 _nem_neu_nghen(exc, nem_khi_nghen)
                 return False, {}, "shopapi-vid: upload anh scene that bai: {0}".format(
                     _sc.mo_ta_loi(exc))
+            upload_id = _ma_upload(image_url)
     else:
         log("    [shopapi-vid] KHONG co anh scene -> chay che do chu-thanh-video", "WARN")
 
@@ -165,6 +232,9 @@ def generate(image_path, prompt, out_path, aspect=None, seed=None, timeout=1600,
         so_byte = os.path.getsize(str(out_path))
     except OSError:
         so_byte = 0
+
+    # VIDEO ĐÃ VỀ ĐĨA -> ảnh khung đầu hết việc. Dọn ngay, xem `_don_upload`.
+    _don_upload(client, upload_id, log)
 
     info = {
         "backend": "shopapi",

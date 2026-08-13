@@ -84,11 +84,25 @@ def me_nhanh():
 
 
 def _lo_da_ban(nhat_ky):
-    """Đọc kích thước từng lô từ log — cách duy nhất soi nhịp mà không phá đóng gói."""
+    """Số job GỬI THÊM ở mỗi lượt — cách duy nhất soi nhịp mà không phá đóng gói."""
     ra = []
     for _lv, m in nhat_ky.dong:
-        if "job CUNG LUC" in m:
-            ra.append(int(m.split("-> ban ")[1].split(" job")[0]))
+        if "-> ban them " in m:
+            ra.append(int(m.split("-> ban them ")[1].split(" job")[0]))
+    return ra
+
+
+def _dang_bay(nhat_ky):
+    """Số job ĐANG BAY ở mỗi lượt — thước đo song song THẬT.
+
+    Từ khi bỏ hàng rào mỗi lô, "số job gửi thêm lượt này" không còn là số job
+    chạy cùng lúc: lượt sau chỉ lấp phần chỗ vừa trống. Trần máy chủ chặn TỔNG
+    số job đang bay, nên đây mới là con số phải đem đi so với nó.
+    """
+    ra = []
+    for _lv, m in nhat_ky.dong:
+        if " dang bay, " in m:
+            ra.append(int(m.split("(")[1].split(" dang bay")[0]))
     return ra
 
 
@@ -289,19 +303,66 @@ def test_nha_may_dung_giua_me_thi_bo_cuoc_co_kiem_soat(tran_gia, nhat_ky, ngu_gi
 
 
 def test_lo_KHONG_BAO_GIO_vuot_tran_may_chu(tran_gia, nhat_ky):
-    """Trần máy chủ là mức KHÔNG ĐƯỢC VƯỢT — kể cả khi vòng dò đang muốn tăng."""
+    """Trần máy chủ là mức KHÔNG ĐƯỢC VƯỢT — kể cả khi vòng dò đang muốn tăng.
+
+    Đo TỔNG SỐ JOB ĐANG BAY, không đo số gửi thêm mỗi lượt: từ khi bỏ hàng rào,
+    trần chặn cái thứ nhất chứ không chặn cái thứ hai.
+    """
     tran_gia(3)
 
     ket = sb.chay_ca_me(list(range(30)), lambda v: v, "image", log=nhat_ky)
 
     assert ket == list(range(30))
-    assert max(_lo_da_ban(nhat_ky)) <= 3
+    assert max(_dang_bay(nhat_ky)) <= 3
 
 
 def test_tran_nguoi_dung_dat_van_thang_khi_may_chu_rong(tran_gia, nhat_ky):
     tran_gia(64)
     sb.chay_ca_me(list(range(30)), lambda v: v, "image", tran_tool=2, log=nhat_ky)
-    assert max(_lo_da_ban(nhat_ky)) <= 2
+    assert max(_dang_bay(nhat_ky)) <= 2
+
+
+def test_bat_dau_NGAY_o_tran_may_chu_chu_khong_bo_len_tu_1(tran_gia, nhat_ky):
+    """Lượt gửi ĐẦU TIÊN phải dùng trọn chỗ máy chủ cấp.
+
+    ═══ ĐÂY LÀ BÀI KIỂM ĐẮT NHẤT FILE NÀY ═══
+
+    Bản trước bắt đầu ở nhịp 1 và tăng +1 mỗi lô mượt, nên muốn đạt nhịp N phải
+    chạy hết N(N+1)/2 job. Đo ngày 11/08/2026: máy chủ cấp 691 chỗ ảnh, một mã
+    87 scene bò tới nhịp 12 là hết việc, bình quân **6,7 job cùng lúc = 1% chỗ
+    được cấp**. Mỗi pha lại dựng vòng dò MỚI nên mẻ nào cũng bò lại từ đầu —
+    tool không bao giờ tích luỹ được gì.
+
+    Quy ra tiền bạc thời gian: 4.206 job còn tồn chạy hết trong ~33 tiếng thay
+    vì ~10 phút. Không một dòng lỗi nào, không một chỉ số nào đỏ.
+    """
+    tran_gia(50)
+    sb.chay_ca_me(list(range(200)), lambda v: v, "image", log=nhat_ky)
+    lo = _lo_da_ban(nhat_ky)
+    assert lo, "khong ban lo nao"
+    assert lo[0] == 50, (
+        "luot dau chi ban {0} job trong khi may chu cap 50 — vong do dang bo len "
+        "tu 1 tro lai".format(lo[0])
+    )
+
+
+def test_dung_chung_vong_do_thi_me_sau_KHONG_bo_lai_tu_dau(tran_gia, nhat_ky):
+    """Truyền `nhip` dùng chung -> mẻ sau thừa hưởng nhịp đã dò được.
+
+    Đây là lý do tham số `nhip` tồn tại, và trước 11/08/2026 không ai truyền nó:
+    mỗi pha của mỗi mã dựng một vòng dò mới, học tới đâu vứt tới đó.
+    """
+    tran_gia(40)
+    chung = sb._tao_nhip(bat_dau=40)
+
+    sb.chay_ca_me(list(range(20)), lambda v: v, "image", log=nhat_ky, nhip=chung)
+    sb.chay_ca_me(list(range(20)), lambda v: v, "image", log=nhat_ky, nhip=chung)
+
+    lo = _lo_da_ban(nhat_ky)
+    assert len(lo) >= 2
+    assert all(n >= 20 for n in lo), (
+        "me sau tut xuong {0} — vong do dung chung ma van bi dung lai tu dau".format(lo)
+    )
 
 
 def test_me_rong_thi_khong_goi_gi_ca(tran_gia, nhat_ky):
@@ -341,3 +402,113 @@ def test_co_trong_me_chi_bat_ben_trong_me(tran_gia, nhat_ky):
 
     assert thay == [True, True]
     assert sb.trong_me() is False, "ra khoi me phai tra co ve nhu cu"
+
+
+# ── Hai lớp an toàn của việc bỏ hàng rào ─────────────────────────────────────
+#
+# Bỏ hàng rào làm vòng lặp quay gần một lần cho MỖI job xong, thay vì 13 lần cho
+# cả mẻ 88 việc. Hai thứ vốn vô hại ở nhịp cũ trở thành nguy hiểm ở nhịp mới, và
+# cả hai đều hỏng theo kiểu tự bóp thông lượng — tức là đúng thứ vừa đi sửa.
+
+
+def test_KHONG_hoi_v1_me_moi_vong_lap(tran_gia, nhat_ky):
+    """CONTRACT.md §8.2b: hỏi `/v1/me` quá dày là tự đốt hạn mức đọc trạng thái.
+
+    Đốt hết hạn mức thì `_hoi_tran` bắt đầu trả mức đoán, mức đoán kéo nhịp
+    xuống, và thông lượng tụt — qua một đường vòng mà không dòng log nào nối hai
+    đầu lại được.
+    """
+    dem = tran_gia(64)
+    sb.chay_ca_me(list(range(200)), lambda v: v, "image", log=nhat_ky)
+    assert dem["n"] <= 3, (
+        "hoi /v1/me {0} lan cho MOT me — TRAN_TTL khong con tac dung".format(dem["n"]))
+
+
+def test_doc_tran_hong_thi_GIU_tran_cu_chu_khong_tut_ve_1(tran_gia, nhat_ky, sc, monkeypatch):
+    """Một cú mạng chập KHÔNG được đổi lấy cả phần còn lại của mẻ chạy ở tốc độ bò.
+
+    `NhipDo.dat_tran(1)` nghiền nhịp xuống 1 ngay lập tức, mà luật tăng là +1 mỗi
+    lô — nên trả `1` lúc đọc hỏng chính là dựng lại đúng cái bệnh vừa chữa.
+    """
+    lan = {"n": 0}
+
+    def _tran(loai, api_key=None, mac_dinh=1, client=None):
+        lan["n"] += 1
+        if lan["n"] == 1:
+            return 40
+        raise OSError("mang chap")
+
+    monkeypatch.setattr(sc, "tran_song_song", _tran)
+    # TTL = 0 để mọi vòng đều phải đi hỏi lại -> lượt hỏi thứ hai trở đi đều hỏng.
+    monkeypatch.setattr(sb, "TRAN_TTL", 0.0)
+
+    ket = sb.chay_ca_me(list(range(120)), lambda v: v, "image", log=nhat_ky)
+
+    assert ket == list(range(120)), "khong duoc mat viec"
+    lo = _lo_da_ban(nhat_ky)
+    assert lo and min(lo) > 1, (
+        "co luot chi ban 1 job -> tran da tut ve 1 vi doc hong: {0}".format(lo))
+    assert any("GIU tr" in m for _lv, m in nhat_ky.dong), "khong bao la dang giu tran cu"
+
+
+def test_chua_tung_doc_duoc_lan_nao_thi_van_lui_ve_1(nhat_ky, sc, monkeypatch):
+    """Không có gì để giữ thì đoán thấp vẫn đúng — đứng im mới là sai."""
+    def _no(loai, api_key=None, mac_dinh=1, client=None):
+        raise OSError("mang chap")
+
+    monkeypatch.setattr(sc, "tran_song_song", _no)
+    ket = sb.chay_ca_me(list(range(3)), lambda v: v, "image", log=nhat_ky)
+    assert ket == [0, 1, 2]
+    assert any("doan thap con hon dung im" in m for _lv, m in nhat_ky.dong)
+
+
+def test_nha_may_dung_KHONG_bi_nho_lai_thanh_tran(tran_gia, nhat_ky, sc):
+    """`0` = nhà máy đang dừng. Nhớ số 0 thì lượt sau tưởng nó vẫn chết.
+
+    Phải tiêm đồng hồ giả vào CẢ `NhipDo` LẪN `CongHangCho`: `me_nhanh` chỉ vặn
+    được đồng hồ của cái sau, nên quãng dừng 30 giây của vòng dò vẫn trôi thật
+    và bài kiểm ngồi chờ nửa phút rồi vẫn đỏ.
+    """
+    sc.bootstrap_sdk()
+    from shopapi._nhip_do import NhipDo
+
+    dong_ho = {"t": 1000.0}
+
+    def _ngu(giay):
+        dong_ho["t"] += float(giay)
+
+    tran_gia(0, 0, 32)   # dừng hai lượt rồi sống lại
+    ket = sb.chay_ca_me(
+        list(range(20)), lambda v: v, "image", log=nhat_ky,
+        nhip=NhipDo(bat_dau=32, _dong_ho=lambda: dong_ho["t"]),
+        cong=sb.CongHangCho(_dong_ho=lambda: dong_ho["t"]),
+        ngu=_ngu,
+    )
+    assert ket == list(range(20)), "nha may song lai ma me van bo viec"
+    assert max(_dang_bay(nhat_ky)) > 1, "song lai roi ma van bo tung job mot"
+
+
+def test_het_luong_thi_TRA_VIEC_VE_HANG_CHO_chu_khong_lam_mat(tran_gia, nhat_ky, monkeypatch, me_nhanh):
+    """`pool.submit` ném vì hệ điều hành hết luồng — việc KHÔNG được biến mất.
+
+    Ở nhịp cũ (12 luồng) chuyện này không bao giờ xảy ra. Ở nhịp mới, một máy
+    chạy 8 tiến trình mã × 88 luồng là 704 luồng — đúng vùng Windows bắt đầu từ
+    chối. Để lỗi bay thẳng ra thì scene đã bốc khỏi hàng chờ biến mất không dấu
+    vết, và người dùng chỉ phát hiện khi xem lại thấy thiếu cảnh.
+    """
+    tran_gia(16)
+    that_bai = {"con": 2}
+    that = sb.ThreadPoolExecutor.submit
+
+    def _submit(self, fn, *a, **k):
+        if that_bai["con"] > 0:
+            that_bai["con"] -= 1
+            raise RuntimeError("can't start new thread")
+        return that(self, fn, *a, **k)
+
+    monkeypatch.setattr(sb.ThreadPoolExecutor, "submit", _submit)
+
+    ket = sb.chay_ca_me(list(range(24)), lambda v: v, "image", log=nhat_ky, **me_nhanh)
+
+    assert ket == list(range(24)), "mat viec khi het luong"
+    assert any("khong mo them duoc luong" in m for _lv, m in nhat_ky.dong)

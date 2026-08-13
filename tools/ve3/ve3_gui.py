@@ -2,6 +2,17 @@
 """VE3 Studio  compact, professional GUI."""
 
 import sys, os, shutil, threading, time as _time, json, subprocess, re, unicodedata
+# ⚠ CẢ HAI TÊN, CỐ Ý. File dùng `_time.…` ở chỗ này và `time.…` ở chỗ khác —
+# đếm được **56 lời gọi `time.time()` trần** trong khi module chỉ import
+# `time as _time`. Mỗi lời gọi đó là một `NameError` nằm chờ.
+#
+# Chúng sống sót lâu vì nằm trong nhánh hiếm chạy, hoặc bị `try/except` rộng
+# nuốt gọn — ghi mốc `endpoint_done`, `manual_done`, dọn marker quá hạn... hỏng
+# lặng lẽ chứ không kêu. Ngày 13/08/2026 một cái mới nổ ra ở `_ghi_so_luot_trang`
+# và làm bài kiểm đỏ; 55 cái còn lại vẫn đang nằm im.
+#
+# Thêm tên `time` rẻ hơn hẳn việc sửa 56 chỗ và cầu cho không sót chỗ nào.
+import time
 from collections import deque
 import tkinter as tk
 from tkinter import filedialog, messagebox
@@ -24,6 +35,148 @@ SUNO_CHROME = SUNO_DIR / "GoogleChromePortable" / "GoogleChromePortable.exe"
 SUNO_WINDOW_SIZE = "1600,1200"
 SUNO_WINDOW_POSITION_OFFSCREEN = "3200,40"
 SUNO_WINDOW_POSITION_VISIBLE = "120,40"
+
+#: Số MÃ chạy cùng lúc khi đi toàn API, khi `settings.yaml` không nói gì.
+#:
+#: 8, không phải 3. Con số này NHÂN với trần MỖI MÃ mới ra tải thật đặt lên nhà
+#: máy, nên phải đọc kèm `max_concurrent` (ảnh) và `shopapi_video_concurrency`
+#: (video). Đo `GET /v1/me` ngày 11/08/2026 — máy chủ cấp 691 chỗ ảnh, 374 chỗ
+#: video — nên bộ ba khớp trần là:
+#:
+#:     8 mã × 88 ảnh   = 704 ≈ 691 chỗ ảnh
+#:     8 mã × 48 video = 384 ≈ 374 chỗ video
+#:
+#: Ba con số đó là MỘT bộ. Vặn cái này lên mà quên hai cái kia thì hoặc vượt
+#: trần (phần dư nằm hàng chờ, không nhanh thêm được gì), hoặc mỗi mã ôm 384
+#: luồng và máy này chết trước máy chủ.
+#:
+#: Đừng để nó thấp: mỗi mã chạy các pha TUẦN TỰ (ảnh xong hết mới tới video),
+#: nên một mã đang dựng video là một mã không tạo ảnh nào. Số mã song song
+#: chính là thứ lấp những quãng đó.
+SHOPAPI_MA_SONG_SONG_MAC_DINH = 8
+
+#: Tên thư mục kho lưu: `TL3-0413_20260813_165010` = mã + ngày + giờ.
+_RE_DUOI_KHO = re.compile(r"_\d{8}_\d{6}$")
+
+
+def _ma_goc(ten_thu_muc):
+    """`TL3-0413_20260813_165010` -> `TL3-0413`. Tên thường thì giữ nguyên.
+
+    Dùng để KHỬ TRÙNG khi đếm sản lượng: một mã đã xong tồn tại ở CẢ `PROJECTS`
+    lẫn `old/`. Bản trước cắt bằng `rsplit("_", 1)` — chỉ rụng được `_165010`,
+    còn lại `TL3-0413_20260813`, không khớp với `TL3-0413` bên kia. Đo
+    13/08/2026: **24 mã** nằm ở cả hai nơi và đều bị đếm hai lần.
+    """
+    return _RE_DUOI_KHO.sub("", str(ten_thu_muc))
+
+
+#: Nơi ghi nhật ký ra ĐĨA. Xem `ghi_log_file`.
+LOG_DIR = SUITE_ROOT / "logs"
+_log_file_lock = threading.Lock()
+_log_file_handle = [None, ""]   # [file đang mở, ngày của nó]
+
+
+def ghi_log_file(msg, level="INFO", channel=None):
+    """Chép mỗi dòng nhật ký ra `logs/ve3-YYYYMMDD.log`.
+
+    ═══ VÌ SAO PHẢI CÓ, VÀ VÌ SAO NÓ TỐN CẢ MỘT BUỔI ═══
+
+    Trước 11/08/2026 VE3 KHÔNG ghi nhật ký ra file nào. Mọi dòng chỉ chảy vào
+    khung log trên cửa sổ — cửa sổ đóng là mất sạch, cửa sổ chết thì mất luôn cả
+    lý do nó chết.
+
+    Cái giá đo được: chiều 11/08, tool chạy rồi dừng hẳn (7 mã giữ lock, 0 job,
+    0 file trong 90 giây). Cả GUI lẫn 8 worker đều đã thoát. Không một dòng nào
+    còn lại để biết vì sao — nên việc chẩn đoán phải suy từ log của MÁY CHỦ, tức
+    là đoán từ dấu vết gián tiếp.
+
+    Một tool chạy hàng giờ không người trông mà không để lại vết là một tool
+    không gỡ lỗi được. Đây là món nợ, không phải tính năng thêm.
+    """
+    try:
+        from datetime import datetime as _dt
+        now = _dt.now()
+        ngay = now.strftime("%Y%m%d")
+        with _log_file_lock:
+            if _log_file_handle[1] != ngay:
+                if _log_file_handle[0] is not None:
+                    try: _log_file_handle[0].close()
+                    except Exception: pass
+                LOG_DIR.mkdir(parents=True, exist_ok=True)
+                _log_file_handle[0] = open(LOG_DIR / f"ve3-{ngay}.log", "a",
+                                           encoding="utf-8", errors="replace")
+                _log_file_handle[1] = ngay
+            f = _log_file_handle[0]
+            f.write("{0} {1:<7} {2}{3}\n".format(
+                now.strftime("%H:%M:%S"), str(level)[:7],
+                "[{0}] ".format(channel) if channel else "", msg))
+            f.flush()
+    except Exception:
+        # Ghi log KHÔNG BAO GIỜ được làm chết thứ nó đang ghi lại.
+        pass
+
+#: Nhớ câu trả lời "máy này đã có khoá shopapi chưa" trong ngần này giây.
+#:
+#: `shopapi_common.doc_khoa()` ĐỌC FILE mỗi lần gọi, không nhớ gì. Từ 11/08/2026
+#: `_chi_dung_shopapi` được hỏi ở nhiều chỗ nóng hơn hẳn trước — mỗi lần dựng
+#: pair, và mỗi mã một lần trong vòng hàng chờ (75 mã, 5 giây một vòng). Không
+#: nhớ thì đó là hàng chục lượt giải mã kho khoá mỗi giây, ngay trong luồng vẽ
+#: giao diện.
+#:
+#: 5 giây: khoá API không đổi giữa hai nhịp hàng chờ, mà cũng không ai phải chờ
+#: quá 5 giây để tool nhận ra vừa dán khoá mới.
+_KHOA_TTL = 5.0
+_khoa_cache = {"den": 0.0, "co": False}
+
+
+def quen_khoa_shopapi():
+    """Vứt câu trả lời đã nhớ — gọi sau khi lưu/xoá khoá, và trong bài kiểm.
+
+    Có nó thì người vừa dán khoá xong không phải chờ hết `_KHOA_TTL`, và bài
+    kiểm không bị dính câu trả lời của bài chạy trước.
+    """
+    _khoa_cache["den"] = 0.0
+
+
+def che_do_toan_api(cfg):
+    """CẢ ảnh LẪN video đều đi API shopapi, và máy đã có khoá?
+
+    ⚠ HÀM NÀY Ở CẤP MODULE, CỐ Ý. Bản trước nó là phương thức của `VE3App`, và
+    `SettingsPage` gọi `self._chi_dung_shopapi(...)` — một lớp KHÁC, không có
+    phương thức đó. Lời gọi ném `AttributeError`, `try/except` bao quanh nuốt
+    gọn, và giao diện lặng lẽ coi như "không đi API": tám núm chết vẫn sáng như
+    thường, nhãn vẫn nói dối, không một dòng lỗi nào.
+
+    Đó đúng là kiểu hỏng mà cả phiên 11/08/2026 đi chữa — thứ sai mà không có
+    triệu chứng. Để hàm ở cấp module thì không lớp nào gọi hụt được nữa.
+    """
+    if (cfg.get("veo3top_image_mode") or "").strip().lower() != "shopapi":
+        return False
+    video = (cfg.get("generation_backend") or cfg.get("generation_mode") or "").strip().lower()
+    if video != "shopapi":
+        return False
+    return _co_khoa_shopapi()
+
+
+def _co_khoa_shopapi():
+    """Máy này đã có khoá API shopapi chưa? (nhớ trong `_KHOA_TTL` giây)"""
+    now = _time.time()
+    if now < _khoa_cache["den"]:
+        return _khoa_cache["co"]
+    try:
+        import sys as _sys
+        _engine = str(SUITE_ROOT / "veo3top_engine")
+        if _engine not in _sys.path:
+            _sys.path.insert(0, _engine)
+        import shopapi_common as _sc
+        co = bool((_sc.doc_khoa() or ("", ""))[0])
+    except Exception:
+        # Thiếu module / kho khoá hỏng -> coi như CHƯA có khoá, giữ nguyên cổng
+        # cũ. Thà bắt khai token còn hơn thả cho chạy rồi chết giữa lượt.
+        co = False
+    _khoa_cache["den"] = now + _KHOA_TTL
+    _khoa_cache["co"] = co
+    return co
 if SUNO_DIR.exists():
     sys.path.insert(0, str(SUNO_DIR))
 
@@ -54,6 +207,11 @@ OK = "#1B8"           # green
 OK2 = "#169"
 ER = "#D22"
 RN = "#17C"           # running blue
+#: Màu ô "vấn đề" của hai bảng trạm. Ở CẤP MODULE vì hai nơi dùng chung:
+#: `_poll_pool_health._work_body` (đường pool) và `_so_lieu_api_len_tram`
+#: (đường API) — cái sau là phương thức riêng, không thấy biến cục bộ của cái
+#: trước. Định nghĩa hai lần là hai bảng màu lệch nhau lúc nào không hay.
+GREEN, ORANGE, RED, GRAY = "#0A7", "#FF8C00", "#D22", T3
 TW, TH = 110, 74     # thumb
 SW = 175              # sidebar width
 POOL_POLL_MS = int(os.environ.get("VE3_POOL_POLL_MS", "15000") or "15000")   # nhịp poll /health tiles (15s) - giãn cho đỡ đơ
@@ -498,6 +656,12 @@ class HomePage(ctk.CTkScrollableFrame):
         ov2.grid(row=2, column=0, padx=8, pady=(0,2), sticky="ew")
         ov2.grid_columnconfigure((0, 1), weight=1, uniform="pool")
         self.pool_tiles = {}
+        #: Nhãn CHÚ THÍCH của từng ô + nhãn tiêu đề mỗi bảng. Giữ tham chiếu vì
+        #: chúng phải ĐỔI THEO CHẾ ĐỘ: đi API shopapi thì "ĐÃ LOGIN", "CÁCH LY
+        #: 429", "SUBMIT/ACC"... không còn nghĩa gì — không account nào login,
+        #: không Chrome nào chạy. Xem `_dat_nhan_tram`.
+        self.pool_caps = {}
+        self.pool_titles = {}
 
         def _mk_pool_panel(col, title, accent, headbg, cells, issue_key):
             panel = ctk.CTkFrame(ov2, fg_color=CD, corner_radius=8, border_width=1, border_color=accent)
@@ -506,15 +670,19 @@ class HomePage(ctk.CTkScrollableFrame):
                 panel.grid_columnconfigure(cc, weight=1, uniform="cell")
             head = ctk.CTkFrame(panel, fg_color=headbg, corner_radius=6)
             head.grid(row=0, column=0, columnspan=4, sticky="ew", padx=4, pady=(4, 2))
-            ctk.CTkLabel(head, text=title, font=("", 12, "bold"), text_color=accent).pack(side="left", padx=8, pady=3)
+            tl = ctk.CTkLabel(head, text=title, font=("", 12, "bold"), text_color=accent)
+            tl.pack(side="left", padx=8, pady=3)
+            self.pool_titles[issue_key] = tl
             for i, (key, label) in enumerate(cells):
                 r, cc = 1 + i // 4, i % 4
                 cell = ctk.CTkFrame(panel, fg_color="#F7F8FA", corner_radius=6, border_width=1, border_color=BD2)
                 cell.grid(row=r, column=cc, padx=3, pady=3, sticky="nsew")
-                ctk.CTkLabel(cell, text=label, font=("", 8, "bold"), text_color=T3).pack(pady=(5, 0))
+                cap = ctk.CTkLabel(cell, text=label, font=("", 8, "bold"), text_color=T3)
+                cap.pack(pady=(5, 0))
                 lb = ctk.CTkLabel(cell, text="-", font=("", 15, "bold"), text_color=accent)
                 lb.pack(pady=(0, 5))
                 self.pool_tiles[key] = lb
+                self.pool_caps[key] = cap
             # THANH VẤN ĐỀ: vì sao ảnh/video/giờ đang chậm -> để fix ngay
             issue_r = 1 + (len(cells) + 3) // 4
             issue = ctk.CTkLabel(panel, text="…", font=("", 10, "bold"), text_color=T3,
@@ -530,6 +698,8 @@ class HomePage(ctk.CTkScrollableFrame):
             ("vid_acc", "KHAI THÁC"), ("vid_rest", "CÁCH LY 429"), ("vid_heal", "ĐANG CHỮA"), ("vid_queue", "HÀNG ĐỢI"),
             ("vid_submit", "SUBMIT/ACC"), ("vid_rate", "VIDEO / GIỜ"), ("vid_done", "TỔNG VIDEO"), ("vid_codes", "MÃ CHẠY")],
             "vid_issue")
+
+        self._dat_nhan_tram()
 
         self.pool_status_lbl = ctk.CTkLabel(c, text="Đang đọc pool...", font=("",10), text_color=T2, anchor="w", justify="left")
         self.pool_status_lbl.grid(row=3, column=0, padx=12, pady=(0,4), sticky="w")
@@ -672,6 +842,31 @@ class HomePage(ctk.CTkScrollableFrame):
         def _work_body():
             import urllib.request, json as _json
 
+            # ═══ ĐI API shopapi -> ĐỌC `/v1/me`, KHÔNG ĐỌC `/health` CỦA POOL ═══
+            #
+            # Hai nhà máy pool (8789/8788) chỉ tồn tại ở đường Chrome. Ở chế độ
+            # API chúng không được bật, nên vòng poll cũ chỉ nhận `None` và cả
+            # 16 ô đứng `-` — người vận hành nhìn vào một bảng chết trong khi
+            # máy chủ đang có đủ số để trả lời mọi câu hỏi.
+            try:
+                if self._dat_nhan_tram():
+                    vals, st = self._so_lieu_api_len_tram()
+                    st.append("⟳ {0}".format(_time.strftime("%H:%M:%S")))
+                    try:
+                        self.after(0, lambda vv=vals, s="     ".join(st):
+                                   self._apply_pool_health(vv, s))
+                    except Exception:
+                        pass
+                    return
+            except Exception as e:
+                try:
+                    self.after(0, lambda m=str(e), t=type(e).__name__:
+                               self._apply_pool_health(
+                                   {}, "API shopapi: khong doc duoc /v1/me ({0}: {1})".format(t, m)))
+                except Exception:
+                    pass
+                return
+
             def _get(port):
                 try:
                     r = urllib.request.urlopen(f"http://127.0.0.1:{port}/health", timeout=4)
@@ -692,7 +887,9 @@ class HomePage(ctk.CTkScrollableFrame):
             except Exception:
                 cap = {}; img_codes = "-"; vid_codes = "-"
 
-            GREEN, ORANGE, RED, GRAY = "#0A7", "#FF8C00", "#D22", T3
+            # GREEN/ORANGE/RED/GRAY nay o CAP MODULE (xem dau file): bang mau cua
+            # o "van de" con duoc `_so_lieu_api_len_tram` dung, ma ham do nam
+            # ngoai `_work_body` nen khong thay duoc bien cuc bo.
             # ---------- ẢNH ----------
             h = _get(8789)
             if h:
@@ -817,6 +1014,247 @@ class HomePage(ctk.CTkScrollableFrame):
                 except Exception: pass
 
         threading.Thread(target=_work, daemon=True, name="pool-health").start()
+
+    #: Nhãn 8 ô mỗi trạm ở CHẾ ĐỘ API shopapi.
+    #:
+    #: ═══ CHỈ ĐO THỨ CỦA MÌNH, KHÔNG BÊ SỐ NỘI BỘ CỦA MÁY CHỦ LÊN ═══
+    #:
+    #: Bộ nhãn cũ ("ĐÃ LOGIN", "CÁCH LY 429", "ĐANG CHỮA", "SUBMIT/ACC") đo sức
+    #: khoẻ kho Chrome/Gmail của đường pool — đi API thì cả tám ô đứng `-`.
+    #:
+    #: Bản thay thế ĐẦU TIÊN cũng sai, chỉ theo kiểu khác: nó bày ra `TÀI KHOẢN
+    #: 94/96`, `MÁY XỬ LÝ 1`, `SỨC CHỨA 1088`. Đó là kho và đội máy **của máy
+    #: chủ** — VE3 không sở hữu, không điều khiển, và biết cũng không làm được
+    #: gì. Bày số của người khác lên bảng điều khiển của mình thì bảng đầy số mà
+    #: vẫn không trả lời được câu duy nhất cần trả lời: *ta đang làm được bao
+    #: nhiêu, và cái gì đang chặn ta?*
+    #:
+    #: Tám ô dưới đây chỉ gồm hai loại:
+    #:   * TRẠNG THÁI CỦA TA — mã đang chạy, ta xin bao nhiêu, job CỦA TA đang
+    #:     chạy/xếp hàng, sản lượng thật đếm từ file trên đĩa, việc còn lại, ETA;
+    #:   * RANH GIỚI HỢP ĐỒNG — trần máy chủ cấp cho ta, thứ ta phải tôn trọng.
+    #:
+    #: Bốn ô đầu xếp theo đúng chuỗi nhân quả để đọc một dòng là ra thủ phạm:
+    #: **mã đang chạy → ta xin → thật sự chạy → xếp hàng**. Mã ít thì xin ít; xin
+    #: nhiều mà chạy ít và không xếp hàng thì tool không gửi được; xếp hàng dài
+    #: thì nhà máy ngộp. Ba nguyên nhân khác hẳn nhau, trước đây nhìn từ ngoài
+    #: giống hệt nhau.
+    NHAN_TRAM_API = {
+        # HÀNG 1 — CHUỖI CUNG, đọc trái sang phải là ra thủ phạm.
+        "img_login": "MÃ Ở PHA NÀY",  "img_run": "XIN / TRẦN",
+        "img_q429": "JOB ĐANG CHẠY",  "img_nghi": "JOB XẾP HÀNG",
+        # HÀNG 2 — KẾT QUẢ: đang ra bao nhiêu, hỏng bao nhiêu, còn bao nhiêu, bao giờ xong.
+        "img_dead": "ẢNH / PHÚT",     "img_rate": "HỎNG (100 JOB)",
+        "img_done": "CÒN LẠI",        "img_codes": "XONG SAU",
+        "vid_acc": "MÃ Ở PHA NÀY",    "vid_rest": "XIN / TRẦN",
+        "vid_heal": "JOB ĐANG CHẠY",  "vid_queue": "JOB XẾP HÀNG",
+        "vid_submit": "VIDEO / PHÚT", "vid_rate": "HỎNG (100 JOB)",
+        "vid_done": "CÒN LẠI",        "vid_codes": "XONG SAU",
+    }
+
+    #: Nhãn gốc (đường Chrome/pool) — để quay về khi đổi chế độ.
+    NHAN_TRAM_POOL = {
+        "img_login": "ĐÃ LOGIN", "img_run": "ĐANG CHẠY", "img_q429": "CÁCH LY 429",
+        "img_nghi": "NGHỈ KHÁC", "img_dead": "CHẾT", "img_rate": "ẢNH / GIỜ",
+        "img_done": "TỔNG ẢNH", "img_codes": "MÃ × LUỒNG",
+        "vid_acc": "KHAI THÁC", "vid_rest": "CÁCH LY 429", "vid_heal": "ĐANG CHỮA",
+        "vid_queue": "HÀNG ĐỢI", "vid_submit": "SUBMIT/ACC", "vid_rate": "VIDEO / GIỜ",
+        "vid_done": "TỔNG VIDEO", "vid_codes": "MÃ CHẠY",
+    }
+
+    def _dat_nhan_tram(self):
+        """Đặt nhãn hai bảng trạm theo CHẾ ĐỘ đang chạy. Gọi lại khi đổi chế độ."""
+        try:
+            di_api = che_do_toan_api(getattr(self.app, "config_data", {}) or {})
+        except Exception:
+            di_api = False
+        bo = self.NHAN_TRAM_API if di_api else self.NHAN_TRAM_POOL
+        for k, cap in (getattr(self, "pool_caps", {}) or {}).items():
+            if k in bo:
+                try: cap.configure(text=bo[k])
+                except Exception: pass
+        tieu_de = ({"img_issue": "🖼️ ẢNH · API shopapi", "vid_issue": "🎬 VIDEO · API shopapi"}
+                   if di_api else
+                   {"img_issue": "🖼️ TRẠM ẢNH · acc Pro", "vid_issue": "🎬 TRẠM VIDEO · acc Ultra"})
+        for k, lb in (getattr(self, "pool_titles", {}) or {}).items():
+            if k in tieu_de:
+                try: lb.configure(text=tieu_de[k])
+                except Exception: pass
+        return di_api
+
+    def app_client_jobs_list(self, so=100):
+        """`so` job gần nhất của tài khoản — nguồn của ô TỈ LỆ HỎNG.
+
+        MỘT lời gọi cho cả hai loại job, chạy trong luồng nền của vòng poll.
+        Hỏng thì trả rỗng: ô hỏng hiện `-`, phần còn lại của bảng vẫn đủ dùng.
+        """
+        try:
+            import sys as _sys
+            _engine = str(SUITE_ROOT / "veo3top_engine")
+            if _engine not in _sys.path:
+                _sys.path.insert(0, _engine)
+            import shopapi_common as _sc
+            c = _sc.tao_client(timeout=15.0, max_retries=1)
+            r = c.jobs.list(limit=int(so))
+            return r.get("data") if isinstance(r, dict) else (getattr(r, "data", None) or [])
+        except Exception:
+            return []
+
+    def _so_lieu_api_len_tram(self):
+        """Đọc `GET /v1/me` rồi dựng `vals` cho 16 ô + hai dòng chẩn đoán.
+
+        Chạy trong LUỒNG NỀN của `_poll_pool_health` — không đụng widget ở đây.
+        """
+        import sys as _sys
+        _engine = str(SUITE_ROOT / "veo3top_engine")
+        if _engine not in _sys.path:
+            _sys.path.insert(0, _engine)
+        import shopapi_common as _sc
+        me = _sc.doc_v1_me() or {}
+        det = ((me.get("limits") or {}).get("concurrent_jobs_detail") or {})
+
+        cfg = getattr(self.app, "config_data", {}) or {}
+        def _n(khoa, loai):
+            """Trần của TOOL cho một loại job. `0`/thiếu = không ghim.
+
+            Không ghim thì trần thật là trần ĐỘNG của máy chủ (`/v1/me`), nên
+            bảng phải hiện đúng con số ấy. Bản trước ép `max(1, ...)` rồi rơi
+            về mặc định 24/16, tức là bảng nói dối: tool đang theo máy chủ mà
+            bảng vẽ ra một cái trần không ai áp.
+            """
+            try:
+                v = int(cfg.get(khoa) or 0)
+            except (TypeError, ValueError):
+                v = 0
+            if v > 0:
+                return v
+            try:
+                return int((det.get(loai) or {}).get("limit") or 0) or None
+            except (TypeError, ValueError):
+                return None
+        tran_ma = {"image": _n("max_concurrent", "image"),
+                   "video": _n("shopapi_video_concurrency", "video")}
+
+        # ⚠ TỈ LỆ HỎNG lấy từ 100 job gần nhất của MÁY CHỦ, không đếm ở đây.
+        # Hôm 12/08/2026 video hỏng 54% mà bảng không hề nói — người vận hành
+        # nhìn thấy "đang chạy" và tưởng mọi thứ ổn, trong khi hơn nửa số job
+        # đốt thời gian rồi quay về hàng chờ. Một lời gọi cho cả hai loại.
+        hong = {}
+        try:
+            r = self.app_client_jobs_list()
+            dem = {}
+            for j in (r or []):
+                d = j if isinstance(j, dict) else j.to_dict()
+                loai = d.get("type")
+                if loai not in ("image", "video"):
+                    continue
+                t, h = dem.get(loai, (0, 0))
+                if d.get("status") == "failed":
+                    h += 1
+                if d.get("status") in ("succeeded", "failed"):
+                    t += 1
+                dem[loai] = (t, h)
+            for loai, (t, h) in dem.items():
+                hong[loai] = (h, t)
+        except Exception:
+            pass
+
+        # SẢN LƯỢNG THẬT: đếm file trên đĩa trong 60 phút vừa rồi. Đây là sản
+        # phẩm đã về tay, khác hẳn "máy chủ báo job succeeded".
+        try:
+            anh_gio, vid_gio = self.app._count_production_today(tu_giay=_time.time() - 3600)
+        except Exception:
+            anh_gio = vid_gio = None
+        # VIỆC CÒN LẠI + MÃ ĐANG Ở PHA NÀO — trạng thái của chính ta.
+        try:
+            con_anh, con_vid, ma_anh, ma_vid = self.app._con_lai_va_ma_theo_pha()
+        except Exception:
+            con_anh = con_vid = ma_anh = ma_vid = None
+
+        rieng = {"image": (anh_gio, con_anh, ma_anh), "video": (vid_gio, con_vid, ma_vid)}
+
+        vals, status = {}, []
+        for loai, khoa in (("image", ("img_login", "img_run", "img_q429", "img_nghi",
+                                      "img_dead", "img_rate", "img_done", "img_codes", "img_issue")),
+                           ("video", ("vid_acc", "vid_rest", "vid_heal", "vid_queue",
+                                      "vid_submit", "vid_rate", "vid_done", "vid_codes", "vid_issue"))):
+            d = det.get(loai) or {}
+            gio, con, ma = rieng[loai]
+            tran = int(d.get("limit") or 0)
+            chay = int(d.get("running") or 0)
+            cho = int(d.get("queued") or 0)
+            # ⚠ XIN = (MÃ ĐANG Ở PHA NÀY) × trần mỗi mã, KHÔNG phải (số mã cấu
+            # hình) × trần. Bản trước lấy con số cấu hình nên bảng khai "xin 320"
+            # trong khi chỉ 1 mã ở pha ảnh — tức là xin thật 40. Con số phóng đại
+            # đó còn kéo theo dòng chẩn đoán sai: "xin 320 mà 0 job chạy" nghe
+            # như tool gãy, thật ra là chưa mã nào tới pha này.
+            xin = (ma or 0) * tran_ma[loai]
+
+            vals[khoa[0]] = "-" if ma is None else str(ma)
+            vals[khoa[1]] = "{0}/{1}".format(xin, tran) if d else "-"
+            vals[khoa[2]] = str(chay) if d else "-"
+            vals[khoa[3]] = str(cho) if d else "-"
+            vals[khoa[4]] = "-" if gio is None else "{0:.1f}".format(gio / 60.0)
+            _h = hong.get(loai)
+            vals[khoa[5]] = ("-" if not _h or not _h[1]
+                             else "{0:.0f}%".format(100.0 * _h[0] / _h[1]))
+            vals[khoa[6]] = "-" if con is None else str(con)
+            # DỰ KIẾN XONG: việc còn lại chia tốc độ đang chạy. Không có tốc độ
+            # thì nói thẳng "chưa đo được" thay vì bịa một con số đẹp.
+            if con is None or not gio:
+                vals[khoa[7]] = "—"
+            elif con <= 0:
+                vals[khoa[7]] = "xong"
+            else:
+                _gio = con / float(gio)
+                vals[khoa[7]] = ("{0:.0f} phút".format(_gio * 60) if _gio < 1.5
+                                 else "{0:.1f} giờ".format(_gio))
+
+            # ═══ CHẨN ĐOÁN THEO CHUỖI NHÂN QUẢ: mã → xin → chạy → xếp hàng ═══
+            if not d:
+                vals[khoa[-1]] = ("⏸ Chưa đọc được số của máy chủ cho loại này", GRAY)
+            elif tran <= 0:
+                vals[khoa[-1]] = ("⛔ Nhà máy {0} ĐANG DỪNG (trần 0) — gửi lúc này chắc chắn "
+                                  "503, KHÔNG bị trừ tiền. Chờ máy chủ mở lại.".format(loai), RED)
+            elif con is not None and con <= 0:
+                vals[khoa[-1]] = ("✅ Hết việc loại này — không còn gì để làm", GREEN)
+            elif not ma and (chay or cho):
+                # `MÃ ĐANG CHẠY` đếm worker của CỬA SỔ NÀY; `/v1/me` đếm job của
+                # CẢ TÀI KHOẢN. Lệch nhau = có bản VE3 khác đang chạy cùng khoá,
+                # hoặc job của lượt trước chưa xong. Nói thẳng ra, đừng để người
+                # đọc phải tự giải thích hai con số chọi nhau.
+                vals[khoa[-1]] = ("ℹ️ Cửa sổ này không chạy mã nào, nhưng tài khoản có {0} job "
+                                  "chạy / {1} chờ — một bản VE3 khác (hoặc lượt trước) đang "
+                                  "dùng chung khoá.".format(chay, cho), GRAY)
+            elif not ma:
+                vals[khoa[-1]] = ("⏳ KHÔNG mã nào đang ở pha này — chưa tới lượt, hoặc hàng "
+                                  "chờ đã dừng. Bấm RUN nếu muốn chạy tiếp.", GRAY)
+            elif chay == 0 and cho == 0:
+                vals[khoa[-1]] = ("⛔ {0} mã đang chạy mà KHÔNG job nào tới máy chủ — tool "
+                                  "không gửi được. Xem logs/ve3-*.log.".format(ma), RED)
+            elif cho > max(4, tran * 0.25):
+                vals[khoa[-1]] = ("⚠️ {0} job xếp hàng trên trần {1} — nhà máy đang ngộp, gửi "
+                                  "thêm chỉ nằm chờ chứ không nhanh hơn".format(cho, tran), ORANGE)
+            elif _h and _h[1] >= 10 and _h[0] / _h[1] >= 0.3:
+                # Hỏng nhiều là thứ dễ bị bỏ qua nhất: bảng vẫn "đang chạy",
+                # job vẫn nhúc nhích, mà quá nửa công sức rơi xuống đất.
+                vals[khoa[-1]] = ("⚠️ HỎNG {0}/{1} job gần đây ({2:.0%}) — đang đốt thời gian. "
+                                  "Xem 'VÌ SAO HỎNG' bằng: python -m tools.do_san_luong"
+                                  .format(_h[0], _h[1], _h[0] / _h[1]), ORANGE)
+            elif chay < xin * 0.5:
+                vals[khoa[-1]] = ("⚠️ Xin {0} mà chỉ {1} job chạy (hàng chờ {2}) — nghẽn ở PHÍA "
+                                  "TOOL, không phải ở máy chủ. Xem logs/ve3-*.log."
+                                  .format(xin, chay, cho), ORANGE)
+            elif xin < tran * 0.5:
+                vals[khoa[-1]] = ("⚠️ Còn dư chỗ: {0} mã × {1} = xin {2} trên {3} được cấp "
+                                  "({4:.0%}) — nâng 'Mã song song' hoặc 'Ảnh/mã' trong Cài đặt."
+                                  .format(ma, tran_ma[loai], xin, tran, xin / max(tran, 1)), ORANGE)
+            else:
+                vals[khoa[-1]] = ("✅ {0} mã · {1} chạy / {2} chờ · {3:.1f}/phút · còn {4}"
+                                  .format(ma, chay, cho, (gio or 0) / 60.0,
+                                          con if con is not None else "?"), GREEN)
+            status.append("{0}: chạy {1} · chờ {2} · trần {3}".format(loai, chay, cho, tran))
+        return vals, status
 
     def _apply_pool_health(self, vals, status_text):
         """Áp số liệu pool lên tiles + dòng trạng thái. CHẠY TRÊN MAIN THREAD (gọi qua self.after)."""
@@ -1776,6 +2214,24 @@ class SettingsPage(ctk.CTkScrollableFrame):
         sc = ctk.CTkFrame(self, fg_color=CD, corner_radius=8, border_width=1, border_color=BD)
         sc.grid(row=0, column=0, sticky="ew", padx=10, pady=(10,4))
         sc.grid_columnconfigure(0, weight=1)
+        #: Cả khối server/gmail/chrome — GẤP LẠI khi đi API (xem `_gap_khoi_chrome`).
+        self.frame_server = sc
+        #: Một dòng thay chỗ khối đã gấp, kèm nút mở lại.
+        self.thanh_gap_chrome = ctk.CTkFrame(self, fg_color="#F7F8FA", corner_radius=8,
+                                             border_width=1, border_color=BD2)
+        self.thanh_gap_chrome.grid_columnconfigure(0, weight=1)
+        self.lbl_gap_chrome = ctk.CTkLabel(
+            self.thanh_gap_chrome, anchor="w", justify="left", font=("",10), text_color=T2,
+            text=("Server + Gmail + Chrome — DA GAP. Dang chay API shopapi nen khong "
+                  "server/gmail/chrome nao duoc dung toi."))
+        self.lbl_gap_chrome.grid(row=0, column=0, padx=12, pady=8, sticky="w")
+        ctk.CTkButton(self.thanh_gap_chrome, text="Hien khoi Chrome", width=130, height=26,
+                      corner_radius=5, fg_color=SB2, hover_color=SB3, text_color="#FFF",
+                      font=("",10), command=self._mo_lai_khoi_chrome).grid(
+            row=0, column=1, padx=(0,10), pady=6, sticky="e")
+        self.thanh_gap_chrome.grid_remove()
+        #: Người dùng đã bấm "Hiện" -> tôn trọng, đừng gấp lại sau lưng họ.
+        self._ep_hien_chrome = False
         ctk.CTkLabel(sc, text="Server + Gmail + Chrome", font=("",13,"bold"), text_color=T1).grid(row=0, column=0, padx=10, pady=(8,4), sticky="w", columnspan=6)
         top = ctk.CTkFrame(sc, fg_color="transparent")
         top.grid(row=1, column=0, padx=10, pady=(0,4), sticky="ew", columnspan=6)
@@ -1817,7 +2273,10 @@ class SettingsPage(ctk.CTkScrollableFrame):
         # Parallel jobs = so anh 1 ma gui song song: TU DONG theo (so chrome pool / so ma song song) -> luon lam day pool.
         # KHONG con chinh tay (tranh dat sai lam chrome ngoi khong hoac over-thread). Tool tu tinh theo thuc te.
         ctk.CTkLabel(gc, text="Parallel jobs:", font=("",11), text_color=T2).grid(row=1, column=0, padx=(10,6), sticky="e")
-        ctk.CTkLabel(gc, text="TU DONG (theo so chrome / so ma)", font=("",10,"italic"), text_color=T3).grid(row=1, column=1, sticky="w")
+        # Câu này NÓI DỐI ở chế độ API: không có chrome nào, và số mã do
+        # `shopapi_ma_song_song` quyết. `_cap_nhat_num_theo_che_do` sửa lại.
+        self.lbl_parallel_jobs = ctk.CTkLabel(gc, text="TU DONG (theo so chrome / so ma)", font=("",10,"italic"), text_color=T3)
+        self.lbl_parallel_jobs.grid(row=1, column=1, sticky="w")
         ctk.CTkLabel(gc, text="Retry:", font=("",11), text_color=T2).grid(row=2, column=0, padx=(10,6), sticky="e")
         self.ent_retry = ctk.CTkEntry(gc, width=60, height=28, corner_radius=4, font=("",11), fg_color=EN, border_color=BD)
         self.ent_retry.grid(row=2, column=1, sticky="w")
@@ -1868,11 +2327,53 @@ class SettingsPage(ctk.CTkScrollableFrame):
         self.ent_vid_tokchrome = _mk_knob(2, "Token chrome video:", width=44, row=1)
         self.ent_vid_workers   = _mk_knob(3, "Luong/acc video:", width=44, row=1)
         # CHU THICH y nghia (chinh theo may -> restart de ap) — dat trong frame knob, hang 2
-        ctk.CTkLabel(knob, justify="left", font=("",9), text_color=T2, anchor="w", wraplength=360,
-                     text=("Ma ANH/VIDEO = so ma song song moi TRAM; 0 = TU TINH theo nhan su dang khai thac (xem tab '📊 So lieu'). "
-                           "Account pool anh = tran so account nap. Token chrome = so chrome-trang de token (CPU la tran ~6-8). "
-                           "Recycle = N token/chrome roi lam moi. Luong/acc video = submit/account ultra. Restart de ap.")
-                     ).grid(row=2, column=0, columnspan=8, padx=(0,4), pady=(4,0), sticky="w")
+        self.lbl_chu_thich_pool = ctk.CTkLabel(
+            knob, justify="left", font=("",9), text_color=T2, anchor="w", wraplength=360,
+            text=("Ma ANH/VIDEO = so ma song song moi TRAM; 0 = TU TINH theo nhan su dang khai thac (xem tab '📊 So lieu'). "
+                  "Account pool anh = tran so account nap. Token chrome = so chrome-trang de token (CPU la tran ~6-8). "
+                  "Recycle = N token/chrome roi lam moi. Luong/acc video = submit/account ultra. Restart de ap."))
+        self.lbl_chu_thich_pool.grid(row=2, column=0, columnspan=8, padx=(0,4), pady=(4,0), sticky="w")
+
+        # ═══ NÚM CỦA CHẾ ĐỘ API shopapi ═══════════════════════════════════════
+        #
+        # Tám núm ở trên đều là núm của đường CHROME/POOL: account pool, token
+        # chrome, recycle, luồng/account ultra... Đi API shopapi thì KHÔNG cái
+        # nào trong đó được đọc — không có Chrome nào mở, không có account Flow
+        # nào nạp.
+        #
+        # Ba con số THẬT SỰ quyết định thông lượng ở chế độ API lại không có
+        # mặt trên giao diện, nên muốn chỉnh phải mở `settings.yaml` bằng tay.
+        # Ngày 11/08/2026 đó chính là cách chúng bị bỏ ở mức làm tool chạy 1%
+        # công suất suốt nhiều giờ mà không ai thấy gì bất thường: giao diện
+        # đầy núm, và không núm nào nối tới thứ đang bóp cổ.
+        api = ctk.CTkFrame(knob, fg_color=CD, corner_radius=6, border_width=1, border_color=AC)
+        api.grid(row=3, column=0, columnspan=8, padx=(0,4), pady=(8,2), sticky="ew")
+        self.frame_api_knob = api
+        ctk.CTkLabel(api, text="API shopapi — 3 so quyet dinh thong luong",
+                     font=("",11,"bold"), text_color=AC).grid(
+            row=0, column=0, columnspan=8, padx=8, pady=(6,2), sticky="w")
+
+        def _mk_api(col, label, width=52):
+            ctk.CTkLabel(api, text=label, font=("",10), text_color=T2).grid(
+                row=1, column=col*2, padx=(8 if col==0 else 10, 4), pady=(0,4), sticky="e")
+            e = ctk.CTkEntry(api, width=width, height=28, corner_radius=4, font=("",11),
+                             fg_color=EN, border_color=BD, justify="center")
+            e.grid(row=1, column=col*2+1, pady=(0,4), sticky="w")
+            return e
+
+        self.ent_api_ma      = _mk_api(0, "Ma song song:", width=46)
+        self.ent_api_anh     = _mk_api(1, "Anh / ma:", width=46)
+        self.ent_api_video   = _mk_api(2, "Video / ma:", width=46)
+        ctk.CTkButton(api, text="Doc tran may chu", width=130, height=26, corner_radius=5,
+                      fg_color=AC, hover_color=AC2, text_color="#FFF", font=("",10,"bold"),
+                      command=self._doc_tran_may_chu).grid(
+            row=1, column=6, columnspan=2, padx=(10,8), pady=(0,4), sticky="w")
+        self.lbl_api_tran = ctk.CTkLabel(
+            api, justify="left", font=("",9), text_color=T2, anchor="w", wraplength=520,
+            text=("BA SO NAY LA MOT BO: (Ma song song) x (Anh/ma) = tong job anh dat len nha may, "
+                  "tuong tu cho video. Vuot tran may chu thi phan du nam hang cho chu khong nhanh them. "
+                  "Bam 'Doc tran may chu' de xem minh dang duoc cap bao nhieu."))
+        self.lbl_api_tran.grid(row=2, column=0, columnspan=8, padx=8, pady=(2,8), sticky="w")
         # (Bỏ nút 'Auto Setup theo máy': số MÃ ảnh/video TỰ LINH HOẠT ở runtime — _compute_pool_capacity đọc /health
         #  live -> nhân sự thực bao nhiêu làm bấy nhiêu (Mã=0=auto). Núm token chrome có default + token factory đã
         #  demand-driven idle nên khỏi tinh chỉnh tay. Muốn chỉnh vẫn sửa núm trực tiếp được.)
@@ -2570,7 +3071,11 @@ class SettingsPage(ctk.CTkScrollableFrame):
                                      (self.ent_vid_workers, "video_workers_per_account", 7),
                                      (self.ent_iso_hours, "pool_isolation_hours", 6),
                                      (self.ent_img_codes, "max_concurrent_image_codes", 0),
-                                     (self.ent_vid_codes, "max_concurrent_video_codes", 0)):
+                                     (self.ent_vid_codes, "max_concurrent_video_codes", 0),
+                                     (self.ent_api_ma, "shopapi_ma_song_song",
+                                      SHOPAPI_MA_SONG_SONG_MAC_DINH),
+                                     (self.ent_api_anh, "max_concurrent", 24),
+                                     (self.ent_api_video, "shopapi_video_concurrency", 16)):
                 _ent.delete(0, "end"); _ent.insert(0, str(cfg.get(_key, _def)))
         except Exception:
             pass
@@ -2579,6 +3084,177 @@ class SettingsPage(ctk.CTkScrollableFrame):
             img_mode = "account"
         self.opt_image_backend.set(self.image_backend_labels.get(img_mode if img_mode in ("blank", "account", "pool", "shopapi") else "", "Mac dinh"))
         self._shopapi_refresh_key_label()
+        # Đổi chế độ ở HAI ô riêng (ảnh và video) mà chỉ một trong hai là API
+        # thì vẫn còn Chrome — nên phải hỏi lại cả hai mỗi lần một ô đổi.
+        for _opt in (self.opt_generation_backend, self.opt_image_backend):
+            try:
+                _opt.configure(command=lambda _v=None: self._doi_che_do_sinh())
+            except Exception:
+                pass
+        self._cap_nhat_num_theo_che_do()
+
+    def _doi_che_do_sinh(self):
+        """Người dùng vừa đổi ô 'Generation' hoặc 'Tao anh' — làm mới nhóm núm.
+
+        `_chi_dung_shopapi` đọc `self.config_data`, mà cấu hình chỉ được ghi lúc
+        bấm Save. Nên phải soi thẳng hai ô đang chọn, nếu không giao diện chỉ
+        đổi sau khi lưu — tức là đúng lúc người dùng không còn nhìn nó nữa.
+        """
+        try:
+            tam = dict(getattr(self.app, "config_data", {}) or {})
+            tam["generation_backend"] = self.generation_backend_options.get(
+                self.opt_generation_backend.get().strip(), "server")
+            tam["veo3top_image_mode"] = self.image_backend_options.get(
+                self.opt_image_backend.get().strip(), "")
+            self._cfg_dang_xem = tam
+            self._cap_nhat_num_theo_che_do()
+            # Hai bảng trạm ở trang Overview cũng phải đổi nhãn theo.
+            try:
+                self.app.pages["home"]._dat_nhan_tram()
+            except Exception:
+                pass
+        except Exception:
+            pass
+
+    def _doc_tran_may_chu(self):
+        """Hỏi `GET /v1/me` rồi hiện trần THẬT cạnh ba núm, kèm phép nhân.
+
+        Đặt hai vế cạnh nhau là cách duy nhất thấy được mình đang xin bao nhiêu
+        so với được cấp bao nhiêu. Ngày 11/08/2026 máy chủ cấp 691 chỗ ảnh trong
+        khi tool đặt lên đúng 5,6 — không màn hình nào nói ra chuyện đó, vì
+        không màn hình nào đặt hai con số cạnh nhau.
+
+        Chạy ở luồng nền: một lời gọi mạng trong luồng Tk là cửa sổ đứng hình.
+        """
+        self.lbl_api_tran.configure(text="Dang hoi GET /v1/me...", text_color=T2)
+
+        def _hoi():
+            try:
+                import sys as _sys
+                _engine = str(SUITE_ROOT / "veo3top_engine")
+                if _engine not in _sys.path:
+                    _sys.path.insert(0, _engine)
+                import shopapi_common as _sc
+                tran = {loai: int(_sc.tran_song_song(loai, mac_dinh=-1))
+                        for loai in ("image", "video")}
+            except Exception as e:
+                self.after(0, lambda: self.lbl_api_tran.configure(
+                    text="Khong hoi duoc /v1/me: {0}: {1}".format(type(e).__name__, e),
+                    text_color=ER))
+                return
+
+            def _so(ent, mac_dinh):
+                try:
+                    return max(1, int((ent.get() or "").strip() or mac_dinh))
+                except (TypeError, ValueError):
+                    return mac_dinh
+
+            ma = _so(self.ent_api_ma, SHOPAPI_MA_SONG_SONG_MAC_DINH)
+            xin = {"image": ma * _so(self.ent_api_anh, 24),
+                   "video": ma * _so(self.ent_api_video, 16)}
+            dong = []
+            cang = False
+            for loai in ("image", "video"):
+                t = tran.get(loai, -1)
+                if t < 0:
+                    dong.append("{0}: khong doc duoc".format(loai))
+                    continue
+                if t == 0:
+                    dong.append("{0}: nha may DANG DUNG (tran 0)".format(loai))
+                    cang = True
+                    continue
+                dong.append("{0}: dat len {1} / may chu cap {2} ({3:.0%})".format(
+                    loai, xin[loai], t, xin[loai] / t))
+                if xin[loai] > t:
+                    cang = True
+            them = ("  ->  Dang XIN QUA tran: phan du nam hang cho, khong nhanh them."
+                    if cang else "  ->  Trong tran.")
+            self.after(0, lambda: self.lbl_api_tran.configure(
+                text="{0} x (anh {1} / video {2}) = {3}{4}".format(
+                    ma, _so(self.ent_api_anh, 24), _so(self.ent_api_video, 16),
+                    " · ".join(dong), them),
+                text_color=(ER if cang else OK)))
+
+        threading.Thread(target=_hoi, daemon=True).start()
+
+    def _cap_nhat_num_theo_che_do(self):
+        """Làm MỜ nhóm núm không được đọc ở chế độ đang chạy.
+
+        Đi API shopapi thì tám núm pool (account pool, token chrome, recycle,
+        luồng/account ultra, nghỉ 429, mã ảnh/video) KHÔNG có đường nào chạm tới
+        engine: không Chrome nào mở, không account Flow nào nạp. Để chúng sáng
+        như thường là mời người dùng ngồi tinh chỉnh những con số không nối vào
+        đâu — và đó đúng là chuyện đã xảy ra suốt sáng 11/08/2026.
+
+        Làm mờ chứ KHÔNG ẩn: người dùng còn quay lại đường Chrome, và giá trị cũ
+        phải nhìn thấy được để biết mình sẽ quay về đâu.
+        """
+        # Dùng hàm CẤP MODULE. Bản trước gọi `self._chi_dung_shopapi(...)` — một
+        # phương thức của `VE3App`, không phải của lớp này — nên nó ném
+        # `AttributeError`, bị `except` nuốt, và giao diện lặng lẽ coi như không
+        # đi API: núm chết vẫn sáng, nhãn vẫn nói dối. Xem `che_do_toan_api`.
+        di_api = che_do_toan_api(getattr(self, "_cfg_dang_xem", None)
+                                 or getattr(self.app, "config_data", {}) or {})
+        num_pool = (self.ent_img_accounts, self.ent_img_tokchrome, self.ent_img_recycle,
+                    self.ent_vid_tokchrome, self.ent_vid_workers, self.ent_iso_hours,
+                    self.ent_img_codes, self.ent_vid_codes)
+        for ent in num_pool:
+            try:
+                ent.configure(text_color=(T3 if di_api else T1),
+                              border_color=(BD if di_api else BD))
+            except Exception:
+                pass
+        try:
+            self.lbl_chu_thich_pool.configure(
+                text_color=(T3 if di_api else T2),
+                text=(("[KHONG DUNG O CHE DO API] Tam num tren la cua duong Chrome/pool. "
+                       "Dang chay API shopapi -> khong num nao trong so do duoc doc. "
+                       "Chinh o khung 'API shopapi' ben duoi.")
+                      if di_api else self.lbl_chu_thich_pool.cget("text")))
+        except Exception:
+            pass
+        try:
+            self.lbl_parallel_jobs.configure(
+                text=("TU DONG (may chu quyet moi lo — xem khung 'API shopapi')"
+                      if di_api else "TU DONG (theo so chrome / so ma)"))
+        except Exception:
+            pass
+        # Ba mục chỉ phục vụ ĐĂNG NHẬP Chrome: proxy 4G, WARP, token local Pro.
+        # Đi API thì không có lượt đăng nhập nào để mà chọn đường ra mạng.
+        for w in (getattr(self, "txt_login_4g", None), getattr(self, "sw_login_warp", None),
+                  getattr(self, "btn_warp_setup", None), getattr(self, "sw_use_local_token", None)):
+            try:
+                w.configure(state=("disabled" if di_api else "normal"))
+            except Exception:
+                pass
+        self._gap_khoi_chrome(di_api)
+
+    def _gap_khoi_chrome(self, di_api):
+        """Gấp khối "Server + Gmail + Chrome" khi đi API, mở lại khi về đường cũ.
+
+        Khối này là mười dòng server kèm gmail và đường dẫn chrome.exe — nó
+        chiếm nửa trang Cài đặt. Ở chế độ API **không dòng nào được đọc**: không
+        server nào được gọi, không Chrome nào mở, không tài khoản Flow nào nạp.
+        Để nguyên là bắt người dùng cuộn qua nửa trang thông tin chết mới tới
+        được ba con số thật sự điều khiển được thứ gì.
+
+        GẤP chứ không XOÁ, và có nút mở lại: cấu hình vẫn còn nguyên trong
+        `settings.yaml`, người dùng còn quay về đường Chrome bất cứ lúc nào —
+        giấu hẳn thì họ tưởng mất.
+        """
+        try:
+            if di_api and not getattr(self, "_ep_hien_chrome", False):
+                self.frame_server.grid_remove()
+                self.thanh_gap_chrome.grid(row=0, column=0, sticky="ew", padx=10, pady=(10,4))
+            else:
+                self.thanh_gap_chrome.grid_remove()
+                self.frame_server.grid(row=0, column=0, sticky="ew", padx=10, pady=(10,4))
+        except Exception:
+            pass
+
+    def _mo_lai_khoi_chrome(self):
+        self._ep_hien_chrome = True
+        self._gap_khoi_chrome(False)
 
     def _auto_flowkit_server_list(self) -> list:
         """Auto-generate flowkit_server_list from Chrome Portable copies."""
@@ -2740,6 +3416,28 @@ class SettingsPage(ctk.CTkScrollableFrame):
         _knob(self.ent_iso_hours,     "pool_isolation_hours", 6, 1, 48)   # cach ly account 429 het quota ngay (anh+video), gio
         _knob(self.ent_img_codes,     "max_concurrent_image_codes", 0, 0, 50)   # tram ANH: 0 = TU TINH; >0 co dinh
         _knob(self.ent_vid_codes,     "max_concurrent_video_codes", 0, 0, 20)   # tram VIDEO: 0 = TU TINH; >0 co dinh
+        # ═══ 0 = THEO MÁY CHỦ. ĐỪNG GÕ CỨNG TÀI NGUYÊN — 13/08/2026 ═══
+        #
+        # Chủ dự án: *"server xử lý được bao nhiêu thì cứ dùng bấy nhiêu, đừng
+        # có làm cứng, mà nên có logic thông minh để khai thác tối đa server"*.
+        #
+        # Bản trước kẹp `lo=1`, nên KHÔNG THỂ gõ 0 — mà 0 mới là giá trị có
+        # nghĩa "không ghim, đi theo trần động của máy chủ" (`ve3_worker`
+        # ._chay_me_shopapi đã hiểu đúng như vậy từ lâu). Trần trên thì ghim
+        # 384/64, hai con số đã cũ: máy chủ hôm nay công bố `hard_cap` ảnh
+        # 1536, video 832, và trần ĐỘNG là 979 / 374.
+        #
+        # Hậu quả đo được: tool ghim ở 40, máy chủ mở 979, người dùng thấy
+        # **0,8 ảnh/phút** trên hàng chờ 441 ảnh — 7,4 giờ cho việc lẽ ra xong
+        # trong khoảng mười phút.
+        #
+        # Nay: 0 là MẶC ĐỊNH và là giá trị nhỏ nhất. Muốn tự ghim thì vẫn ghim
+        # được, nhưng đó phải là lựa chọn có ý thức chứ không phải mặc định.
+        # Trần trên để rộng — `_hoi_tran` đã kẹp bằng `min(trần động máy chủ,
+        # hard_cap, trần tool)` ở mỗi lô, nên máy chủ mới là người chặn thật.
+        _knob(self.ent_api_ma,    "shopapi_ma_song_song",      SHOPAPI_MA_SONG_SONG_MAC_DINH, 1, 64)
+        _knob(self.ent_api_anh,   "max_concurrent",            0, 0, 4096)
+        _knob(self.ent_api_video, "shopapi_video_concurrency", 0, 0, 4096)
         cfg["veo3top_image_mode"] = self.image_backend_options.get(self.opt_image_backend.get().strip(), "")
         selected_provider_label = self.opt_excel_ai_provider.get().strip() or "DeepSeek"
         cfg["excel_ai_provider"] = self.excel_ai_provider_options.get(selected_provider_label, "deepseek")
@@ -3028,6 +3726,24 @@ foreach ($pid in $children) {{
         if self._closing:
             return
         self._closing = True
+        # ═══ NÓI RA RẰNG MÌNH ĐANG ĐÓNG, VÀ AI BẢO ĐÓNG ═══
+        #
+        # Hàm này giết sạch subprocess rồi `destroy()` mà KHÔNG ghi một dòng
+        # nào. Dấu vết nó để lại y hệt một cú crash: worker thoát `exit code=1`
+        # đồng loạt, cửa sổ biến mất, không traceback, không sự kiện lỗi Windows.
+        #
+        # Ngày 11/08/2026 mất hai lượt chẩn đoán vì đúng chỗ này: tool "chết"
+        # hai lần, và cả hai lần đều là CỬA SỔ BỊ ĐÓNG chứ không phải hỏng hóc —
+        # nhưng không có cách nào phân biệt. Một dòng log tách được hai chuyện
+        # khác hẳn nhau: "ai đó đóng tool" và "tool tự chết".
+        try:
+            _n = len([p for p in (self.queue_ve3_procs or {}).values()
+                      if p is not None and p.poll() is None])
+        except Exception:
+            _n = -1
+        self._log("=== ĐÓNG CỬA SỔ (WM_DELETE_WINDOW) — sẽ giết {0} worker đang chạy. "
+                  "Nếu bạn KHÔNG bấm đóng thì có thứ khác đã bấm hộ (script auto-click, "
+                  "Alt+F4, hoặc lệnh tắt máy).".format(_n), "WARN", "ve3")
         try:
             self.queue_stop_requested = True
             self.music_stop_requested = True
@@ -3255,6 +3971,40 @@ Write-Output $kill.Count
         except Exception:
             pass
 
+    #: Ngân sách lời gọi HỎI TRẠNG THÁI cho CẢ MÁY, request/giây.
+    #:
+    #: Hạn mức tài khoản là 1.000 request/phút ≈ 16,6/giây cho MỌI lời gọi. Dành
+    #: 10 cho hỏi thăm, còn lại cho `create`, upload ảnh tham chiếu, và mấy lời
+    #: gọi trạng thái lẻ. Con số này chia đều cho các tiến trình mã.
+    NGAN_SACH_HOI_CA_MAY = 10.0
+
+    def _chia_ngan_sach_hoi_tham(self):
+        """Chia ngân sách hỏi trạng thái cho từng tiến trình mã, qua biến môi trường.
+
+        ═══ VÌ SAO PHẢI CHIA, VÀ VÌ SAO NÓ QUYẾT ĐỊNH THÔNG LƯỢNG ═══
+
+        Đo ngày 12/08/2026: đẩy 300 job ảnh chỉ bằng `POST`, máy chủ dựng **134
+        job đồng thời**, rút **222 ảnh/phút**. Cùng ngày, đo qua `create_and_wait`
+        lại ra "nhà máy bão hoà ở 40 chỗ". Khác biệt duy nhất: cách sau **hỏi thăm
+        từng job**, và 100 job × hỏi mỗi 1–5 giây là vài nghìn request/phút trên
+        hạn mức 1.000. Tool tự đâm vào trần của chính nó.
+
+        Nên trần thật của dây chuyền không phải sức chứa nhà máy, mà là ngân sách
+        lời gọi. `shopapi_common.NhipHoiTham` giãn nhịp hỏi theo số job đang bay
+        để giữ trong ngân sách; hàm này nói cho mỗi tiến trình biết phần của nó.
+
+        Truyền qua `os.environ` vì worker là TIẾN TRÌNH CON — nó thừa kế môi
+        trường lúc được tạo, và `Popen` ở đây không truyền `env=` nên đặt vào
+        `os.environ` là tới nơi.
+        """
+        try:
+            so_ma = max(1, int(self.config_data.get("shopapi_ma_song_song",
+                                                    SHOPAPI_MA_SONG_SONG_MAC_DINH) or 1))
+        except (TypeError, ValueError):
+            so_ma = SHOPAPI_MA_SONG_SONG_MAC_DINH
+        phan = max(0.3, self.NGAN_SACH_HOI_CA_MAY / so_ma)
+        os.environ["SHOPAPI_NGAN_SACH_HOI"] = "{0:.2f}".format(phan)
+
     def _load_config(self):
         try:
             import yaml
@@ -3272,6 +4022,25 @@ Write-Output $kill.Count
             self.config_data["generation_mode"] = "shopapi"
         if "veo3top_image_mode" not in self.config_data:
             self.config_data["veo3top_image_mode"] = "shopapi"
+        # ═══ TRẦN SONG SONG CỦA CHẾ ĐỘ API — PHẢI CÓ MẶC ĐỊNH TRONG CODE ═══
+        #
+        # `tools/ve3/config/settings.yaml` nằm trong `updater.PROTECTED_PATHS` và
+        # KHÔNG được theo dõi trong git. Nghĩa là máy khác cập nhật sẽ không bao
+        # giờ nhận ba con số này qua file cấu hình — chúng phải sống trong code.
+        #
+        # Thiếu mặc định thì worker rơi về TRẦN CỨNG của loại job: ảnh 384,
+        # video 64. Nhân với 8 mã là **3.072 chỗ ảnh** đặt lên nhà máy — đúng
+        # con số đã giết nhà máy ngày 12/08/2026 (nó khai 3.072 luồng rồi tiến
+        # trình biến mất, 9 lần trong ngày).
+        #
+        # Số dưới đây là số ĐÃ CHẠY THẬT: 8 mã × 40 ảnh = 320, × 16 video = 128.
+        # Giờ đỉnh 13/08/2026 ra 396 ảnh + 483 video = 879 sản phẩm. Máy chủ đo
+        # được dựng 134 job đồng thời ở 222 ảnh/phút, nên 320 còn dư đầu cho
+        # AIMD dò lên/xuống mà không chạm trần nhà máy.
+        self.config_data.setdefault("max_concurrent", 40)              # ảnh / mã
+        self.config_data.setdefault("shopapi_video_concurrency", 16)   # video / mã
+        self.config_data.setdefault("shopapi_ma_song_song", SHOPAPI_MA_SONG_SONG_MAC_DINH)
+        self._chia_ngan_sach_hoi_tham()
         self.config_data.setdefault("music_workspace_mode_enabled", True)
         self.config_data.setdefault("image_hide_chrome", True)   # mặc định ẩn chrome tạo ảnh
         self.config_data.setdefault("image_pool_accounts", 24)   # slot ảnh (account song song, cookie-based nhẹ)
@@ -4281,10 +5050,92 @@ Get-CimInstance Win32_Process |
             pass
         return count
 
-    def _count_production_today(self):
-        """Do luong THUC TE: dem so ANH (.png/.jpg) va VIDEO (.mp4) co mtime = HOM NAY tren
-        PROJECTS + old/ (dedup theo code de tranh dem trung). Chay o background thread."""
-        today_start = _time.mktime(_time.localtime()[:3] + (0, 0, 0, 0, 0, -1))
+    def _con_lai_va_ma_theo_pha(self):
+        """`(còn ảnh, còn video, số mã ở pha ẢNH, số mã ở pha VIDEO)`.
+
+        Bốn con số này là TRẠNG THÁI CỦA CHÍNH TA — không hỏi máy chủ câu nào.
+
+        "Mã ở pha nào" là thứ giải thích được điều mà mọi chỉ số khác không nói
+        nổi: ngày 11/08/2026 máy chủ cấp 676 chỗ ảnh, cấu hình xin 192, mà chỉ 24
+        job chạy — đúng bằng trần của MỘT mã. Nhìn `/v1/me` mãi cũng không ra,
+        vì máy chủ không biết ta có mấy mã. Đặt con số này cạnh ba con số kia thì
+        câu trả lời hiện ra ngay: 1 mã × 24 = 24.
+
+        Đếm theo ĐÚNG luật của worker: một mã còn thiếu ảnh thì nó ở pha ẢNH;
+        ảnh xong hết mà còn thiếu video thì ở pha VIDEO (các pha chạy tuần tự).
+
+        ⚠ NGUỒN "MÃ NÀO ĐANG CHẠY" LÀ `queue_ve3_procs`, KHÔNG PHẢI FILE LOCK.
+        `_boot()` xoá sạch `.queue_*.lock` mỗi lần một bản GUI khởi động, nên chỉ
+        cần mở thêm một cửa sổ VE3 thứ hai là bảng của bản đang chạy tụt hết về
+        0 — đúng chuyện đã thấy khi chụp màn hình. Danh sách tiến trình con là
+        thứ CHỈ bản này biết và không ai xoá hộ được.
+
+        Chạy ở background thread — không đụng widget.
+        """
+        con_anh = con_vid = 0
+        ma_anh = ma_vid = 0
+        dang_chay = set()
+        try:
+            with self.queue_lock:
+                for ma, proc in list((self.queue_ve3_procs or {}).items()):
+                    if proc is not None and proc.poll() is None:
+                        dang_chay.add(str(ma))
+        except Exception:
+            pass
+        try:
+            for pd in PROJECTS_DIR.iterdir():
+                if not pd.is_dir():
+                    continue
+                tt = pd / ".progress_totals.json"
+                if not tt.exists():
+                    continue
+                try:
+                    t = json.loads(tt.read_text(encoding="utf-8"))
+                except Exception:
+                    continue
+                tong_s = int(t.get("scene_total") or 0)
+                tong_v = int(t.get("video_total") or 0)
+                if tong_s <= 0 and tong_v <= 0:
+                    continue
+                # ⚠ ĐẾM Ở `img_backup` KHI CÓ. Sau khi finalize, ảnh đã thành
+                # video bị XOÁ khỏi `img/`, nên đếm `img/` là đếm hụt và ô "CÒN
+                # LẠI" phình lên. Đo ngày 11/08/2026: đếm `img/` ra 4.556 ảnh
+                # còn thiếu, sự thật là 1.889 — sai 2,4 lần, và sai theo hướng
+                # làm người vận hành tưởng còn cả núi việc chưa làm.
+                # `_count_production_today` đã chọn đúng nguồn này từ trước.
+                nguon_anh = (pd / "img_backup") if (pd / "img_backup").exists() else (pd / "img")
+                co_a = len(list(nguon_anh.glob("*.png")) + list(nguon_anh.glob("*.jpg"))) \
+                    if nguon_anh.exists() else 0
+                co_v = len(list((pd / "vid").glob("*.mp4"))) if (pd / "vid").exists() else 0
+                thieu_a = max(0, tong_s - min(co_a, tong_s))
+                thieu_v = max(0, tong_v - min(co_v, tong_v))
+                con_anh += thieu_a
+                con_vid += thieu_v
+                # Chỉ tính mã có worker ĐANG SỐNG của chính bản GUI này.
+                if pd.name not in dang_chay:
+                    continue
+                if thieu_a > 0:
+                    ma_anh += 1
+                elif thieu_v > 0:
+                    ma_vid += 1
+        except Exception:
+            pass
+        return con_anh, con_vid, ma_anh, ma_vid
+
+    def _count_production_today(self, tu_giay=None):
+        """Do luong THUC TE: dem so ANH (.png/.jpg) va VIDEO (.mp4) co mtime tu `tu_giay`
+        tro di, tren PROJECTS + old/ (dedup theo code de tranh dem trung).
+
+        `tu_giay=None` -> tu 00:00 hom nay (hanh vi cu, dung cho o "HOM NAY").
+        Truyen moc khac de do TOC DO: vi du `time.time()-3600` ra so anh/video lam
+        duoc trong mot gio vua roi.
+
+        VI SAO DEM FILE CHU KHONG DOC SO CUA MAY CHU: file tren dia la san pham
+        CUOI CUNG da ve tay minh. May chu bao "job succeeded" ma file chua tai ve
+        xong thi chua co gi de dung — 738 job ngay 11/08/2026 la dung canh do.
+        Chay o background thread."""
+        today_start = (float(tu_giay) if tu_giay is not None
+                       else _time.mktime(_time.localtime()[:3] + (0, 0, 0, 0, 0, -1)))
         imgs = 0
         vids = 0
         seen = set()
@@ -4295,7 +5146,14 @@ Get-CimInstance Win32_Process |
                 for pd in base.iterdir():
                     if not pd.is_dir():
                         continue
-                    code = pd.name.rsplit("_", 1)[0] if (base is ARCHIVE_DIR and "_" in pd.name) else pd.name
+                    # ⚠ KHO LƯU ĐẶT TÊN `TL3-0413_20260813_165010` — HAI đuôi,
+                    # không phải một. `rsplit("_", 1)` chỉ cắt được `_165010`,
+                    # để lại `TL3-0413_20260813` — khác hẳn `TL3-0413` bên
+                    # PROJECTS, nên phép chống-đếm-trùng KHÔNG khớp và mã nằm ở
+                    # cả hai nơi bị đếm hai lần.
+                    #
+                    # Đo 13/08/2026: 24 mã có mặt ở CẢ `PROJECTS` lẫn `old/`.
+                    code = _ma_goc(pd.name) if base is ARCHIVE_DIR else pd.name
                     if code in seen:
                         continue
                     got = False
@@ -4313,8 +5171,16 @@ Get-CimInstance Win32_Process |
                                         pass
                         except OSError:
                             pass
-                    # VIDEO hom nay: mp4 o img/ (I2V merged) + vid/
-                    for sub in (pd / "img", pd / "vid"):
+                    # VIDEO hôm nay: mp4 nằm ở `vid/` VÀ ở `img/` (bước I2V ghi
+                    # đè `img/{n}.png` thành `img/{n}.mp4`).
+                    #
+                    # ⚠ HAI THƯ MỤC, MỘT SẢN PHẨM — PHẢI KHỬ TRÙNG THEO TÊN FILE.
+                    # Đo 13/08/2026 trên TL3-0413: `img/1.mp4` và `vid/1.mp4`
+                    # cùng 3.089.785 byte, hash khớp — 49/49 file trùng tên. Đếm
+                    # cả hai là nhân đôi sản lượng video, và con số phóng đại đó
+                    # đi thẳng lên ô "VIDEO HÔM NAY" của giao diện.
+                    da_dem = set()
+                    for sub in (pd / "vid", pd / "img"):
                         if not sub.exists():
                             continue
                         try:
@@ -4322,9 +5188,12 @@ Get-CimInstance Win32_Process |
                                 continue   # prune: khong co file moi hom nay
                         except OSError:
                             continue
-                        for f in sub.glob("*.mp4"):   # img/{n}.mp4 (I2V) + vid/{n}.mp4 = video
+                        for f in sub.glob("*.mp4"):
+                            if f.name in da_dem:
+                                continue
                             try:
                                 if f.stat().st_mtime >= today_start:
+                                    da_dem.add(f.name)
                                     vids += 1; got = True
                             except OSError:
                                 pass
@@ -4419,6 +5288,13 @@ Get-CimInstance Win32_Process |
                 f"Tiep tuc?",
                 parent=self):
             return
+
+        # Reset = người dùng nói "thử lại mã này". Gỡ luôn cờ ĐỖ LẠI, nếu không
+        # thì reset xong hàng chờ vẫn bỏ qua nó và không ai hiểu vì sao.
+        try:
+            (getattr(self, "_luot_trang", None) or {}).pop(code, None)
+        except Exception:
+            pass
 
         def _do_clean():
             try:
@@ -5218,11 +6094,12 @@ Get-CimInstance Win32_Process |
         return out
 
     def _so_ma_song_song_shopapi(self):
-        """Bao nhiêu MÃ chạy cùng lúc khi đi toàn API. Mặc định 3."""
+        """Bao nhiêu MÃ chạy cùng lúc khi đi toàn API."""
+        mac_dinh = SHOPAPI_MA_SONG_SONG_MAC_DINH
         try:
-            return max(1, int(self.config_data.get("shopapi_ma_song_song", 3) or 3))
+            return max(1, int(self.config_data.get("shopapi_ma_song_song", mac_dinh) or mac_dinh))
         except (TypeError, ValueError):
-            return 3
+            return mac_dinh
 
     def _pair_ao_shopapi(self):
         """Vài "chỗ làm" ẢO để hàng chờ có cái mà phát việc khi chạy toàn API.
@@ -5253,10 +6130,22 @@ Get-CimInstance Win32_Process |
         } for i in range(self._so_ma_song_song_shopapi())]
 
     def _get_server_pairs(self, only_available=False):
-        # Đi toàn API mà chưa khai server nào -> dựng chỗ làm ảo, nếu không hàng
-        # chờ sẽ đứng im vĩnh viễn (xem chú thích ở `_pair_ao_shopapi`).
-        if not (self.config_data.get("local_server_list") or []) and \
-                self._chi_dung_shopapi(self.config_data):
+        # ĐI TOÀN API -> chỗ làm ẢO, BẤT KỂ trong cấu hình còn bao nhiêu server.
+        #
+        # ⚠ TRƯỚC 11/08/2026 dòng này còn đòi `local_server_list` PHẢI RỖNG. Ai
+        # đã từng chạy đường Chrome thì danh sách server vẫn nằm đó (10 dòng),
+        # nên điều kiện không bao giờ đúng và cả nhánh này chết. Hậu quả: chạy
+        # toàn API mà số mã song song vẫn bị ghim bằng số Chrome portable —
+        # những cái mà chế độ API KHÔNG hề mở, KHÔNG hề dùng, và người dùng
+        # không có lý do gì để nghĩ là còn liên quan.
+        #
+        # `shopapi_ma_song_song` cũng chết theo: nó chỉ được đọc trong
+        # `_pair_ao_shopapi`. Vặn con số đó không có tác dụng gì cả — không lỗi,
+        # không cảnh báo, chỉ là không có gì thay đổi.
+        #
+        # Xoá server khỏi cấu hình KHÔNG phải cách chữa: người dùng còn muốn
+        # quay lại đường Chrome. Cái quyết định phải là CHẾ ĐỘ ĐANG CHẠY.
+        if self._chi_dung_shopapi(self.config_data):
             return self._pair_ao_shopapi()
         account_map = self._get_flow_account_map()
         status_map = {str(s.get("url", "")).rstrip("/"): s for s in (self.server_status_cache or [])}
@@ -5505,6 +6394,28 @@ Get-CimInstance Win32_Process |
         return filtered
 
     def _choose_pair_for_project(self, project_dir, free_pairs):
+        # ═══ ĐI TOÀN API: RÀNG BUỘC SERVER/ACCOUNT CŨ KHÔNG CÒN NGHĨA GÌ ═══
+        #
+        # `.ve3_binding.yaml` của mọi mã cũ đều ghi `bound_server_name: sv9` kiểu
+        # vậy — dấu vết từ hồi chạy đường Chrome. Chế độ API không có sv nào,
+        # không có tài khoản Flow nào; giữ ràng buộc đó thì nhánh `if bound_server`
+        # bên dưới tìm không ra, ghi "missing from config. Waiting (will not
+        # reassign)" rồi trả `None`, và **mã đó không bao giờ chạy nữa**.
+        #
+        # Đây là cái bẫy đi kèm việc bật chỗ làm ảo (xem `_get_server_pairs`):
+        # gỡ một nút thắt mà quên chỗ này là đổi "chạy chậm" lấy "đứng hẳn" — 75
+        # mã đang có binding trỏ vào sv1..sv10.
+        #
+        # KHÔNG xoá file binding: người dùng còn quay lại đường Chrome, và
+        # `flow_project_id` trong đó vẫn còn giá trị. Chỉ BỎ QUA nó ở chế độ này.
+        if self._chi_dung_shopapi(self.config_data):
+            if not free_pairs:
+                return None
+            return sorted(
+                free_pairs,
+                key=lambda p: (self.queue_pair_last_used.get(p["pair_id"], 0), p["pair_id"]),
+            )[0]
+
         # === Filter pairs by project topic ===
         project_topic = self._get_project_topic(project_dir)
         if project_topic:
@@ -5948,24 +6859,11 @@ Get-CimInstance Win32_Process |
         Đòi CÓ KHOÁ nữa: thiếu khoá thì worker tự lùi về đường cũ, và đường cũ
         cần auth — bỏ qua cổng lúc đó là để nó chết sâu hơn ở giữa lượt chạy.
         """
-        if (cfg.get("veo3top_image_mode") or "").strip().lower() != "shopapi":
-            return False
-        video = (cfg.get("generation_backend") or cfg.get("generation_mode") or "").strip().lower()
-        if video != "shopapi":
-            return False
-        # Nạp thẳng chứ không mượn `SettingsPage._shopapi_common`: hàm đó nằm ở
-        # LỚP KHÁC (trang Cài đặt), gọi từ đây là `AttributeError`.
-        try:
-            import sys as _sys
-            _engine = str(SUITE_ROOT / "veo3top_engine")
-            if _engine not in _sys.path:
-                _sys.path.insert(0, _engine)
-            import shopapi_common as _sc
-            return bool((_sc.doc_khoa() or ("", ""))[0])
-        except Exception:
-            # Thiếu module/kho khoá hỏng -> coi như CHƯA có khoá, giữ nguyên cổng
-            # cũ. Thà bắt khai token còn hơn thả cho chạy rồi chết giữa lượt.
-            return False
+        # MỘT bản cài đặt duy nhất, ở cấp module (xem `che_do_toan_api`). Trước
+        # đây phép kiểm này nằm hẳn trong đây, nên `SettingsPage` — lớp khác —
+        # gọi không tới và phải tự đoán lấy. Hai bản đoán là hai câu trả lời
+        # khác nhau cho cùng một câu hỏi.
+        return che_do_toan_api(cfg)
 
     #  token
     def _build_cfg(self):
@@ -7951,6 +8849,19 @@ Get-CimInstance Win32_Process |
                         res = json.loads(line.split("|", 1)[1])
                     except Exception:
                         pass
+                else:
+                    # ═══ DÒNG KHÔNG CÓ TIỀN TỐ `@@` LÀ LỜI TRĂNG TRỐI ═══
+                    #
+                    # `stderr` được gộp vào `stdout` ngay ở `Popen`, nên mọi
+                    # traceback Python, mọi `MemoryError`, mọi lời than của thư
+                    # viện đều đi qua đúng đường này — và không cái nào bắt đầu
+                    # bằng `@@LOG|`.
+                    #
+                    # Bản trước để chúng rơi khỏi chuỗi `elif` mà không làm gì.
+                    # Nghĩa là worker chết vì lý do gì cũng KHÔNG ai biết: người
+                    # dùng chỉ thấy mã dừng, log sạch bong, không một dấu vết.
+                    # Chiều 11/08/2026 mất cả buổi vì đúng chỗ này.
+                    self._log("[{0}] {1}".format(code, line), "ERROR", "ve3")
 
             # Wait for process to fully exit
             ve3_proc.wait(timeout=30)
@@ -7963,6 +8874,7 @@ Get-CimInstance Win32_Process |
                 exit_code = ve3_proc.returncode
                 self._log(f"[QUEUE/VE3] {code}: subprocess exit code={exit_code}", "WARN", "ve3")
                 res = {"success": exit_code == 0, "completed": 0, "total": 0}
+            self._ghi_so_luot_trang(code, res)
 
         except Exception as exc:
             import traceback
@@ -8029,6 +8941,111 @@ Get-CimInstance Win32_Process |
         suffix = f" ({detail})" if detail else ""
         self._log(f"[QUEUE/VE3] {code}: skip {reason}{suffix}", "INFO", "ve3")
 
+    #: Bao nhiêu lượt chạy TRẮNG liên tiếp thì đỗ mã lại.
+    #:
+    #: "Trắng" = worker chạy xong mà KHÔNG ra được sản phẩm nào (`completed == 0`)
+    #: trong khi vẫn có việc hỏng. Ba lượt là đủ để phân biệt sự cố thoáng qua
+    #: (nhà máy vừa restart, mạng chập) với thứ hỏng vĩnh viễn.
+    LUOT_TRANG_TOI_DA = 3
+
+    def _ghi_so_luot_trang(self, code, res):
+        """Đếm số lượt chạy TRẮNG liên tiếp của một mã, để còn đỗ nó lại.
+
+        ═══ VÌ SAO CẦN, VÀ NÓ ĐÃ ĂN MẤT BAO NHIÊU ═══
+
+        Hàng chờ chỉ nhìn `success`. Một mã làm xong 61/62 đơn vị mà đơn vị thứ
+        62 hỏng vĩnh viễn thì `success = False`, và hàng chờ bật lại. Worker mới
+        chạy 4 giây, hỏng đúng đơn vị đó, thoát. Rồi lại bật.
+
+        Đo log ngày 12/08/2026: **126 lượt bật worker cho 21 mã** — TL3-0401 một
+        mình 24 lượt, mỗi lượt 4 giây và ra 0 sản phẩm:
+
+            09:03:06  co loi {total: 1, completed: 0, failed: 1}
+            09:05:54  co loi {total: 1, completed: 0, failed: 1}
+            09:08:41  ...
+
+        Cái giá không nằm ở 4 giây đó. Mỗi lượt bật **chiếm một chỗ pair**, mà
+        chỉ có 8 chỗ — nên đám mã zombie quay vòng chiếm hết, và mã còn việc thật
+        đứng ngoài. Log cùng ngày có **1.426 dòng `skip no_free_pair`**, trong khi
+        sản lượng 10 phút cuối là 0 ảnh, 0 video.
+
+        Đỗ lại KHÔNG phải bỏ: mã vẫn nguyên trong danh sách, việc vẫn nguyên
+        trong Excel. Nó chỉ thôi tranh chỗ với mã còn làm được việc, cho tới khi
+        người dùng bấm Reset hoặc mở lại tool.
+        """
+        try:
+            xong = int((res or {}).get("completed") or 0)
+            hong = int((res or {}).get("failed") or 0)
+        except (TypeError, ValueError):
+            xong = hong = 0
+        kho = getattr(self, "_luot_trang", None)
+        if kho is None:
+            kho = self._luot_trang = {}
+        if xong > 0 or hong <= 0:
+            kho.pop(code, None)          # có ra hàng -> quên hết lượt trắng cũ
+            return
+        n = kho.get(code, 0) + 1
+        kho[code] = n
+        if n >= self.LUOT_TRANG_TOI_DA:
+            moc = getattr(self, "_do_lai_luc", None)
+            if moc is None:
+                moc = self._do_lai_luc = {}
+            moc[code] = time.time()
+            self._log(
+                f"[QUEUE/VE3] {code}: ĐỖ LẠI — {n} lượt chạy liên tiếp KHÔNG ra sản phẩm nào "
+                f"(việc còn lại hỏng vĩnh viễn). Mã vẫn giữ nguyên, việc vẫn nguyên trong "
+                f"Excel; nó chỉ thôi tranh chỗ pair với mã còn làm được. Bấm Reset ở dòng đó "
+                f"để chạy lại.", "WARN", "ve3")
+        else:
+            self._log(f"[QUEUE/VE3] {code}: lượt trắng {n}/{self.LUOT_TRANG_TOI_DA} "
+                      f"(chạy xong mà 0 sản phẩm)", "WARN", "ve3")
+
+    #: Đỗ lại HẾT HẠN sau ngần này giây.
+    #:
+    #: ═══ VÌ SAO ĐỖ LẠI KHÔNG ĐƯỢC LÀ VĨNH VIỄN — 13/08/2026 ═══
+    #:
+    #: `_ghi_so_luot_trang` đếm "lượt chạy không ra sản phẩm" để đỗ những mã có
+    #: việc hỏng vĩnh viễn. Đúng ý định, nhưng nó KHÔNG phân biệt được hai thứ
+    #: hoàn toàn khác nhau:
+    #:
+    #:   * mã hỏng thật  -> đỗ là đúng, chạy lại bao nhiêu cũng vậy
+    #:   * HẠ TẦNG ngả   -> nhà máy chết vài phút, mọi mã đều trắng
+    #:
+    #: Đo hôm nay: nhà máy ảnh bị giết oan mỗi 5 phút (lỗi ở supervisor, đã
+    #: sửa). Trong quãng đó **15/16 mã** ăn đủ 3 lượt trắng và bị đỗ. Hạ tầng
+    #: khoẻ lại thì không mã nào tự chạy — server rảnh với trần 979 job ảnh,
+    #: còn tool thì đứng im, và người vận hành thấy "0,8 ảnh/phút".
+    #:
+    #: Một sự cố 10 phút biến thành đứng máy vô hạn, chỉ gỡ được bằng cách mở
+    #: lại tool. Đó là cái giá quá đắt cho một phép đếm không biết mình đang
+    #: đếm gì.
+    #:
+    #: 15 phút: đủ dài để mã hỏng thật không quay lại tranh chỗ liên tục, đủ
+    #: ngắn để một sự cố hạ tầng tự lành mà không cần ai đụng vào.
+    HAN_DO_LAI_GIAY = 15 * 60
+
+    def _ma_bi_do_lai(self, code):
+        kho = getattr(self, "_luot_trang", {}) or {}
+        if kho.get(code, 0) < self.LUOT_TRANG_TOI_DA:
+            return False
+        moc = (getattr(self, "_do_lai_luc", {}) or {}).get(code)
+        if moc is None:
+            return True
+        if time.time() - moc < self.HAN_DO_LAI_GIAY:
+            return True
+        # Hết hạn đỗ -> xoá sổ, cho chạy lại MỘT lượt để tự chứng minh.
+        # Còn hỏng thật thì nó lại đủ 3 lượt trắng và đỗ tiếp, tốn đúng 3 lượt
+        # mỗi 15 phút — rẻ hơn nhiều so với đứng im cả buổi.
+        try:
+            kho.pop(code, None)
+            (getattr(self, "_do_lai_luc", {}) or {}).pop(code, None)
+            self._log(f"[QUEUE/VE3] {code}: hết hạn đỗ lại ({self.HAN_DO_LAI_GIAY//60} phút) "
+                      f"-> cho chạy lại để tự chứng minh. Hạ tầng ngả rồi khoẻ thì mã tự "
+                      f"quay lại, không phải mở lại tool.", "INFO", "ve3")
+        except Exception:
+            pass
+        return False
+
     def _queue_ve3_loop(self, cfg):
         try:
             while not self.queue_stop_requested:
@@ -8065,6 +9082,13 @@ Get-CimInstance Win32_Process |
                     if self._is_project_endpoint_complete(pd):
                         continue
                     if self._is_project_manually_done(pd):
+                        continue
+                    # Mã đã ĐỖ LẠI: chạy mấy lượt liền không ra sản phẩm nào.
+                    # Bỏ qua ở đây là chỗ duy nhất chặn được nó tranh pair —
+                    # xem `_ghi_so_luot_trang`.
+                    if self._ma_bi_do_lai(pd.name):
+                        self._queue_ve3_skip_log(pd.name, "da_do_lai",
+                                                 "chay nhieu luot khong ra san pham")
                         continue
                     with self.queue_lock:
                         existing_task = self.queue_ve3_tasks.get(pd.name)
@@ -8364,6 +9388,7 @@ Get-CimInstance Win32_Process |
             self._log(f"[IMPORT] Loi nap Excel: {e}", "ERROR", "ve3")
 
     def _log(self, m, l="INFO", channel=None):
+        ghi_log_file(m, l, channel)
         with self._log_queue_lock:
             self._log_queue.append((m, l, channel))
             if self._log_flush_scheduled:

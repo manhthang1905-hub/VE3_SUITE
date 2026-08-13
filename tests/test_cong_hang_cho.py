@@ -627,3 +627,105 @@ def test_bao_hang_cho_NGOAI_ME_khong_lam_gi_ca():
     sb._cuc_bo.cong = None
     sb.bao_hang_cho(999, 9999.0)      # không được ném
     sb.bao_nghen(30.0)
+
+
+# ── Bộ điều nhịp HỎI TRẠNG THÁI ─────────────────────────────────────────────
+#
+# Đo 12/08/2026: đẩy 300 job ảnh chỉ bằng POST -> máy chủ dựng 134 job đồng thời,
+# 222 ảnh/phút. Cùng ngày, đo qua `create_and_wait` lại ra "bão hoà ở 40 chỗ,
+# p50 vọt 36 -> 186s". Khác biệt duy nhất: cách sau hỏi thăm TỪNG job, và 100
+# job x hỏi mỗi 1-5s là vài nghìn request/phút trên hạn mức 1.000.
+#
+# Trần thật của dây chuyền là NGÂN SÁCH LỜI GỌI của tool, không phải sức chứa
+# nhà máy — và ngân sách thì chia được.
+
+
+def test_cang_nhieu_job_bay_thi_hoi_cang_thua(sc):
+    nhip = sc.NhipHoiTham(moi_giay=4.0)
+    assert nhip.nhip() == sc.HOI_TOI_THIEU, "chua co job nao ma da hoi thua"
+    for _ in range(8):
+        nhip.vao()
+    assert nhip.nhip() == 2.0, "8 job / 4 moi giay = 2s"
+    for _ in range(72):
+        nhip.vao()
+    assert nhip.nhip() == 20.0, "80 job / 4 moi giay = 20s"
+
+
+def test_nhip_hoi_bi_kep_hai_dau(sc):
+    nhip = sc.NhipHoiTham(moi_giay=1000.0)
+    nhip.vao()
+    assert nhip.nhip() == sc.HOI_TOI_THIEU, "hoi day hon 1s la phi request"
+    nhip = sc.NhipHoiTham(moi_giay=0.5)
+    for _ in range(500):
+        nhip.vao()
+    assert nhip.nhip() == sc.HOI_TOI_DA, "hoi thua qua thi biet job xong rat muon"
+
+
+def test_tra_cho_thi_nhip_hoi_dan_lai(sc):
+    nhip = sc.NhipHoiTham(moi_giay=2.0)
+    for _ in range(20):
+        nhip.vao()
+    cao = nhip.nhip()
+    for _ in range(18):
+        nhip.ra()
+    assert nhip.nhip() < cao, "job xong roi ma van hoi thua nhu luc dong"
+    assert nhip.dang_bay == 2
+
+
+def test_ngan_sach_giu_duoc_du_bao_nhieu_job(sc):
+    """Số request/giây phải xấp xỉ ngân sách, BẤT KỂ có bao nhiêu job bay.
+
+    Đây là cả lý do lớp này tồn tại: tổng tải lên máy chủ không đổi, nên thêm
+    job không bao giờ phá trần rate-limit.
+    """
+    for n in (10, 50, 120):
+        nhip = sc.NhipHoiTham(moi_giay=5.0)
+        for _ in range(n):
+            nhip.vao()
+        req_moi_giay = n / nhip.nhip()
+        assert 4.0 <= req_moi_giay <= 6.0, (
+            "{0} job -> {1:.1f} req/giay, lech ngan sach 5".format(n, req_moi_giay))
+
+
+def test_doc_trang_thai_hong_LIEN_TIEP_thi_NEM_chu_khong_quay_vong_cam(sc):
+    """Lỗi VĨNH VIỄN không được nuốt như lỗi thoáng qua.
+
+    Vòng chờ từng bọc `retrieve` trong `except: continue` trần. Client thiếu
+    `retrieve`, khoá hết quyền, endpoint đổi tên — tất cả đều bị coi là "mạng
+    chập", và vòng lặp quay tới hết `timeout` rồi mới báo. Sai chỗ nào cũng ra
+    đúng một triệu chứng: treo.
+    """
+    class _JobsHong:
+        def retrieve(self, job_id):
+            raise RuntimeError("khong co quyen")
+
+    class _C:
+        jobs = _JobsHong()
+
+    import time as _t
+    t0 = _t.time()
+    with pytest.raises(RuntimeError):
+        sc._cho_job_xong(_C(), "job_x", timeout=300, uoc_giay=0)
+    assert _t.time() - t0 < 60, "quay vong cam thay vi nem ra ngay"
+
+
+def test_client_KHONG_CO_retrieve_thi_di_duong_SDK_tu_dau(sc, monkeypatch):
+    """Phát hiện thiếu `retrieve` ở CỬA, đừng phát hiện giữa vòng lặp."""
+    goi = {"wait": 0}
+
+    class _Jobs:
+        def wait(self, job_id, timeout=None, on_progress=None, estimated_seconds=None, **kw):
+            goi["wait"] += 1
+            return {"id": job_id, "status": "succeeded"}
+
+    class _TaiNguyen:
+        def create(self, **kw):
+            return {"id": "job_x", "status": "queued"}
+
+    class _C:
+        images = _TaiNguyen()
+        jobs = _Jobs()
+
+    ra = sc.tao_va_cho(_C(), "images", timeout=30, prompt="x")
+    assert goi["wait"] == 1, "khong lui ve jobs.wait khi thieu retrieve"
+    assert (ra.get("status") if isinstance(ra, dict) else ra["status"]) == "succeeded"

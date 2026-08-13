@@ -3787,8 +3787,31 @@ Generator/context error:
 
         Job bi tu choi o cua KHONG bi tinh la hong - no quay ve dau hang cho.
         Job hong that thi chi minh no hong, khong keo ca me chet theo.
+
+        ═══ MOT VONG DO DUNG CHUNG CHO CA LUOT CHAY, KHONG PHAI MOI PHA MOT CAI ═══
+
+        Truoc 11/08/2026 cho nay khong truyen `nhip`, nen `chay_ca_me` tu dung
+        mot vong do MOI cho tung pha cua tung ma: references -> scenes -> videos,
+        roi ma sau lai lam lai tu dau. Hoc duoc bao nhieu vut bay nhieu.
+
+        Docstring cua chinh `chay_ca_me` da noi san: *"dung chung mot vong do cho
+        nhieu me noi tiep - vong do cang song lau cang bam sat nha may"*. Tham so
+        co san tu dau, chi la khong ai truyen.
+
+        TACH RIENG ANH VA VIDEO: hai nha may doc lap hoan toan (CONTRACT.md 8.1),
+        tran khac nhau va tac nghen khac nhau. Dung chung mot vong do cho ca hai
+        la de nha may video ket keo tut nhip cua nha may anh dang ranh.
         """
         sb = _shopapi_nap_batch()
+        kho = getattr(self, "_shopapi_nhip_chung", None)
+        if kho is None:
+            kho = self._shopapi_nhip_chung = {}
+        if loai not in kho:
+            kho[loai] = sb._tao_nhip(bat_dau=sb.so_luong_song_song(
+                loai, tran_tool=tran_tool, api_key=self.shopapi_key, log=self.log,
+                ngu=lambda giay: self._sleep_with_stop(giay),
+                dung_lai=lambda: bool(self._stop_flag),
+            ))
         # `han_giay` = tool chờ MỘT job tối đa bao lâu. Cổng hàng chờ so nó với
         # `estimated_seconds` máy chủ trả lúc nhận job: máy chủ nói "còn 1.500
         # giây nữa mới tới lượt" trong khi ta chỉ chờ được 900/1.600 giây thì
@@ -3798,7 +3821,7 @@ Generator/context error:
                     else self.shopapi_image_timeout)
         return sb.chay_ca_me(
             viec, chay_mot, loai, tran_tool=tran_tool, api_key=self.shopapi_key,
-            log=self.log, han_giay=han_giay,
+            log=self.log, han_giay=han_giay, nhip=kho[loai],
             ngu=lambda giay: self._sleep_with_stop(giay),
             dung_lai=lambda: bool(self._stop_flag),
         )

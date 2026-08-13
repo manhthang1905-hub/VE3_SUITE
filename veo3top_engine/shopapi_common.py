@@ -30,6 +30,7 @@ from __future__ import annotations
 import os
 import re
 import sys
+import threading
 import time
 
 __all__ = [
@@ -454,6 +455,150 @@ def doc_hang_cho(job):
         return (None, None)
 
 
+#: Ngân sách lời gọi HỎI TRẠNG THÁI, tính bằng request/giây cho TIẾN TRÌNH NÀY.
+#:
+#: Hạn mức của tài khoản là 1.000 request/phút (~16,6/giây) cho MỌI lời gọi.
+#: Hỏi thăm job chỉ được ăn một phần, phần còn lại dành cho `create`, `upload`,
+#: tải file. Mà VE3 chạy NHIỀU tiến trình mã song song, mỗi tiến trình một ngân
+#: sách riêng — nên GUI chia ngân sách rồi truyền xuống qua biến môi trường.
+#:
+#: Không đặt biến -> 3 req/giây, đủ an toàn cho tới 5 tiến trình mã.
+NGAN_SACH_HOI_MOI_GIAY = float(os.environ.get("SHOPAPI_NGAN_SACH_HOI") or 3.0)
+
+#: Chặn dưới/trên của nhịp hỏi. Dưới 1s là phí request; trên 30s thì job xong
+#: rồi mà nửa phút sau mới biết, tự thêm độ trễ vào dây chuyền.
+#: Chặn dưới 1s: hỏi dày hơn là phí request mà không biết sớm hơn bao nhiêu.
+#: Chặn trên 60s: quá đó thì job xong cả phút rồi mới biết, và độ trễ đó cộng
+#: thẳng vào thời gian của cả mẻ.
+#:
+#: ⚠ Trần 60 chứ không phải 30. Ở 300 job đang bay với ngân sách 1,25 req/giây,
+#: nhịp đúng phải là 240 giây — kẹp ở 30 thì tổng lại vọt lên 10 req/giây cho
+#: MỘT tiến trình, nhân 8 tiến trình là phá trần rate-limit, tức là dựng lại
+#: đúng cái bẫy vừa gỡ. Kẹp rộng hơn để lời hứa "giữ trong ngân sách" là thật.
+HOI_TOI_THIEU, HOI_TOI_DA = 1.0, 60.0
+
+
+class NhipHoiTham:
+    """Giãn nhịp hỏi trạng thái theo SỐ JOB ĐANG BAY.
+
+    ═══ ĐÂY LÀ TRẦN THẬT CỦA CẢ DÂY CHUYỀN, KHÔNG PHẢI SỨC CHỨA NHÀ MÁY ═══
+
+    Đo ngày 12/08/2026: đẩy 300 job ảnh chỉ bằng `POST` (không chờ), máy chủ
+    dựng **134 job đồng thời** và rút 37 job trong 10 giây — **222 ảnh/phút**.
+    Cùng ngày, phép đo qua `create_and_wait` lại kết luận "nhà máy bão hoà ở 40
+    chỗ, p50 vọt từ 36 lên 186 giây".
+
+    Cả hai đều đúng, và khác nhau ở đúng một chỗ: `create_and_wait` **hỏi thăm
+    từng job một**. 100 job × hỏi mỗi 1–5 giây = vài nghìn request/phút, trong
+    khi hạn mức là 1.000. Client tự đâm vào trần rate-limit của chính nó, rồi
+    ghi độ trễ ấy vào sổ như thể nhà máy chậm.
+
+    Nói cách khác: thứ chặn thông lượng KHÔNG phải sức chứa nhà máy, mà là NGÂN
+    SÁCH LỜI GỌI của chính tool. Và nó là thứ chia được: càng nhiều job bay thì
+    mỗi job hỏi thưa ra, tổng số request giữ nguyên.
+
+    Đánh đổi có thật và phải nói rõ: hỏi thưa thì biết job xong muộn hơn, trung
+    bình chậm thêm nửa nhịp. Ở 134 job bay, nhịp ~22 giây nên trung bình muộn 11
+    giây trên một job 36 giây. Đổi 30% độ trễ MỘT job lấy 3 lần số job chạy được
+    cùng lúc — lãi gấp mấy lần.
+    """
+
+    def __init__(self, moi_giay=None):
+        self._moi_giay = max(0.2, float(
+            NGAN_SACH_HOI_MOI_GIAY if moi_giay is None else moi_giay))
+        self._bay = 0
+        self._khoa = threading.Lock()
+
+    def vao(self):
+        with self._khoa:
+            self._bay += 1
+
+    def ra(self):
+        with self._khoa:
+            self._bay = max(0, self._bay - 1)
+
+    @property
+    def dang_bay(self):
+        with self._khoa:
+            return self._bay
+
+    def nhip(self):
+        """Mỗi job nên hỏi lại sau bao nhiêu giây, NGAY BÂY GIỜ."""
+        with self._khoa:
+            n = max(1, self._bay)
+        return max(HOI_TOI_THIEU, min(HOI_TOI_DA, n / self._moi_giay))
+
+
+#: Một bộ điều nhịp cho cả tiến trình — mọi mẻ dùng chung một ngân sách.
+NHIP_HOI = NhipHoiTham()
+
+
+def _cho_job_xong(client, job_id, timeout, on_progress=None, uoc_giay=None):
+    """Chờ job kết thúc, TRA LẠI NHỊP HỎI MỖI VÒNG.
+
+    Vì sao không dùng `client.jobs.wait`: nó nhận `poll_interval` MỘT LẦN rồi
+    chốt cứng cho cả vòng đời job. Job mở lúc dây chuyền còn vắng sẽ giữ nhịp 1
+    giây suốt, kể cả khi sau đó có 300 job cùng bay — tức là đúng cơn bão request
+    mà `NhipHoiTham` sinh ra để dập.
+
+    Giữ nguyên hợp đồng của `jobs.wait`: trả job đã xong, ném `JobFailedError`
+    khi hỏng, `JobTimeoutError` khi quá hạn.
+    """
+    bootstrap_sdk()
+    from shopapi._exceptions import JobFailedError, JobTimeoutError
+
+    KET_THUC = ("succeeded", "failed", "cancelled", "rejected")
+    #: Bao nhiêu lượt đọc trạng thái hỏng LIÊN TIẾP thì thôi coi là "mạng chập".
+    #:
+    #: ⚠ Vòng này từng bọc `retrieve` trong `except: continue` trần. Một lỗi
+    #: VĨNH VIỄN — client không có `retrieve`, khoá hết quyền, endpoint đổi tên —
+    #: bị nuốt y như một cú mạng chập, và vòng lặp quay tới hết `timeout` rồi mới
+    #: báo "job chưa xong". Sai chỗ nào cũng ra đúng một triệu chứng: treo.
+    HONG_LIEN_TIEP_TOI_DA = 5
+    t0 = time.monotonic()
+    job = None
+    hong = 0
+    NHIP_HOI.vao()
+    try:
+        # Lần hỏi đầu bám `estimated_seconds` như SDK: hỏi sớm hơn thì chắc chắn
+        # vẫn `queued`, chỉ tốn một lời gọi.
+        dau = min(float(uoc_giay or 0) * 0.5, 5.0) if uoc_giay else 1.0
+        time.sleep(max(0.0, min(dau, timeout)))
+        while True:
+            con = timeout - (time.monotonic() - t0)
+            if con <= 0:
+                raise JobTimeoutError(
+                    "Cho qua {0:.0f}s ma job {1} chua xong.".format(timeout, job_id),
+                    job=job, job_id=job_id, waited_seconds=time.monotonic() - t0)
+            try:
+                j = client.jobs.retrieve(job_id)
+                job = j if isinstance(j, dict) else j.to_dict()
+                hong = 0
+            except Exception as e:
+                # Lỗi đọc trạng thái KHÔNG phải lỗi job — hỏi lại vòng sau.
+                # Nhưng hỏng LIÊN TIẾP thì đó không còn là mạng chập nữa: ném ra
+                # để người gọi lùi về đường của SDK, thay vì quay vòng câm.
+                hong += 1
+                if hong >= HONG_LIEN_TIEP_TOI_DA:
+                    raise
+                time.sleep(min(NHIP_HOI.nhip(), max(0.0, con)))
+                continue
+            tt = job.get("status")
+            if on_progress is not None:
+                try:
+                    on_progress(job)
+                except Exception:       # noqa: BLE001 — báo tiến độ hỏng không giết job
+                    pass
+            if tt in KET_THUC:
+                if tt == "succeeded":
+                    return job
+                raise JobFailedError(
+                    "Job {0} ket thuc voi trang thai '{1}'.".format(job_id, tt), job=job)
+            time.sleep(min(NHIP_HOI.nhip(), max(0.0, con)))
+    finally:
+        NHIP_HOI.ra()
+
+
 def tao_va_cho(client, ten_tai_nguyen, timeout, on_progress=None, on_hang_cho=None,
                **tham_so):
     """`create` rồi `jobs.wait` — **tách hai bước để ĐỌC ĐƯỢC hàng chờ**.
@@ -480,7 +625,11 @@ def tao_va_cho(client, ten_tai_nguyen, timeout, on_progress=None, on_hang_cho=No
         raise AttributeError("client khong co '{0}'".format(ten_tai_nguyen))
 
     tao = getattr(tai_nguyen, "create", None)
-    cho = getattr(getattr(client, "jobs", None), "wait", None)
+    _jobs = getattr(client, "jobs", None)
+    cho = getattr(_jobs, "wait", None)
+    # `retrieve` là thứ vòng chờ RIÊNG cần (xem `_cho_job_xong`). Không có nó thì
+    # đi đường của SDK ngay từ đầu — đừng để phát hiện muộn ở giữa vòng lặp.
+    doc = getattr(_jobs, "retrieve", None)
     if tao is None or cho is None:
         return tai_nguyen.create_and_wait(
             timeout=timeout, on_progress=on_progress, **tham_so)
@@ -492,9 +641,17 @@ def tao_va_cho(client, ten_tai_nguyen, timeout, on_progress=None, on_hang_cho=No
             on_hang_cho(vi_tri, uoc_giay)
         except Exception:                   # noqa: BLE001 — báo nhịp hỏng không giết job
             pass
-    # `estimated_seconds` cũng là thứ SDK dùng để chọn nhịp hỏi trạng thái đầu
-    # tiên (`_polling.poll_delays`) — truyền tiếp cho khớp `create_and_wait`.
-    return cho(_lay_truong(job, "id"), timeout=timeout, on_progress=on_progress,
+    # Vòng chờ RIÊNG, tra lại nhịp hỏi mỗi vòng — xem `_cho_job_xong` và khối
+    # `why` dài ở `NhipHoiTham`. `jobs.wait` của SDK chốt nhịp một lần rồi giữ
+    # nguyên, và chính chỗ đó biến 134 job đang bay thành một cơn bão request.
+    ma = _lay_truong(job, "id")
+    if doc is not None:
+        try:
+            return _cho_job_xong(client, ma, timeout, on_progress=on_progress,
+                                 uoc_giay=uoc_giay)
+        except (AttributeError, ImportError):
+            pass   # SDK đời cũ / client thiếu thứ gì đó -> đường dưới
+    return cho(ma, timeout=timeout, on_progress=on_progress,
                estimated_seconds=uoc_giay)
 
 
@@ -730,6 +887,29 @@ def kiem_khoa(api_key=None, base_url=None):
     except Exception:
         so_du = str(_lay_truong(balance, "wallet"))
     return True, "Khoa dung. So du: {0}".format(so_du)
+
+
+def doc_v1_me(api_key=None, client=None, timeout=20.0):
+    """Cả phản hồi `GET /v1/me`, dạng dict. `{}` khi hỏi không được.
+
+    `tran_song_song` chỉ trả về MỘT con số cho MỘT loại job, nên nơi nào cần
+    nhiều hơn thế phải gọi nó nhiều lần — mỗi lần một vòng HTTP, và các con số
+    thu về không còn thuộc cùng một thời điểm.
+
+    Bảng chỉ số trên giao diện cần đủ bộ cùng lúc: `limit`, `running`, `queued`,
+    `capacity`, `accounts_usable`, `workers_online`, và câu `reason` mà máy chủ
+    đã viết sẵn bằng tiếng Việt. Một lời gọi lấy hết, và mọi con số nhất quán.
+
+    KHÔNG ném: nơi gọi là vòng poll của giao diện, một lỗi mạng không được phép
+    làm chết nó.
+    """
+    try:
+        if client is None:
+            client = tao_client(api_key=api_key, timeout=float(timeout), max_retries=1)
+        me = client.request("GET", "/v1/me")
+        return me if isinstance(me, dict) else dict(me)
+    except Exception:
+        return {}
 
 
 def tran_song_song(loai, api_key=None, mac_dinh=1, client=None):

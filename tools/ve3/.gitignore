@@ -4,6 +4,9 @@ __pycache__/
 PROJECTS/
 *.xlsx
 !templates/template.xlsx
-config/settings.yaml
+# Cấu hình THẬT + mọi bản sao lưu của nó. Dấu `*` là cố ý: file này chứa
+# gmail|mật khẩu|totp của toàn bộ kho, và các bản `settings.yaml.truoc-*`
+# sinh ra mỗi lần chỉnh tay cũng chứa y nguyên chừng ấy bí mật.
+config/settings.yaml*
 .env
 *.log

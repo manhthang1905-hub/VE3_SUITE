@@ -131,3 +131,85 @@ def test_job_bao_xong_nhung_khong_co_file(tmp_path, anh_scene, tai_ve_gia, nhat_
                               client=client, log=nhat_ky)
     assert ok is False
     assert "khong co file ket qua" in err
+
+
+# ── Dọn ảnh khung đầu khỏi kho ───────────────────────────────────────────────
+#
+# CONTRACT.md §6 đặt trần 200 FILE CÒN SỐNG và 500 MB cho kho của một khách, và
+# file đã có job dùng sống 2 giờ kể từ lần dùng gần nhất. Mỗi job video upload
+# một ảnh khung đầu, client trước nay không xoá cái nào. Đo 11/08/2026: 456
+# video/giờ × 2 giờ = ~900 file còn sống trên trần 200.
+#
+# Nó nổ theo kiểu khó đoán nhất — job mới bị từ chối ở khâu upload, tức hỏng ở
+# một chỗ chẳng liên quan gì tới nội dung lẫn nhà máy.
+
+
+def test_video_xong_thi_XOA_anh_khung_dau_khoi_kho(tmp_path, anh_scene, tai_ve_gia, nhat_ky):
+    client = FakeClient(video_job=job_video())
+    ok, _info, err = svc.generate(str(anh_scene), "canh mua",
+                                  str(tmp_path / "vid" / "SC001.mp4"),
+                                  client=client, log=nhat_ky)
+    assert ok and not err
+    assert len(client.uploads.da_xoa) == 1, "khong don anh khung dau -> tran 200 file se no"
+    assert client.uploads.da_xoa[0].startswith("upl_")
+
+
+def test_moi_dung_ma_upload_tu_URL_co_chu_ky_dai(tmp_path):
+    """URL thật kéo theo cả chuỗi tham số chữ ký — moi mã phải không dính chúng."""
+    that = ("https://cdn.shopapi.vn/shopapi/uploads/usr_ylghhdawbfx3kl7n6y71s0wp/"
+            "2026/08/11/upl_rh0kp0npms36fw99a7spkldj.png?X-Amz-Algorithm=AWS4-HMAC-SHA256"
+            "&X-Amz-Signature=1bf30dad&x-id=GetObject")
+    assert svc._ma_upload(that) == "upl_rh0kp0npms36fw99a7spkldj"
+    assert svc._ma_upload("https://cdn.example.invalid/khong-phai-kho.png") is None
+    assert svc._ma_upload("") is None
+    assert svc._ma_upload(None) is None
+
+
+def test_job_HONG_thi_KHONG_duoc_xoa_anh(tmp_path, anh_scene, nhat_ky):
+    """Hỏng thì `chay_ca_me` trả job về hàng chờ và chạy lại.
+
+    Xoá ảnh lúc đó là biến một lần thử lại bình thường thành hỏng vĩnh viễn:
+    lượt sau không còn `img/SC001.png` trên kho để mà dựng.
+    """
+    client = FakeClient(video_loi=_loi_gia("APIError", "nha may nga"))
+    ok, _info, err = svc.generate(str(anh_scene), "x", str(tmp_path / "a.mp4"),
+                                  client=client, log=nhat_ky)
+    assert not ok and err
+    assert client.uploads.da_xoa == [], "da xoa anh cua mot job SE DUOC CHAY LAI"
+
+
+def test_tai_video_that_bai_thi_KHONG_xoa_anh(tmp_path, anh_scene, nhat_ky, sc, monkeypatch):
+    """Video dựng xong nhưng tải về hỏng -> vẫn còn đường thử lại, giữ ảnh."""
+    def _no(url, dest_path, timeout=600.0):
+        raise OSError("mat mang giua chung")
+
+    monkeypatch.setattr(sc, "tai_ve", _no)
+    client = FakeClient(video_job=job_video())
+    ok, _info, err = svc.generate(str(anh_scene), "x", str(tmp_path / "a.mp4"),
+                                  client=client, log=nhat_ky)
+    assert not ok and err
+    assert client.uploads.da_xoa == []
+
+
+def test_don_khong_duoc_thi_VAN_tra_video_ve(tmp_path, anh_scene, tai_ve_gia, nhat_ky):
+    """Video đã nằm trên đĩa và khách đã trả tiền — dọn trượt không được làm hỏng job.
+
+    Dọn trượt chỉ có nghĩa là file đó chờ hết 2 giờ như trước, đúng bằng hành vi cũ.
+    """
+    client = FakeClient(video_job=job_video())
+    client.uploads.loi_xoa = _loi_gia("APIError", "kho tu choi")
+    ok, info, err = svc.generate(str(anh_scene), "x", str(tmp_path / "a.mp4"),
+                                 client=client, log=nhat_ky)
+    assert ok and not err, "don truot KHONG duoc lam hong job da xong"
+    assert info["bytes"] > 0
+    assert any("khong don duoc" in m for _lv, m in nhat_ky.dong), "nuot loi im lang"
+
+
+def test_khach_tu_dua_URL_thi_KHONG_dong_vao(tmp_path, tai_ve_gia, nhat_ky):
+    """URL sẵn không phải file của ta upload — xoá là xoá đồ người khác."""
+    client = FakeClient(video_job=job_video())
+    ok, _info, _err = svc.generate(
+        "https://cdn.shopapi.vn/shopapi/uploads/usr_ai_do/2026/08/11/upl_cuanguoikhac.png",
+        "x", str(tmp_path / "a.mp4"), client=client, log=nhat_ky)
+    assert ok
+    assert client.uploads.da_xoa == [], "xoa file ma khach tu dua URL vao"

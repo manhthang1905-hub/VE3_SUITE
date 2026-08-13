@@ -138,6 +138,25 @@ def test_khong_con_mac_dinh_nao_tro_ve_pool(khoa, cam):
 # không có cách nào đi tiếp vì họ ĐÚNG là không cần token.
 
 
+@pytest.fixture(autouse=True)
+def _quen_khoa():
+    """Xoá câu trả lời "có khoá chưa" mà `ve3_gui` nhớ, trước VÀ sau mỗi bài.
+
+    Cache đó là hành vi thật (xem `_KHOA_TTL`): `doc_khoa()` đọc file mỗi lần
+    gọi, mà từ 11/08/2026 nó bị hỏi trong vòng hàng chờ và trong đường vẽ giao
+    diện. Nhưng nhớ xuyên qua các bài kiểm thì bài sau đọc phải câu trả lời của
+    bài trước, và `monkeypatch` trên `doc_khoa` thành vô hiệu.
+    """
+    import sys
+    VE3 = Path(__file__).resolve().parents[1] / "tools" / "ve3"
+    if str(VE3) not in sys.path:
+        sys.path.insert(0, str(VE3))
+    import ve3_gui
+    ve3_gui.quen_khoa_shopapi()
+    yield
+    ve3_gui.quen_khoa_shopapi()
+
+
 @pytest.fixture
 def cong():
     """`_chi_dung_shopapi` gọi rời khỏi `self` — nó không đụng thuộc tính nào."""
@@ -311,8 +330,10 @@ def test_so_cho_lam_dieu_chinh_duoc():
 
 
 def test_so_cho_lam_rac_thi_ve_mac_dinh_chu_khong_no():
+    import ve3_gui
     app = _AppGia(dict(CFG_API, shopapi_ma_song_song="nhieu vao"))
-    assert len(_goi("_get_server_pairs", app, only_available=True)) == 3
+    assert (len(_goi("_get_server_pairs", app, only_available=True))
+            == ve3_gui.SHOPAPI_MA_SONG_SONG_MAC_DINH)
 
 
 def test_cho_lam_ao_KHONG_dung_ServerPool_cho_server_khong_ton_tai():
@@ -327,9 +348,597 @@ def test_cho_lam_ao_KHONG_dung_ServerPool_cho_server_khong_ton_tai():
     assert cfg["veo3top_image_mode"] == "shopapi"
 
 
-def test_da_khai_server_that_thi_KHONG_dung_cho_lam_ao():
-    """Người dùng khai server thật -> tôn trọng, đừng lén thay bằng pair ảo."""
+def test_con_server_trong_cau_hinh_ma_chay_toan_API_thi_VAN_dung_cho_lam_ao():
+    """CHẾ ĐỘ ĐANG CHẠY quyết định, không phải danh sách server còn sót lại.
+
+    ═══ BÀI KIỂM NÀY ĐẢO NGƯỢC MỘT LUẬT CŨ, CỐ Ý ═══
+
+    Bản trước đòi `local_server_list` PHẢI RỖNG mới dựng chỗ làm ảo, với lý do
+    "người dùng khai server thật thì tôn trọng". Nghe hợp lý, nhưng nó bỏ sót
+    đúng trường hợp phổ biến nhất: ai đã từng chạy đường Chrome thì danh sách 10
+    server vẫn nằm nguyên trong `settings.yaml` sau khi chuyển sang API.
+
+    Hậu quả đo được ngày 11/08/2026: chạy toàn API mà số mã song song vẫn bị ghim
+    bằng số Chrome portable — những cái mà chế độ API KHÔNG mở, KHÔNG dùng, và
+    người dùng không có lý do gì để nghĩ là còn liên quan. `shopapi_ma_song_song`
+    cũng chết theo vì nó chỉ được đọc trong `_pair_ao_shopapi`: vặn con số đó
+    không có tác dụng gì, và không có lấy một dòng log nào nói vì sao.
+
+    Xoá server khỏi cấu hình không phải cách chữa — người dùng còn muốn quay lại
+    đường Chrome. Nên cái quyết định phải là chế độ, và chỉ chế độ.
+    """
+    import ve3_gui
     app = _AppGia(dict(CFG_API, local_server_list=[
         {"url": "http://127.0.0.1:8801", "name": "Sv-1", "enabled": True}]))
     pairs = _goi("_get_server_pairs", app, only_available=False)
+    assert all(p.get("ao_shopapi") for p in pairs), [p["pair_id"] for p in pairs]
+    assert len(pairs) == ve3_gui.SHOPAPI_MA_SONG_SONG_MAC_DINH, (
+        "so ma song song van bam theo so server Chrome thay vi theo cau hinh API")
+
+
+def test_KHONG_chay_toan_api_thi_van_dung_server_that():
+    """Còn một khâu đi đường cũ là còn cần Chrome — không được thay bằng pair ảo."""
+    app = _AppGia({"veo3top_image_mode": "shopapi", "generation_backend": "veo3top_b",
+                   "local_server_list": [
+                       {"url": "http://127.0.0.1:8801", "name": "Sv-1", "enabled": True}]})
+    pairs = _goi("_get_server_pairs", app, only_available=False)
     assert not any(p.get("ao_shopapi") for p in pairs), [p["pair_id"] for p in pairs]
+
+
+def test_binding_server_cu_KHONG_chan_ma_khi_chay_toan_API():
+    """Mã có `.ve3_binding.yaml` trỏ `sv9` vẫn phải chạy được ở chế độ API.
+
+    ═══ ĐÂY LÀ CÁI BẪY ĐI KÈM CHỖ LÀM ẢO ═══
+
+    Bật chỗ làm ảo xong thì `free_pairs` chỉ còn `server_name = "API shopapi"`.
+    Mọi mã cũ đều mang binding từ hồi chạy Chrome (`bound_server_name: sv9`),
+    nên nhánh `if bound_server` tìm không ra, ghi "missing from config. Waiting
+    (will not reassign)" rồi trả `None` — và mã đó KHÔNG BAO GIỜ chạy nữa.
+
+    Tức là gỡ một nút thắt mà quên chỗ này thì đổi "chạy chậm" lấy "đứng hẳn".
+    Ngày 11/08/2026 có 75 mã đang mang binding trỏ vào sv1..sv10.
+    """
+    import ve3_gui
+    app = _AppGia(dict(CFG_API, local_server_list=[
+        {"url": "http://127.0.0.1:8801", "name": "sv9", "enabled": True}]))
+    app._load_project_pair_binding = lambda pd: {
+        "bound_server_name": "sv9", "bound_account_name": "ai_do@gmail.com"}
+    app.queue_pair_last_used = {}
+
+    pairs = _goi("_get_server_pairs", app, only_available=False)
+    chon = _goi("_choose_pair_for_project", app, Path("TL1-0756"), pairs)
+
+    assert chon is not None, "ma bi chan hoan toan vi mot binding Chrome cu"
+    assert chon.get("ao_shopapi")
+
+
+# ── Nhật ký ra ĐĨA ───────────────────────────────────────────────────────────
+
+
+def test_co_ghi_nhat_ky_ra_file(tmp_path, monkeypatch):
+    """VE3 phải để lại vết trên đĩa, không chỉ trong khung cửa sổ.
+
+    Chiều 11/08/2026 tool chạy rồi dừng hẳn — 7 mã giữ lock, 0 job, 0 file trong
+    90 giây, cả GUI lẫn 8 worker đều đã thoát. Không một dòng nào còn lại để
+    biết vì sao, nên phải suy ngược từ log của MÁY CHỦ. Một tool chạy hàng giờ
+    không người trông mà không để lại vết thì không gỡ lỗi được.
+    """
+    import sys
+    VE3 = Path(__file__).resolve().parents[1] / "tools" / "ve3"
+    if str(VE3) not in sys.path:
+        sys.path.insert(0, str(VE3))
+    import ve3_gui
+
+    monkeypatch.setattr(ve3_gui, "LOG_DIR", tmp_path / "logs")
+    monkeypatch.setattr(ve3_gui, "_log_file_handle", [None, ""])
+    ve3_gui.ghi_log_file("mot dong thu", "ERROR", "ve3")
+
+    ra = list((tmp_path / "logs").glob("ve3-*.log"))
+    assert ra, "khong ghi file nhat ky nao"
+    noi_dung = ra[0].read_text(encoding="utf-8")
+    assert "mot dong thu" in noi_dung and "ERROR" in noi_dung
+
+
+def test_ghi_nhat_ky_hong_KHONG_lam_chet_tool(monkeypatch):
+    """Ghi log không bao giờ được làm chết thứ nó đang ghi lại."""
+    import sys
+    VE3 = Path(__file__).resolve().parents[1] / "tools" / "ve3"
+    if str(VE3) not in sys.path:
+        sys.path.insert(0, str(VE3))
+    import ve3_gui
+
+    class _ODiaHong:
+        def mkdir(self, *a, **k):
+            raise OSError("o dia day")
+
+        def __truediv__(self, other):
+            return self
+
+    monkeypatch.setattr(ve3_gui, "LOG_DIR", _ODiaHong())
+    monkeypatch.setattr(ve3_gui, "_log_file_handle", [None, ""])
+    ve3_gui.ghi_log_file("van phai chay tiep", "INFO", None)   # khong duoc nem
+
+
+def test_dong_stdout_khong_co_tien_to_KHONG_bi_vut_di():
+    """Traceback của worker không bắt đầu bằng `@@LOG|` — phải được ghi lại.
+
+    `stderr` gộp vào `stdout` ngay ở `Popen`, nên mọi traceback Python đi qua
+    đúng vòng đọc đó. Bản trước để chúng rơi khỏi chuỗi `elif` mà không làm gì:
+    worker chết vì lý do gì cũng không ai biết, log sạch bong.
+    """
+    nguon = VE3_GUI.read_text(encoding="utf-8", errors="replace")
+    moc = nguon.find('elif line.startswith("@@RESULT|")')
+    assert moc > 0, "khong tim thay vong doc stdout cua worker"
+    khoi = nguon[moc:moc + 1800]
+    assert "else:" in khoi, "van chua co nhanh bat dong khong co tien to"
+    assert '"ERROR"' in khoi, "dong la phai duoc ghi o muc ERROR"
+
+
+# ── Giao diện phải khớp CHẾ ĐỘ đang chạy ─────────────────────────────────────
+#
+# Trang Cài đặt có tám núm, và cả tám đều là núm của đường Chrome/pool: account
+# pool, token chrome, recycle, luồng/account ultra, nghỉ 429, mã ảnh/video. Đi
+# API shopapi thì KHÔNG cái nào được đọc.
+#
+# Ba con số thật sự quyết định thông lượng ở chế độ API lại không có mặt trên
+# giao diện. Ngày 11/08/2026 đó chính là cách chúng bị bỏ ở mức làm tool chạy 1%
+# công suất suốt nhiều giờ: màn hình đầy núm, không núm nào nối tới thứ đang bóp.
+
+
+_KHOA_API_TREN_GUI = ("shopapi_ma_song_song", "max_concurrent", "shopapi_video_concurrency")
+
+
+@pytest.mark.parametrize("khoa", _KHOA_API_TREN_GUI)
+def test_ba_num_API_co_tren_giao_dien(khoa):
+    """Chỉnh được từ GUI, không phải mở `settings.yaml` bằng tay."""
+    nguon = VE3_GUI.read_text(encoding="utf-8", errors="replace")
+    assert '"{0}"'.format(khoa) in nguon, (
+        "khoa {0} khong xuat hien trong ve3_gui.py -> khong chinh duoc tu giao dien".format(khoa))
+
+
+@pytest.mark.parametrize("khoa", _KHOA_API_TREN_GUI)
+def test_ba_num_API_duoc_LUU_va_NAP(khoa):
+    """Có ô nhập mà không lưu/nạp thì gõ xong mất — tệ hơn là không có ô."""
+    nguon = VE3_GUI.read_text(encoding="utf-8", errors="replace")
+    assert nguon.count('"{0}"'.format(khoa)) >= 2, (
+        "khoa {0} chi xuat hien mot lan -> thieu duong luu HOAC duong nap".format(khoa))
+
+
+def test_co_ham_lam_mo_num_pool_khi_di_API():
+    """Núm không nối vào đâu phải trông khác núm còn sống."""
+    nguon = VE3_GUI.read_text(encoding="utf-8", errors="replace")
+    assert "_cap_nhat_num_theo_che_do" in nguon
+    # Phải được GỌI, không chỉ định nghĩa rồi bỏ đó.
+    assert nguon.count("_cap_nhat_num_theo_che_do") >= 2
+
+
+def test_nhan_Parallel_jobs_KHONG_con_noi_cung_mot_cau():
+    """Câu 'TU DONG (theo so chrome / so ma)' nói dối ở chế độ API.
+
+    Không có chrome nào, và số mã do `shopapi_ma_song_song` quyết. Nhãn phải là
+    widget có tên để đổi theo chế độ, không phải chuỗi chết.
+    """
+    nguon = VE3_GUI.read_text(encoding="utf-8", errors="replace")
+    assert "self.lbl_parallel_jobs" in nguon, "nhan van la chuoi chet, khong doi theo che do"
+
+
+def test_co_nut_doc_tran_may_chu():
+    """Đặt 'đang xin' cạnh 'được cấp' — phép so duy nhất thấy được mình bỏ phí.
+
+    11/08/2026: máy chủ cấp 691 chỗ ảnh, tool đặt lên 5,6. Không màn hình nào
+    nói ra, vì không màn hình nào đặt hai con số đó cạnh nhau.
+    """
+    nguon = VE3_GUI.read_text(encoding="utf-8", errors="replace")
+    assert "_doc_tran_may_chu" in nguon
+    assert "tran_song_song" in nguon, "nut khong thuc su hoi /v1/me"
+
+
+def test_doc_tran_chay_o_LUONG_NEN():
+    """Một lời gọi mạng trong luồng Tk là cửa sổ đứng hình."""
+    nguon = VE3_GUI.read_text(encoding="utf-8", errors="replace")
+    moc = nguon.find("def _doc_tran_may_chu")
+    assert moc > 0
+    than = nguon[moc:moc + 3000]
+    assert "threading.Thread" in than, "hoi /v1/me thang trong luong giao dien -> treo cua so"
+
+
+# ── Hai bảng TRẠM phải đổi theo chế độ ───────────────────────────────────────
+#
+# Bộ chỉ số cũ ("ĐÃ LOGIN", "CÁCH LY 429", "ĐANG CHỮA", "SUBMIT/ACC"...) đo sức
+# khoẻ kho Chrome/Gmail. Đi API thì không account nào login, không Chrome nào
+# chạy, không ai bị 429 per-account — cả 16 ô đứng `-` và người vận hành nhìn
+# vào một bảng chết, đúng ảnh chụp 11/08/2026.
+
+
+def test_che_do_toan_api_o_CAP_MODULE_khong_phai_phuong_thuc():
+    """Để ở cấp module thì không lớp nào gọi hụt được.
+
+    Bản trước phép kiểm nằm hẳn trong `VE3App`, và `SettingsPage` gọi
+    `self._chi_dung_shopapi(...)` — lớp khác, không có phương thức đó. Lời gọi
+    ném `AttributeError`, `try/except` nuốt gọn, giao diện lặng lẽ coi như
+    "không đi API". Sai mà không có triệu chứng.
+    """
+    import sys
+    VE3 = Path(__file__).resolve().parents[1] / "tools" / "ve3"
+    if str(VE3) not in sys.path:
+        sys.path.insert(0, str(VE3))
+    import ve3_gui
+    assert callable(getattr(ve3_gui, "che_do_toan_api", None)), \
+        "che_do_toan_api phai o cap module"
+    assert ve3_gui.che_do_toan_api({"veo3top_image_mode": "pool",
+                                    "generation_backend": "shopapi"}) is False
+
+
+def test_VE3App_dung_CHUNG_mot_phep_kiem_che_do():
+    """Hai bản cài đặt là hai câu trả lời khác nhau cho cùng một câu hỏi."""
+    nguon = VE3_GUI.read_text(encoding="utf-8", errors="replace")
+    moc = nguon.find("def _chi_dung_shopapi")
+    than = nguon[moc:moc + 2500]
+    assert "che_do_toan_api(cfg)" in than, "VE3App van co ban cai dat rieng"
+
+
+def test_hai_bang_tram_co_bo_nhan_RIENG_cho_API():
+    import sys
+    VE3 = Path(__file__).resolve().parents[1] / "tools" / "ve3"
+    if str(VE3) not in sys.path:
+        sys.path.insert(0, str(VE3))
+    import ve3_gui
+    api = ve3_gui.HomePage.NHAN_TRAM_API
+    pool = ve3_gui.HomePage.NHAN_TRAM_POOL
+    assert set(api) == set(pool), "hai bo nhan phai phu dung 16 o"
+    # Nhãn của đường Chrome KHÔNG được sót lại trong bộ API.
+    for chet in ("ĐÃ LOGIN", "CÁCH LY 429", "ĐANG CHỮA", "SUBMIT/ACC"):
+        assert chet not in api.values(), "{0} khong co nghia o che do API".format(chet)
+    # HÀNG 1 — chuỗi cung, đọc trái sang phải là ra thủ phạm.
+    for can in ("MÃ Ở PHA NÀY", "XIN / TRẦN", "JOB ĐANG CHẠY", "JOB XẾP HÀNG"):
+        assert can in api.values(), "thieu o {0}".format(can)
+    # HÀNG 2 — kết quả: đang ra bao nhiêu, hỏng bao nhiêu, còn bao nhiêu, bao giờ xong.
+    for can in ("HỎNG (100 JOB)", "CÒN LẠI", "XONG SAU"):
+        assert can in api.values(), "thieu o {0}".format(can)
+
+
+def test_o_XIN_tinh_theo_MA_DANG_O_PHA_khong_theo_cau_hinh():
+    """`xin` = (mã đang ở pha này) × trần mỗi mã, KHÔNG phải (số mã cấu hình) × trần.
+
+    Ảnh chụp 12/08/2026: bảng khai `TOOL ĐANG XIN 320` trong khi chỉ **1 mã** ở
+    pha ảnh — xin thật là 40. Con số phóng đại 8 lần đó còn kéo dòng chẩn đoán
+    sai theo: "xin 320 mà 0 job chạy" nghe như tool gãy, sự thật là chưa mã nào
+    tới pha này.
+    """
+    nguon = VE3_GUI.read_text(encoding="utf-8", errors="replace")
+    moc = nguon.find("def _so_lieu_api_len_tram")
+    than = nguon[moc:moc + 5000]
+    assert "xin = (ma or 0) * tran_ma[loai]" in than, \
+        "van tinh 'xin' theo so ma CAU HINH thay vi so ma DANG O PHA NAY"
+
+
+def test_co_o_TI_LE_HONG():
+    """Hỏng nhiều là thứ dễ bỏ qua nhất: bảng vẫn 'đang chạy', job vẫn nhúc nhích.
+
+    Ngày 12/08/2026 video hỏng 54% suốt buổi mà không ô nào nói ra.
+    """
+    nguon = VE3_GUI.read_text(encoding="utf-8", errors="replace")
+    moc = nguon.find("def _so_lieu_api_len_tram")
+    than = nguon[moc:moc + 5000]
+    assert "app_client_jobs_list" in than, "khong doc danh sach job -> khong biet ti le hong"
+
+
+def test_KHONG_bay_so_noi_bo_cua_may_chu_len_bang_cua_minh():
+    """VE3 là KHÁCH. Kho tài khoản và đội máy xử lý là của MÁY CHỦ.
+
+    Bản chỉ số API đầu tiên bày ra `TÀI KHOẢN 94/96`, `MÁY XỬ LÝ 1`, `SỨC CHỨA
+    1088` — VE3 không sở hữu, không điều khiển, và biết cũng không làm được gì.
+    Bảng đầy số mà vẫn không trả lời được câu duy nhất cần trả lời: *ta đang làm
+    được bao nhiêu, và cái gì đang chặn ta?*
+
+    Chỉ hai loại được lên bảng: trạng thái CỦA TA, và ranh giới hợp đồng (trần
+    máy chủ cấp cho ta — thứ ta phải tôn trọng).
+    """
+    import sys
+    VE3 = Path(__file__).resolve().parents[1] / "tools" / "ve3"
+    if str(VE3) not in sys.path:
+        sys.path.insert(0, str(VE3))
+    import ve3_gui
+    for cua_nguoi_ta in ("TÀI KHOẢN", "MÁY XỬ LÝ", "SỨC CHỨA"):
+        assert cua_nguoi_ta not in ve3_gui.HomePage.NHAN_TRAM_API.values(), (
+            "{0} la so NOI BO cua may chu, khong phai thu VE3 quan ly duoc"
+            .format(cua_nguoi_ta))
+
+
+def test_ma_dang_chay_dem_tu_TIEN_TRINH_CON_khong_dem_file_lock():
+    """`_boot()` xoá sạch `.queue_*.lock` mỗi lần một bản GUI khởi động.
+
+    Đếm bằng lock thì chỉ cần mở thêm một cửa sổ VE3 thứ hai là bảng của bản
+    đang chạy tụt hết về 0 — đã thấy đúng chuyện đó khi chụp màn hình.
+    """
+    nguon = VE3_GUI.read_text(encoding="utf-8", errors="replace")
+    moc = nguon.find("def _con_lai_va_ma_theo_pha")
+    assert moc > 0
+    than = nguon[moc:moc + 3500]
+    assert "queue_ve3_procs" in than, "van dem 'ma dang chay' bang file lock"
+
+
+def test_san_luong_gio_dem_FILE_TREN_DIA():
+    """Sản lượng phải đếm ở SẢN PHẨM CUỐI, không đọc lời khai của máy chủ.
+
+    "Job succeeded" mà file chưa về đĩa thì chưa có gì để dùng — 738 job ngày
+    11/08/2026 là đúng cảnh đó.
+    """
+    nguon = VE3_GUI.read_text(encoding="utf-8", errors="replace")
+    moc = nguon.find("def _so_lieu_api_len_tram")
+    than = nguon[moc:moc + 4000]
+    assert "_count_production_today" in than, "khong do san luong that tu file"
+    assert "3600" in than, "khong do theo cua so mot gio -> khong ra toc do"
+
+
+def test_bang_tram_API_doc_v1_me_chu_khong_doc_health_pool():
+    nguon = VE3_GUI.read_text(encoding="utf-8", errors="replace")
+    moc = nguon.find("def _so_lieu_api_len_tram")
+    assert moc > 0, "khong co ham dung so lieu API cho hai bang tram"
+    than = nguon[moc:moc + 4000]
+    assert "doc_v1_me" in than
+    assert "8789" not in than and "8788" not in than, "van con doc /health cua pool"
+
+
+def test_mau_o_van_de_o_CAP_MODULE():
+    """`_so_lieu_api_len_tram` nằm ngoài `_work_body` nên không thấy biến cục bộ."""
+    import sys
+    VE3 = Path(__file__).resolve().parents[1] / "tools" / "ve3"
+    if str(VE3) not in sys.path:
+        sys.path.insert(0, str(VE3))
+    import ve3_gui
+    for ten in ("GREEN", "ORANGE", "RED", "GRAY"):
+        assert hasattr(ve3_gui, ten), "{0} phai o cap module".format(ten)
+
+
+def test_khoi_Chrome_duoc_GAP_khi_di_API_va_MO_LAI_duoc():
+    """Mười dòng server chiếm nửa trang Cài đặt mà API không đọc dòng nào.
+
+    Gấp chứ không xoá, và có nút mở lại: người dùng còn quay về đường Chrome.
+    """
+    nguon = VE3_GUI.read_text(encoding="utf-8", errors="replace")
+    assert "_gap_khoi_chrome" in nguon
+    assert "_mo_lai_khoi_chrome" in nguon
+    assert "_ep_hien_chrome" in nguon, "bam Hien roi ma van bi gap lai sau lung nguoi dung"
+
+
+def test_doc_v1_me_co_trong_shopapi_common():
+    import sys
+    ENGINE = Path(__file__).resolve().parents[1] / "veo3top_engine"
+    if str(ENGINE) not in sys.path:
+        sys.path.insert(0, str(ENGINE))
+    import shopapi_common as sc
+    assert callable(getattr(sc, "doc_v1_me", None))
+
+
+def test_con_lai_anh_dem_o_img_backup_khong_dem_hut():
+    """Sau finalize, ảnh đã thành video bị XOÁ khỏi `img/`.
+
+    Đếm `img/` là đếm hụt và ô "CÒN LẠI" phình lên. Đo 11/08/2026: đếm `img/`
+    ra 4.556 ảnh còn thiếu, sự thật là 1.889 — sai 2,4 lần, và sai theo hướng
+    làm người vận hành tưởng còn cả núi việc chưa làm.
+    """
+    nguon = VE3_GUI.read_text(encoding="utf-8", errors="replace")
+    moc = nguon.find("def _con_lai_va_ma_theo_pha")
+    assert moc > 0
+    than = nguon[moc:moc + 3500]
+    assert "img_backup" in than, "dem con lai o img/ -> phinh len sau khi finalize"
+
+
+def test_dong_cua_so_phai_GHI_LOG():
+    """`_on_close` giết sạch subprocess rồi `destroy()` — im lặng thì y hệt crash.
+
+    Worker thoát `exit code=1` đồng loạt, cửa sổ biến mất, không traceback,
+    không sự kiện lỗi Windows. Ngày 11/08/2026 mất hai lượt chẩn đoán vì đúng
+    chỗ này: cả hai lần "tool chết" đều là CỬA SỔ BỊ ĐÓNG, mà không có cách nào
+    phân biệt với hỏng hóc thật.
+    """
+    nguon = VE3_GUI.read_text(encoding="utf-8", errors="replace")
+    moc = nguon.find("def _on_close")
+    assert moc > 0
+    than = nguon[moc:moc + 1800]
+    assert "self._log(" in than, "_on_close van cam nhu hen"
+    assert "WM_DELETE_WINDOW" in than, "log khong noi ro day la lenh dong cua so"
+
+
+# ── Mã chạy trắng phải bị ĐỖ LẠI, không được quay vòng vô tận ────────────────
+
+
+def test_ma_chay_trang_nhieu_luot_thi_bi_do_lai():
+    """Hàng chờ chỉ nhìn `success`, nên một đơn vị hỏng vĩnh viễn = vòng lặp bất tận.
+
+    Đo log 12/08/2026: **126 lượt bật worker cho 21 mã**. TL3-0401 một mình 24
+    lượt, mỗi lượt 4 giây và ra 0 sản phẩm — nó làm xong 61/62 đơn vị, đơn vị thứ
+    62 hỏng vĩnh viễn, `success=False`, hàng chờ bật lại, lặp lại.
+
+    Cái giá không nằm ở 4 giây đó mà ở CHỖ PAIR: mỗi lượt bật chiếm một trong 8
+    chỗ. Cùng log có 1.426 dòng `skip no_free_pair`, và sản lượng 10 phút cuối là
+    0 ảnh, 0 video.
+    """
+    import sys
+    VE3 = Path(__file__).resolve().parents[1] / "tools" / "ve3"
+    if str(VE3) not in sys.path:
+        sys.path.insert(0, str(VE3))
+    import ve3_gui
+
+    class _App:
+        # Kéo NGUYÊN mọi hằng + phương thức liên quan từ lớp thật. Chép tay từng
+        # cái là bài kiểm đỏ mỗi lần sản phẩm thêm một hằng mới — đã xảy ra với
+        # `HAN_DO_LAI_GIAY`.
+        LUOT_TRANG_TOI_DA = ve3_gui.VE3App.LUOT_TRANG_TOI_DA
+        HAN_DO_LAI_GIAY = getattr(ve3_gui.VE3App, "HAN_DO_LAI_GIAY", 3600)
+        _ghi_so_luot_trang = ve3_gui.VE3App._ghi_so_luot_trang
+        _ma_bi_do_lai = ve3_gui.VE3App._ma_bi_do_lai
+        def _log(self, *a, **k):
+            pass
+
+    app = _App()
+    trang = {"completed": 0, "failed": 1, "total": 1}
+    for i in range(_App.LUOT_TRANG_TOI_DA - 1):
+        app._ghi_so_luot_trang("TL3-0401", trang)
+        assert not app._ma_bi_do_lai("TL3-0401"), "do lai qua som o luot {0}".format(i + 1)
+    app._ghi_so_luot_trang("TL3-0401", trang)
+    assert app._ma_bi_do_lai("TL3-0401"), "chay trang mai ma khong bao gio do lai"
+
+
+def test_ra_duoc_san_pham_thi_XOA_het_luot_trang():
+    """Hỏng thoáng qua (nhà máy vừa restart) không được cộng dồn thành đỗ lại."""
+    import sys
+    VE3 = Path(__file__).resolve().parents[1] / "tools" / "ve3"
+    if str(VE3) not in sys.path:
+        sys.path.insert(0, str(VE3))
+    import ve3_gui
+
+    class _App:
+        # Kéo NGUYÊN mọi hằng + phương thức liên quan từ lớp thật. Chép tay từng
+        # cái là bài kiểm đỏ mỗi lần sản phẩm thêm một hằng mới — đã xảy ra với
+        # `HAN_DO_LAI_GIAY`.
+        LUOT_TRANG_TOI_DA = ve3_gui.VE3App.LUOT_TRANG_TOI_DA
+        HAN_DO_LAI_GIAY = getattr(ve3_gui.VE3App, "HAN_DO_LAI_GIAY", 3600)
+        _ghi_so_luot_trang = ve3_gui.VE3App._ghi_so_luot_trang
+        _ma_bi_do_lai = ve3_gui.VE3App._ma_bi_do_lai
+        def _log(self, *a, **k):
+            pass
+
+    app = _App()
+    app._ghi_so_luot_trang("MA", {"completed": 0, "failed": 1})
+    app._ghi_so_luot_trang("MA", {"completed": 0, "failed": 1})
+    app._ghi_so_luot_trang("MA", {"completed": 5, "failed": 1})   # có ra hàng
+    for _ in range(_App.LUOT_TRANG_TOI_DA - 1):
+        app._ghi_so_luot_trang("MA", {"completed": 0, "failed": 1})
+    assert not app._ma_bi_do_lai("MA"), "khong xoa bo dem sau khi ra duoc san pham"
+
+
+def test_bam_Reset_thi_go_co_do_lai():
+    """Reset = 'thử lại mã này'. Không gỡ cờ thì reset xong vẫn bị bỏ qua."""
+    nguon = VE3_GUI.read_text(encoding="utf-8", errors="replace")
+    moc = nguon.find("Xac nhan Reset")
+    than = nguon[moc:moc + 1200]
+    assert "_luot_trang" in than, "Reset khong go co DO LAI -> nguoi dung bam ma khong hieu vi sao van bi bo qua"
+
+
+def test_hang_cho_thuc_su_BO_QUA_ma_da_do_lai():
+    nguon = VE3_GUI.read_text(encoding="utf-8", errors="replace")
+    assert "_ma_bi_do_lai(pd.name)" in nguon, "co dem luot trang ma vong hang cho khong doc"
+
+
+# ── Đếm sản lượng: hai lỗi đếm ĐÔI ───────────────────────────────────────────
+
+
+def test_ma_goc_cat_dung_duoi_kho_luu():
+    """Kho lưu đặt tên `TL3-0413_20260813_165010` — HAI đuôi, không phải một.
+
+    `rsplit("_", 1)` chỉ rụng `_165010`, để lại `TL3-0413_20260813` — khác hẳn
+    `TL3-0413` bên PROJECTS, nên phép chống-đếm-trùng không khớp. Đo 13/08/2026:
+    24 mã nằm ở cả hai nơi và đều bị đếm hai lần.
+    """
+    import sys
+    VE3 = Path(__file__).resolve().parents[1] / "tools" / "ve3"
+    if str(VE3) not in sys.path:
+        sys.path.insert(0, str(VE3))
+    from ve3_gui import _ma_goc
+    assert _ma_goc("TL3-0413_20260813_165010") == "TL3-0413"
+    assert _ma_goc("TL3-0413") == "TL3-0413"
+    # Đuôi KHÔNG phải ngày-giờ thì giữ nguyên, đừng cắt bừa tên của người ta.
+    assert _ma_goc("TL2-0428_ban_nhap") == "TL2-0428_ban_nhap"
+    assert _ma_goc("TL1-0745_2026") == "TL1-0745_2026"
+
+
+def test_dem_video_KHU_TRUNG_theo_ten_file():
+    """Xong việc thì mp4 được COPY sang `img/`, nên một sản phẩm nằm hai chỗ.
+
+    Đo 13/08/2026 trên TL3-0413: `img/1.mp4` và `vid/1.mp4` cùng 3.089.785 byte,
+    hash khớp — 49/49 file trùng tên. Đếm cả hai là nhân đôi sản lượng video, và
+    con số phóng đại đó lên thẳng ô "VIDEO HÔM NAY" của giao diện.
+    """
+    nguon = VE3_GUI.read_text(encoding="utf-8", errors="replace")
+    moc = nguon.find("def _count_production_today")
+    assert moc > 0
+    than = nguon[moc:moc + 4000]
+    assert "da_dem" in than, "khong khu trung mp4 -> video bi dem doi"
+    # Chỉ soi ĐÚNG dòng duyệt hai thư mục mp4 — `pd / "img"` còn xuất hiện ở
+    # phần đếm ảnh phía trên, tìm cả hàm là bắt nhầm.
+    dong = [d for d in than.splitlines() if 'for sub in (pd /' in d]
+    assert dong, "khong tim thay vong duyet thu muc mp4"
+    assert dong[-1].find('"vid"') < dong[-1].find('"img"'), \
+        "phai duyet vid/ TRUOC de ban goc thang, img/ chi la ban copy: " + dong[-1].strip()
+
+
+def test_dem_san_luong_dedup_ca_MA_lan_FILE(tmp_path, monkeypatch):
+    """Chạy thật trên cây thư mục giả: một mã ở hai nơi, mp4 ở hai thư mục."""
+    import sys, time
+    VE3 = Path(__file__).resolve().parents[1] / "tools" / "ve3"
+    if str(VE3) not in sys.path:
+        sys.path.insert(0, str(VE3))
+    import ve3_gui
+
+    du = tmp_path / "PROJECTS"
+    kho = tmp_path / "old"
+    for goc, ten in ((du, "TL9-0001"), (kho, "TL9-0001_20260813_165010")):
+        d = goc / ten
+        (d / "img_backup").mkdir(parents=True)
+        (d / "vid").mkdir(parents=True)
+        (d / "img").mkdir(parents=True)
+        for i in range(3):
+            (d / "img_backup" / f"{i}.png").write_bytes(b"x")
+            (d / "vid" / f"{i}.mp4").write_bytes(b"y")
+            (d / "img" / f"{i}.mp4").write_bytes(b"y")   # bản copy sau finalize
+
+    monkeypatch.setattr(ve3_gui, "PROJECTS_DIR", du)
+    monkeypatch.setattr(ve3_gui, "ARCHIVE_DIR", kho)
+
+    class _App:
+        _count_production_today = ve3_gui.VE3App._count_production_today
+
+    anh, vid = _App()._count_production_today(tu_giay=time.time() - 3600)
+    assert (anh, vid) == (3, 3), (
+        "dem ra {0} anh / {1} video — dang le 3/3. Mot ma o hai noi + mp4 o hai "
+        "thu muc = de dem gap 4 lan.".format(anh, vid))
+
+
+# ── Máy KHÁC cập nhật qua GitHub phải nhận đúng trần song song ───────────────
+
+
+def test_ba_num_API_co_MAC_DINH_trong_code():
+    """`settings.yaml` KHÔNG theo dõi trong git và nằm trong `PROTECTED_PATHS`.
+
+    Máy khác cập nhật sẽ không bao giờ nhận ba con số này qua file cấu hình —
+    chúng phải sống trong code. Thiếu mặc định thì worker rơi về TRẦN CỨNG của
+    loại job (ảnh 384), nhân 8 mã là **3.072 chỗ** — đúng con số đã giết nhà máy
+    ngày 12/08/2026 (khai 3.072 luồng rồi tiến trình biến mất, 9 lần/ngày).
+    """
+    md = _setdefault("_load_config")
+    assert md.get("max_concurrent") == 40, "thieu mac dinh tran ANH moi ma"
+    assert md.get("shopapi_video_concurrency") == 16, "thieu mac dinh tran VIDEO moi ma"
+    # `shopapi_ma_song_song` đặt bằng HẰNG SỐ chứ không phải số viết thẳng, nên
+    # `literal_eval` của `_setdefault` bỏ qua — soi nguồn thay vì soi giá trị.
+    nguon = VE3_GUI.read_text(encoding="utf-8", errors="replace")
+    moc = nguon.find("def _load_config")
+    assert 'setdefault("shopapi_ma_song_song"' in nguon[moc:moc + 6000], \
+        "thieu mac dinh so ma song song trong _load_config"
+
+
+def test_mac_dinh_KHONG_duoc_vuot_qua_muc_da_do():
+    """Tải đặt lên nhà máy = (mã song song) × (trần mỗi mã). Giữ trong tầm đo được.
+
+    Máy chủ đo được dựng 134 job ảnh đồng thời. Mặc định phải còn dư đầu cho
+    AIMD chứ không nhảy thẳng lên hàng nghìn.
+    """
+    import sys
+    VE3 = Path(__file__).resolve().parents[1] / "tools" / "ve3"
+    if str(VE3) not in sys.path:
+        sys.path.insert(0, str(VE3))
+    import ve3_gui
+    md = _setdefault("_load_config")
+    ma = md.get("shopapi_ma_song_song") or ve3_gui.SHOPAPI_MA_SONG_SONG_MAC_DINH
+    assert ma * md["max_concurrent"] <= 512, "tai anh vuot xa muc da do (134 dong thoi)"
+    assert ma * md["shopapi_video_concurrency"] <= 256, "tai video vuot xa muc da do"
+
+
+def test_file_mau_settings_co_ba_num():
+    """Người dựng máy mới đọc `settings.example.yaml` — nó phải nói ra ba số này."""
+    mau = (Path(__file__).resolve().parents[1] / "tools" / "ve3" / "config"
+           / "settings.example.yaml").read_text(encoding="utf-8", errors="replace")
+    for k in ("shopapi_ma_song_song", "max_concurrent", "shopapi_video_concurrency"):
+        assert k in mau, "file mau thieu {0}".format(k)
+    assert "generation_backend: shopapi" in mau, "file mau van tro ve duong Chrome cu"

@@ -80,12 +80,38 @@ class GhiNhan:
 
 
 class FakeUploads:
+    """Kho file giả — **URL giữ đúng hình dạng của kho thật**.
+
+    Đo trên máy chủ thật 11/08/2026, URL trả về có dạng::
+
+        https://cdn.shopapi.vn/shopapi/uploads/usr_<khach>/2026/08/11/
+        upl_rh0kp0npms36fw99a7spkldj.png?X-Amz-Algorithm=...&X-Amz-Signature=...
+
+    Mã `upl_...` nằm sau dấu `/` cuối, và phía sau là cả một chuỗi tham số chữ
+    ký. `shopapi_video_client._ma_upload` phải moi đúng mã đó ra để còn dọn file
+    (xem `_don_upload`). Nếu bản giả trả một URL "sạch" thì bài kiểm sẽ xanh
+    trong khi thực tế moi trượt — nên nó cố ý bẩn y như thật.
+    """
+
     def __init__(self, so: GhiNhan):
         self._so = so
+        self.da_xoa = []
+        self.loi_xoa = None
 
     def upload_file(self, file, filename=None, content_type=None):
         self._so.uploads.append({"file": file, "filename": filename})
-        return "https://cdn.example.invalid/upload/{0}".format(len(self._so.uploads))
+        n = len(self._so.uploads)
+        return (
+            "https://cdn.example.invalid/shopapi/uploads/usr_gia/2026/08/11/"
+            "upl_giabo{0}kytu.png?X-Amz-Algorithm=AWS4-HMAC-SHA256"
+            "&X-Amz-Signature=deadbeef&x-id=GetObject".format(n)
+        )
+
+    def delete(self, upload_id):
+        if self.loi_xoa is not None:
+            raise self.loi_xoa
+        self.da_xoa.append(upload_id)
+        return {"id": upload_id, "deleted": True}
 
 
 class FakeImages:

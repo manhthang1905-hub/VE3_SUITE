@@ -34,7 +34,21 @@ flow_accounts: []
 
 # Generation
 retry_count: 3
-max_concurrent: 1
+
+# ── CHẾ ĐỘ API shopapi: BA SỐ QUYẾT ĐỊNH THÔNG LƯỢNG ─────────────────────────
+#
+# Chúng là MỘT BỘ. Tải đặt lên nhà máy = (mã song song) × (trần mỗi loại):
+#     8 × 40 = 320 chỗ ảnh        8 × 16 = 128 chỗ video
+#
+# Số đo thật 13/08/2026: máy chủ dựng 134 job ảnh đồng thời ở 222 ảnh/phút;
+# giờ đỉnh của tool ra 396 ảnh + 483 video = 879 sản phẩm. Bộ số dưới đây còn dư
+# đầu để AIMD dò lên/xuống mà không chạm trần nhà máy.
+#
+# ⚠ ĐỪNG vặn lên vài trăm. Ngày 12/08/2026 nhà máy khai 3.072 luồng rồi tiến
+# trình BIẾN MẤT — 9 lần trong một ngày. Nhiều chỗ hơn không thành nhiều ảnh hơn.
+shopapi_ma_song_song: 8          # số MÃ chạy cùng lúc
+max_concurrent: 40               # trần ẢNH mỗi mã
+shopapi_video_concurrency: 16    # trần VIDEO mỗi mã
 music_workspace_mode_enabled: true
 whisper_model: large-v3
 whisper_language: auto
@@ -64,7 +78,7 @@ claude_pool_model_chain:
 excel_ai_timeout_seconds: 180
 excel_ai_attempts_per_key: 3
 topic: story
-generation_backend: server
+generation_backend: shopapi
 nanopic_base_url: https://flow-api.nanoai.pics/api/v2
 nanopic_token: ''
 nanopic_access_token: ''
