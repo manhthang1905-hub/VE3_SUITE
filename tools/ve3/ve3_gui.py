@@ -167,6 +167,30 @@ BACKEND_ANH = {
 BACKEND_VIDEO_CU = frozenset(v for v in BACKEND_VIDEO.values() if v != "shopapi")
 BACKEND_ANH_CU = frozenset(v for v in BACKEND_ANH.values() if v != "shopapi")
 
+#: Phiên bản của phép chuyển máy cũ sang API. TĂNG SỐ NÀY mỗi khi sửa
+#: `_chuyen_may_cu_sang_api` theo hướng máy đã chuyển hụt cần được chuyển lại.
+#:
+#:   1 — bản đầu (14/08/2026). Chuyển hụt: một danh sách backend gõ tay, toàn
+#:       giá trị của VIDEO, nên `veo3top_image_mode: pool` không khớp gì và
+#:       đứng nguyên. Máy dừng ở `ảnh=pool · video=shopapi`.
+#:   2 — suy danh sách ra từ `BACKEND_VIDEO`/`BACKEND_ANH`, hai bộ từ vựng
+#:       riêng. Chuyển lại những máy đã dính bản 1.
+CHUYEN_API_PHIEN = 2
+
+
+def _phien_da_chuyen(cfg):
+    """Cấu hình này đã qua phép chuyển ở phiên bản nào? Chưa qua → 0.
+
+    Đọc được cả cờ `True` của bản đầu — nó tương đương phiên bản 1.
+    """
+    v = cfg.get("da_chuyen_sang_shopapi")
+    if v is True:
+        return 1
+    try:
+        return int(v)
+    except (TypeError, ValueError):
+        return 0
+
 
 def cau_hinh_toan_api(cfg):
     """Cấu hình CHỌN đi API cho cả ảnh lẫn video? (KHÔNG hỏi tới khoá)
@@ -4240,8 +4264,18 @@ Write-Output $kill.Count
 
         ═══ BỐN CÁI PHANH ═══
 
-        1. **Chạy đúng một lần.** Ghi cờ `da_chuyen_sang_shopapi` vào cấu hình.
-           Ai cố ý quay về pool sau đó sẽ KHÔNG bị ép lại lần hai.
+        1. **Chạy đúng một lần cho mỗi PHIÊN BẢN chuyển.** Cấu hình ghi
+           `da_chuyen_sang_shopapi = <số phiên bản>`, so với
+           :data:`CHUYEN_API_PHIEN`. Ai cố ý quay về pool sau đó sẽ KHÔNG bị ép
+           lại — nhưng một bản vá SỬA CHÍNH PHẦN CHUYỂN thì vẫn chạy lại được.
+
+           Bản đầu ghi cờ `True`, và cái cờ đó tự khoá lấy bản vá của chính nó:
+           528 chuyển hụt (được video, sót ảnh vì lẫn hai bộ từ vựng) rồi đóng
+           cờ; 529 sửa đúng logic nhưng vừa vào hàm đã gặp cờ và quay ra. Máy
+           đó nằm chết ở `ảnh=pool · video=shopapi` — nửa vời, và nửa đó đủ để
+           `cau_hinh_toan_api` trả False nên vẫn chạy Chrome cho cả hai khâu.
+           Cờ một-bit không phân biệt nổi "đã chuyển bằng bản hỏng" với "đã
+           chuyển bằng bản đúng"; con số thì phân biệt được.
         2. **Chỉ chuyển từ backend cũ đã biết** — :data:`BACKEND_VIDEO_CU` cho
            video, :data:`BACKEND_ANH_CU` cho ảnh. HAI danh sách, vì hai bộ từ
            vựng khác nhau: video là `veo3top_b_pool`, ảnh là `pool`. Bản đầu
@@ -4254,14 +4288,14 @@ Write-Output $kill.Count
            cách quay về.
         """
         cfg = self.config_data
-        if cfg.get("da_chuyen_sang_shopapi"):
+        if _phien_da_chuyen(cfg) >= CHUYEN_API_PHIEN:
             return
         vid = (cfg.get("generation_backend") or cfg.get("generation_mode") or "").strip().lower()
         anh = (cfg.get("veo3top_image_mode") or "").strip().lower()
         doi_vid = vid in BACKEND_VIDEO_CU
         doi_anh = anh in BACKEND_ANH_CU
         if not (doi_vid or doi_anh):
-            cfg["da_chuyen_sang_shopapi"] = True   # đã ở API sẵn — đóng cửa, khỏi hỏi lại
+            cfg["da_chuyen_sang_shopapi"] = CHUYEN_API_PHIEN   # đã ở API sẵn — đóng cửa
             return
 
         luu = ""
@@ -4281,7 +4315,7 @@ Write-Output $kill.Count
             cfg["generation_mode"] = "shopapi"
         if doi_anh:
             cfg["veo3top_image_mode"] = "shopapi"
-        cfg["da_chuyen_sang_shopapi"] = True
+        cfg["da_chuyen_sang_shopapi"] = CHUYEN_API_PHIEN
         try:
             self._save_config()
         except Exception as e:

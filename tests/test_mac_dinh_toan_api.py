@@ -1030,7 +1030,7 @@ def test_may_da_o_api_san_thi_khong_dong_gi(tmp_path, monkeypatch):
     app, _ = _app_chuyen(cfg, tmp_path, monkeypatch)
     app._chuyen_may_cu_sang_api()
     assert app.da_luu == 0
-    assert cfg["da_chuyen_sang_shopapi"] is True
+    assert cfg["da_chuyen_sang_shopapi"] == _ve3_gui().CHUYEN_API_PHIEN
     assert not list((tmp_path / "config").glob("settings.yaml.truoc-api-*"))
 
 
@@ -1144,3 +1144,62 @@ def test_Settings_dung_CHUNG_bang_chon_o_cap_module():
     nguon = VE3_GUI.read_text(encoding="utf-8", errors="replace")
     assert "self.generation_backend_options = dict(BACKEND_VIDEO)" in nguon
     assert "self.image_backend_options = dict(BACKEND_ANH)" in nguon
+
+
+# ── Cờ "đã chuyển" không được tự khoá lấy bản vá của chính nó ────────────────
+
+
+def test_may_da_chuyen_HUT_boi_ban_cu_thi_duoc_chuyen_LAI(tmp_path, monkeypatch):
+    """Đúng trạng thái máy thứ hai mắc kẹt ở bản 529, đo lúc 02:4x ngày 15/08/2026.
+
+    Bản 528 chuyển hụt (được video, sót ảnh vì lẫn hai bộ từ vựng) rồi đóng cờ
+    `da_chuyen_sang_shopapi: True`. Bản 529 sửa đúng logic nhưng vừa vào hàm đã
+    gặp cờ và quay ra. Máy nằm chết ở `ảnh=pool · video=shopapi` — nửa vời, mà
+    nửa đó đủ để `cau_hinh_toan_api` trả False nên vẫn chạy Chrome cho CẢ HAI.
+
+    Cờ một-bit không phân biệt nổi "đã chuyển bằng bản hỏng" với "đã chuyển
+    bằng bản đúng". Con số thì phân biệt được.
+    """
+    cfg = {"generation_backend": "shopapi", "generation_mode": "shopapi",
+           "veo3top_image_mode": "pool", "da_chuyen_sang_shopapi": True}
+    app, ve3_gui = _app_chuyen(cfg, tmp_path, monkeypatch)
+    app._chuyen_may_cu_sang_api()
+    assert cfg["veo3top_image_mode"] == "shopapi", "co cua ban hong dang khoa chinh ban va"
+    assert ve3_gui.cau_hinh_toan_api(cfg)
+    assert cfg["da_chuyen_sang_shopapi"] == ve3_gui.CHUYEN_API_PHIEN
+    assert app.da_luu == 1
+
+
+def test_da_chuyen_bang_ban_HIEN_TAI_thi_khong_dong_lai(tmp_path, monkeypatch):
+    """Người dùng cố ý quay về pool sau bản đúng thì phải được tôn trọng."""
+    g = _ve3_gui()
+    cfg = {"generation_backend": "veo3top_b_pool", "veo3top_image_mode": "pool",
+           "da_chuyen_sang_shopapi": g.CHUYEN_API_PHIEN}
+    app, _ = _app_chuyen(cfg, tmp_path, monkeypatch)
+    app._chuyen_may_cu_sang_api()
+    assert cfg["generation_backend"] == "veo3top_b_pool"
+    assert app.da_luu == 0
+
+
+@pytest.mark.parametrize("co,mong_doi", [
+    (None, 0), (True, 1), (False, 0), (1, 1), (2, 2), ("2", 2), ("rac", 0), ([], 0),
+])
+def test_doc_co_chuyen_chiu_duoc_moi_kieu_gia_tri(co, mong_doi):
+    """Cờ đi qua yaml nên có thể về dưới đủ kiểu. Đọc hụt = chuyển nhầm hoặc kẹt."""
+    g = _ve3_gui()
+    assert g._phien_da_chuyen({} if co is None else {"da_chuyen_sang_shopapi": co}) == mong_doi
+
+
+def test_moi_lan_sua_phep_chuyen_phai_TANG_so_phien():
+    """Sửa `_chuyen_may_cu_sang_api` mà quên tăng số = máy đã chuyển hụt kẹt vĩnh viễn."""
+    g = _ve3_gui()
+    assert g.CHUYEN_API_PHIEN >= 2, (
+        "ban 1 chuyen hut vi lan hai bo tu vung backend; may dinh ban do chi thoat ra "
+        "duoc khi CHUYEN_API_PHIEN > 1"
+    )
+    nguon = VE3_GUI.read_text(encoding="utf-8", errors="replace")
+    than = ast.get_source_segment(nguon, _ham("_chuyen_may_cu_sang_api")) or ""
+    assert "CHUYEN_API_PHIEN" in than and "_phien_da_chuyen" in than, \
+        "quay ve co mot-bit la lap lai dung cai bay cu"
+    assert "True" not in than.split("def ")[0] + than[than.index('cfg = self'):], \
+        "van con dong co bang True o dau do"
