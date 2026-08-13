@@ -122,6 +122,30 @@ def main():
 
     print()
     print("=" * 68)
+    print(" CAU HINH: MAY NAY DANG DI DUONG NAO")
+    print("=" * 68)
+    # `settings.yaml` bi chan BA LOP khoi moi lan cap nhat (PROTECTED_PATHS,
+    # GIT_PROTECTED_FILES, .gitignore) -> cap nhat code KHONG doi duoc che do.
+    cfg = {}
+    try:
+        import yaml
+        f = GOC / "tools" / "ve3" / "config" / "settings.yaml"
+        if f.exists():
+            cfg = yaml.safe_load(f.read_text(encoding="utf-8")) or {}
+    except Exception as e:
+        print("  (khong doc duoc settings.yaml: {0})".format(e))
+    m_anh = str(cfg.get("veo3top_image_mode") or "(chua dat)")
+    m_vid = str(cfg.get("generation_backend") or cfg.get("generation_mode") or "(chua dat)")
+    print("  che do ANH            : {0}".format(m_anh))
+    print("  che do VIDEO          : {0}".format(m_vid))
+    print("  da tu chuyen sang API : {0}".format(bool(cfg.get("da_chuyen_sang_shopapi"))))
+    sai_che_do = not (m_anh == "shopapi" and m_vid == "shopapi")
+    if sai_che_do:
+        print("  -> DANG CHAY POOL CHROME, KHONG dung API shopapi.")
+        print("     Mo tool len mot lan: ban moi TU CHUYEN sang API (chi mot lan, co chep luu).")
+
+    print()
+    print("=" * 68)
     print(" CODE SHOPAPI DA VE MAY CHUA (bang chung THAT, khong nhin so)")
     print("=" * 68)
     thieu = []
@@ -150,6 +174,12 @@ def main():
         else:
             print("     tai https://github.com/{0}/archive/refs/heads/main.zip".format(REPO))
             print("     giai nen de len, GIU LAI: PROJECTS/, tools/ve3/config/")
+    elif sai_che_do and not thieu:
+        print(" KET LUAN: code DA DU, nhung cau hinh van tro ve pool Chrome.")
+        print()
+        print(" `settings.yaml` KHONG BAO GIO di theo ban cap nhat (no giu gmail|mat khau|totp).")
+        print(" Chi can MO TOOL LEN: ban 528+ tu chuyen sang API shopapi mot lan roi ghi lai.")
+        print(" Hoac tu bat: Settings -> hai o backend -> chon 'API shopapi' CA HAI -> Save.")
     elif not thieu and sha_may and sha_git and not sha_git.startswith("LOI"):
         if sha_may == sha_git:
             print(" KET LUAN: DA CO BAN MOI NHAT. Neu giao dien chua doi -> DONG VA MO LAI tool.")

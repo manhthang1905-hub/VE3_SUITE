@@ -2452,7 +2452,7 @@ class SettingsPage(ctk.CTkScrollableFrame):
         ctk.CTkButton(key_box, text="Kiem khoa", width=90, height=28, corner_radius=4, fg_color=RN,
                       hover_color="#1565C0", text_color="#FFF", font=("",10),
                       command=self._shopapi_check_key).grid(row=0, column=3, padx=(0,4))
-        ctk.CTkButton(key_box, text="Quen khoa", width=90, height=28, corner_radius=4, fg_color=EN,
+        ctk.CTkButton(key_box, text="Xoa khoa", width=90, height=28, corner_radius=4, fg_color=EN,
                       hover_color=BD, text_color=T2, font=("",10),
                       command=self._shopapi_forget_key).grid(row=0, column=4)
         self.lbl_shopapi_key = ctk.CTkLabel(key_box, text="", font=("",10), text_color=T3, anchor="w", wraplength=560, justify="left")
@@ -2962,15 +2962,64 @@ class SettingsPage(ctk.CTkScrollableFrame):
         messagebox.showinfo("Da luu", "Da luu khoa vao:\n{0}\n\n(Nam NGOAI kho ma nguon)".format(path))
 
     def _shopapi_forget_key(self):
+        """Xoá hẳn khoá khỏi máy này — có hỏi lại, và KHÔNG nói dối khi xoá hụt.
+
+        Bản trước gọi `quen_khoa()` rồi im. `quen_khoa()` chỉ xoá **kho khoá
+        riêng của máy**; khoá đặt bằng biến môi trường `SHOPAPI_KEY` /
+        `SHOPAPI_API_KEY`, hoặc file trỏ bởi `SHOPAPI_KEY_FILE`, đứng TRƯỚC kho
+        khoá trong `doc_khoa()` nên vẫn còn nguyên. Người dùng bấm "xoá", màn
+        hình vẫn hiện y khoá cũ, không một lời giải thích — nhìn như nút hỏng.
+
+        Đây là thứ tệ hơn hỏng: người ta tưởng đã gỡ khoá khỏi máy mà thật ra
+        chưa. Nên giờ xoá xong phải HỎI LẠI `doc_khoa()`, còn khoá thì chỉ đích
+        danh chỗ nó nằm và cách gỡ.
+        """
         sc = self._shopapi_common()
         if sc is None:
             return
+        key_cu, nguon_cu = "", ""
         try:
-            sc.quen_khoa()
+            key_cu, nguon_cu = sc.doc_khoa()
         except Exception:
             pass
+        if not key_cu:
+            messagebox.showinfo("Khong co gi de xoa", "May nay chua co khoa API nao.")
+            self._shopapi_refresh_key_label()
+            return
+        if not messagebox.askyesno(
+                "Xoa khoa API?",
+                "Xoa khoa {0} khoi may nay?\n\nNguon: {1}\n\n"
+                "Sau khi xoa, tool KHONG gui duoc job nao qua api.shopapi.vn cho toi khi "
+                "dan khoa moi.\n\nKhoa tren tai khoan shopapi.vn KHONG bi anh huong — muon "
+                "vo hieu hoa han thi vao shopapi.vn/dashboard/api-keys de thu hoi.".format(
+                    sc.che_khoa(key_cu), nguon_cu)):
+            return
+        try:
+            sc.quen_khoa()
+        except Exception as e:
+            messagebox.showerror("Loi", "Khong xoa duoc kho khoa: {0}".format(e))
+            return
         self.ent_shopapi_key.delete(0, "end")
         self._shopapi_refresh_key_label()
+
+        con, nguon_con = "", ""
+        try:
+            con, nguon_con = sc.doc_khoa()
+        except Exception:
+            pass
+        if not con:
+            messagebox.showinfo("Da xoa", "Da xoa khoa khoi may nay.")
+            return
+        # Xoá hụt: khoá đến từ môi trường, GUI không với tới được.
+        messagebox.showwarning(
+            "Da xoa kho khoa, NHUNG VAN CON KHOA",
+            "Da xoa kho khoa rieng cua may, nhung tool VAN doc duoc mot khoa khac:\n\n"
+            "    {0}\n    nguon: {1}\n\n"
+            "Nguon nay nam NGOAI tam voi cua giao dien. Go bang tay:\n\n"
+            "  - Bien moi truong: mo 'Sua bien moi truong' cua Windows, xoa SHOPAPI_KEY "
+            "va SHOPAPI_API_KEY, roi MO LAI tool.\n"
+            "  - Hoac neu la SHOPAPI_KEY_FILE: xoa bien do (hoac xoa file no tro toi).".format(
+                sc.che_khoa(con), nguon_con))
 
     def _shopapi_check_key(self):
         """GET /v1/balance -> hien so du. Chay o luong rieng: dung goi mang tren luong GUI."""
@@ -4103,6 +4152,118 @@ Write-Output $kill.Count
         self.config_data.setdefault("image_token_recycle", 10)   # đẻ N token/chrome rồi làm mới
         self.config_data.setdefault("video_token_chromes", 3)    # chrome đẻ token video (async cần ít)
         self.config_data.setdefault("video_workers_per_account", 7)  # luồng submit/account ultra
+        self._chuyen_may_cu_sang_api()
+        self._bao_duong_di()
+
+    def _bao_duong_di(self):
+        """Khai to ngay lúc mở: ảnh đi đường nào, video đi đường nào, có khoá chưa.
+
+        ⚠ ĐỪNG BỎ DÒNG NÀY. Ngày 14/08/2026 một máy thứ hai cập nhật lên đúng
+        bản mới, `_sdk/` đã về, code shopapi đã có mặt — mà vẫn chạy pool Chrome
+        suốt đêm. Không ai biết, vì `settings.yaml` nằm trong
+        `updater.PROTECTED_PATHS` **và** bị gitignore (nó giữ gmail|mật khẩu|totp
+        của cả kho, nên bảo vệ là đúng) — cập nhật code KHÔNG BAO GIỜ đổi được
+        chế độ. Máy đó vẫn để `generation_backend: veo3top_b_pool` từ trước.
+
+        Cái ác không phải là nó chạy pool — cấu hình bảo vậy thì chạy vậy là
+        đúng. Cái ác là **không có một dòng nào nói nó đang chạy pool**. Phải
+        đọc ngược log đến chữ `PHASE 4: Tao Video tu anh` mới suy ra được. Một
+        dòng ở đây trả lời xong câu đó trong một giây.
+        """
+        cfg = self.config_data
+        anh = (cfg.get("veo3top_image_mode") or "").strip().lower() or "(chua dat)"
+        vid = (cfg.get("generation_backend") or cfg.get("generation_mode") or "").strip().lower() or "(chua dat)"
+        if cau_hinh_toan_api(cfg):
+            if _co_khoa_shopapi():
+                dong = "[ĐƯỜNG ĐI] ảnh=API shopapi · video=API shopapi · khoá=CÓ → chạy qua api.shopapi.vn"
+            else:
+                dong = ("[ĐƯỜNG ĐI] ảnh=API shopapi · video=API shopapi · khoá=THIẾU → "
+                        "KHÔNG GỬI ĐƯỢC JOB NÀO. Settings → 'Khoá API shopapi' → dán khoá → Lưu khoá.")
+        else:
+            dong = ("[ĐƯỜNG ĐI] ảnh={0} · video={1} → chạy đường Chrome/pool cũ, KHÔNG dùng API shopapi. "
+                    "Muốn đi API: Settings → hai ô backend → chọn 'API shopapi' cho CẢ HAI → Lưu.".format(anh, vid))
+        # `_load_config()` chạy TRƯỚC `_build()` — chưa có ô log nào để ghi vào.
+        # Xếp hàng, `_boot` sẽ nhả ra khi giao diện đã dựng xong.
+        self._duong_di_cho_bao = getattr(self, "_duong_di_cho_bao", [])
+        self._duong_di_cho_bao.append(dong)
+        ghi_log_file(dong, "INFO")
+
+    #: Backend cũ đi Chrome/VM. Máy nào còn nằm ở đây là chưa từng được chuyển
+    #: sang API — `settings.yaml` bị `updater` bảo vệ nên cập nhật không với tới.
+    BACKEND_CU = ("server", "nanopic", "flowkit", "combined",
+                  "veo3top", "veo3top_b", "veo3top_b_ultra", "veo3top_b_pool")
+
+    def _chuyen_may_cu_sang_api(self):
+        """Máy cũ vẫn để backend Chrome/pool → chuyển sang API shopapi MỘT LẦN.
+
+        ═══ VÌ SAO PHẢI CÓ, DÙ NÓ GHI ĐÈ LỰA CHỌN CŨ ═══
+
+        `tools/ve3/config/settings.yaml` nằm trong `updater.PROTECTED_PATHS`
+        **và** `GIT_PROTECTED_FILES` **và** `.gitignore`. Ba lớp, và đều đúng —
+        file đó giữ gmail|mật khẩu|totp của cả kho account. Hệ quả: **không có
+        đường nào để một bản cập nhật đổi được chế độ chạy.** Code mới về đủ,
+        `_sdk/` về đủ, số phiên bản nhảy lên 527, mà máy vẫn chạy y như cũ.
+
+        Đã xảy ra thật đêm 14/08/2026. Máy thứ hai cập nhật xong chạy suốt đêm
+        `PHASE 4: Tao Video tu anh` qua pool Chrome, `sv5/...`, `media_id`, rồi
+        20 cảnh `FAIL (129.6s) [error: retry lt sau]` một lượt — trong khi cả
+        đợt việc chuyển sang shopapi đã nằm sẵn trên đĩa nó.
+
+        Bảo người dùng tự vào Settings bật hai ô là chữa được đúng một máy. Còn
+        20 máy nữa thì mỗi máy một lần đi bảo, và máy nào quên thì đốt account
+        Chrome cả đêm mà không ai biết. Nên việc chuyển phải nằm trong code.
+
+        ═══ BỐN CÁI PHANH ═══
+
+        1. **Chạy đúng một lần.** Ghi cờ `da_chuyen_sang_shopapi` vào cấu hình.
+           Ai cố ý quay về pool sau đó sẽ KHÔNG bị ép lại lần hai.
+        2. **Chỉ chuyển từ backend cũ đã biết** (:data:`BACKEND_CU`). Giá trị lạ
+           thì để yên — không đoán hộ.
+        3. **Chép lưu trước khi ghi**, kèm dấu thời gian, cạnh file gốc.
+        4. **Nói to.** In ra log và ghi vào `logs/`, kèm đường dẫn bản lưu và
+           cách quay về.
+        """
+        cfg = self.config_data
+        if cfg.get("da_chuyen_sang_shopapi"):
+            return
+        vid = (cfg.get("generation_backend") or cfg.get("generation_mode") or "").strip().lower()
+        anh = (cfg.get("veo3top_image_mode") or "").strip().lower()
+        doi_vid = vid in self.BACKEND_CU
+        doi_anh = anh in self.BACKEND_CU
+        if not (doi_vid or doi_anh):
+            cfg["da_chuyen_sang_shopapi"] = True   # đã ở API sẵn — đóng cửa, khỏi hỏi lại
+            return
+
+        luu = ""
+        try:
+            goc = VE3_DIR / "config" / "settings.yaml"
+            if goc.exists():
+                ban = goc.with_name("settings.yaml.truoc-api-{0}".format(
+                    _time.strftime("%Y%m%d_%H%M%S")))
+                ban.write_bytes(goc.read_bytes())
+                luu = str(ban)
+        except Exception as e:
+            ghi_log_file("Khong chep luu duoc settings.yaml truoc khi chuyen: {0}".format(e), "WARN")
+
+        cu = "ảnh={0} · video={1}".format(anh or "(chua dat)", vid or "(chua dat)")
+        if doi_vid:
+            cfg["generation_backend"] = "shopapi"
+            cfg["generation_mode"] = "shopapi"
+        if doi_anh:
+            cfg["veo3top_image_mode"] = "shopapi"
+        cfg["da_chuyen_sang_shopapi"] = True
+        try:
+            self._save_config()
+        except Exception as e:
+            ghi_log_file("Khong ghi duoc settings.yaml sau khi chuyen: {0}".format(e), "ERROR")
+
+        self._duong_di_cho_bao = getattr(self, "_duong_di_cho_bao", [])
+        for d in ("[CHUYỂN ĐƯỜNG] Máy này đang để backend cũ ({0}) → đã chuyển sang API shopapi "
+                  "cho cả ảnh lẫn video. Chỉ chuyển MỘT LẦN.".format(cu),
+                  "[CHUYỂN ĐƯỜNG] Bản lưu cấu hình cũ: {0}".format(luu or "(không chép được)"),
+                  "[CHUYỂN ĐƯỜNG] Muốn quay lại pool Chrome: Settings → hai ô backend → chọn lại → Lưu."):
+            self._duong_di_cho_bao.append(d)
+            ghi_log_file(d, "WARN")
 
     def _save_config(self):
         try:
@@ -4758,6 +4919,12 @@ Write-Output $kill.Count
             self.after(3000, lambda: self._update_btn.configure(text="Update", text_color="#888", fg_color=SB2))
 
     def _boot(self):
+        # Nhả hàng đợi của `_bao_duong_di` / `_chuyen_may_cu_sang_api`: hai hàm
+        # đó chạy trong `_load_config`, tức là TRƯỚC `_build()`, lúc chưa có ô
+        # log nào tồn tại để ghi vào.
+        for _d in getattr(self, "_duong_di_cho_bao", []):
+            self._log(_d, "WARN" if "CHUYỂN ĐƯỜNG" in _d or "THIẾU" in _d or "pool cũ" in _d else "INFO", "ve3")
+        self._duong_di_cho_bao = []
         cleared = self._clear_all_queue_markers()
         self._refresh_manual_done_codes()
         if cleared:

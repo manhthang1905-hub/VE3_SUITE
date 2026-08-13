@@ -942,3 +942,138 @@ def test_file_mau_settings_co_ba_num():
     for k in ("shopapi_ma_song_song", "max_concurrent", "shopapi_video_concurrency"):
         assert k in mau, "file mau thieu {0}".format(k)
     assert "generation_backend: shopapi" in mau, "file mau van tro ve duong Chrome cu"
+
+
+# ── Máy cũ tự chuyển sang API — `settings.yaml` không đi theo bản cập nhật ───
+#
+# `tools/ve3/config/settings.yaml` bị chặn ba lớp khỏi mọi lần cập nhật:
+# `updater.PROTECTED_PATHS`, `updater.GIT_PROTECTED_FILES`, và `.gitignore`.
+# Ba lớp đều đúng — file đó giữ gmail|mật khẩu|totp của cả kho account. Nhưng
+# hệ quả là **không có đường nào để bản cập nhật đổi được chế độ chạy**.
+#
+# Đã dính thật đêm 14/08/2026: máy thứ hai lên đúng phiên bản 527, `_sdk/` về
+# đủ, mà chạy pool Chrome suốt đêm — `PHASE 4: Tao Video tu anh`, `sv5/...`,
+# rồi 20 cảnh `FAIL (129.6s)` một lượt. Cấu hình nó vẫn `veo3top_b_pool`.
+
+
+def _app_chuyen(cfg, tmp_path, monkeypatch):
+    import sys
+    VE3 = Path(__file__).resolve().parents[1] / "tools" / "ve3"
+    if str(VE3) not in sys.path:
+        sys.path.insert(0, str(VE3))
+    import ve3_gui
+    (tmp_path / "config").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "config" / "settings.yaml").write_text("cu: 1\n", encoding="utf-8")
+    monkeypatch.setattr(ve3_gui, "VE3_DIR", tmp_path)
+    monkeypatch.setattr(ve3_gui, "ghi_log_file", lambda *a, **k: None)
+
+    class _App:
+        BACKEND_CU = ve3_gui.VE3App.BACKEND_CU
+        _chuyen_may_cu_sang_api = ve3_gui.VE3App._chuyen_may_cu_sang_api
+
+        def __init__(self):
+            self.config_data = cfg
+            self.da_luu = 0
+
+        def _save_config(self):
+            self.da_luu += 1
+
+    return _App(), ve3_gui
+
+
+def test_may_cu_de_pool_thi_duoc_CHUYEN_sang_api(tmp_path, monkeypatch):
+    cfg = {"generation_backend": "veo3top_b_pool", "generation_mode": "veo3top_b_pool",
+           "veo3top_image_mode": "veo3top_b_pool"}
+    app, ve3_gui = _app_chuyen(cfg, tmp_path, monkeypatch)
+    app._chuyen_may_cu_sang_api()
+    assert cfg["generation_backend"] == "shopapi"
+    assert cfg["generation_mode"] == "shopapi", "may cu chi doc generation_mode -> phai doi ca hai"
+    assert cfg["veo3top_image_mode"] == "shopapi"
+    assert ve3_gui.cau_hinh_toan_api(cfg), "chuyen xong ma cong van bao khong phai che do API"
+    assert app.da_luu == 1, "khong ghi xuong dia thi mo lai tool la mat"
+
+
+def test_chuyen_xong_thi_KHONG_ep_lan_hai(tmp_path, monkeypatch):
+    """Ai cố ý quay về pool sau đó phải được tôn trọng."""
+    cfg = {"generation_backend": "veo3top_b_pool", "veo3top_image_mode": "veo3top_b_pool"}
+    app, _ = _app_chuyen(cfg, tmp_path, monkeypatch)
+    app._chuyen_may_cu_sang_api()
+    cfg["generation_backend"] = "veo3top_b_pool"      # người dùng tự chọn lại
+    cfg["generation_mode"] = "veo3top_b_pool"
+    app.da_luu = 0
+    app._chuyen_may_cu_sang_api()
+    assert cfg["generation_backend"] == "veo3top_b_pool", "ep lan hai la giat quyen cua nguoi dung"
+    assert app.da_luu == 0
+
+
+def test_chuyen_thi_CHEP_LUU_cau_hinh_cu_truoc(tmp_path, monkeypatch):
+    cfg = {"generation_backend": "server", "veo3top_image_mode": "server"}
+    app, _ = _app_chuyen(cfg, tmp_path, monkeypatch)
+    app._chuyen_may_cu_sang_api()
+    luu = list((tmp_path / "config").glob("settings.yaml.truoc-api-*"))
+    assert len(luu) == 1, "doi cau hinh ma khong chep luu -> khong co duong lui"
+    assert luu[0].read_text(encoding="utf-8") == "cu: 1\n"
+
+
+def test_backend_LA_KHONG_bi_doan_ho(tmp_path, monkeypatch):
+    """Giá trị lạ = ai đó cắm tay. Để yên, chỉ đóng cửa không hỏi lại."""
+    cfg = {"generation_backend": "mot_thu_la", "veo3top_image_mode": "mot_thu_la"}
+    app, _ = _app_chuyen(cfg, tmp_path, monkeypatch)
+    app._chuyen_may_cu_sang_api()
+    assert cfg["generation_backend"] == "mot_thu_la"
+    assert app.da_luu == 0
+
+
+def test_may_da_o_api_san_thi_khong_dong_gi(tmp_path, monkeypatch):
+    cfg = {"generation_backend": "shopapi", "veo3top_image_mode": "shopapi"}
+    app, _ = _app_chuyen(cfg, tmp_path, monkeypatch)
+    app._chuyen_may_cu_sang_api()
+    assert app.da_luu == 0
+    assert cfg["da_chuyen_sang_shopapi"] is True
+    assert not list((tmp_path / "config").glob("settings.yaml.truoc-api-*"))
+
+
+def test_load_config_PHAI_GOI_chuyen_va_bao_duong_di():
+    """Viết hàm mà quên gọi thì nó vô dụng y như chưa viết."""
+    goi = {n.func.attr for n in ast.walk(_ham("_load_config"))
+           if isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute)}
+    assert "_chuyen_may_cu_sang_api" in goi
+    assert "_bao_duong_di" in goi
+
+
+def test_khoi_dong_PHAI_noi_ro_dang_di_duong_nao():
+    """Cái ác đêm 14/08 không phải chạy pool — mà là KHÔNG DÒNG NÀO nói nó chạy pool."""
+    nguon = VE3_GUI.read_text(encoding="utf-8", errors="replace")
+    assert "[ĐƯỜNG ĐI]" in nguon, "khong co dong khai bao duong di luc khoi dong"
+    than = ast.get_source_segment(nguon, _ham("_bao_duong_di")) or ""
+    assert "pool cũ" in than, "khong noi ro khi dang di duong Chrome cu"
+    assert "THIẾU" in than, "khong noi ro khi chon API ma thieu khoa"
+    # Xếp hàng chứ không gọi thẳng: `_load_config` chạy TRƯỚC `_build()`.
+    assert "_duong_di_cho_bao" in than
+    assert "_duong_di_cho_bao" in (ast.get_source_segment(nguon, _ham("_boot")) or ""), \
+        "xep hang roi khong ai nha ra thi khong ai doc duoc"
+
+
+# ── Xoá khoá phải xoá THẬT, hoặc nói rõ là chưa ──────────────────────────────
+
+
+def test_nut_la_XOA_KHOA_khong_phai_quen_khoa():
+    nguon = VE3_GUI.read_text(encoding="utf-8", errors="replace")
+    assert 'text="Xoa khoa"' in nguon
+    assert 'text="Quen khoa"' not in nguon, "'Quen khoa' nghe nhu tam an, nguoi dung muon XOA"
+
+
+def test_xoa_khoa_HOI_LAI_va_KIEM_LAI_sau_khi_xoa():
+    """`quen_khoa()` chỉ xoá kho khoá của máy.
+
+    Khoá đặt bằng `SHOPAPI_KEY` / `SHOPAPI_API_KEY` / `SHOPAPI_KEY_FILE` đứng
+    TRƯỚC kho khoá trong `doc_khoa()`, nên vẫn còn nguyên sau khi xoá. Bấm xoá
+    mà màn hình vẫn hiện khoá cũ và không một lời nào — người dùng tưởng đã gỡ
+    khoá khỏi máy mà thật ra chưa. Đó là kiểu hỏng tệ hơn nút chết.
+    """
+    nguon = VE3_GUI.read_text(encoding="utf-8", errors="replace")
+    than = ast.get_source_segment(nguon, _ham("_shopapi_forget_key")) or ""
+    assert "askyesno" in than, "xoa khoa ma khong hoi lai"
+    assert than.count("doc_khoa") >= 2, "phai doc_khoa LAI sau khi xoa de biet xoa hut hay khong"
+    assert "SHOPAPI_KEY" in than, "xoa hut thi phai chi dich danh bien moi truong con giu khoa"
+    assert "che_khoa" in than and "showinfo" in than and "showwarning" in than
