@@ -102,15 +102,77 @@ def get_remote_version() -> str:
         return ""
 
 
+def _get_local_sha() -> str:
+    """Mã commit đang đứng. Rỗng khi máy không có git (bản cài từ zip)."""
+    import subprocess
+    try:
+        r = subprocess.run(["git", "rev-parse", "HEAD"], cwd=str(SUITE_ROOT),
+                           capture_output=True, text=True, timeout=5)
+        if r.returncode == 0:
+            return r.stdout.strip()
+    except Exception:
+        pass
+    return ""
+
+
+def _get_remote_sha() -> str:
+    """Mã commit đầu nhánh `main` trên GitHub. Rỗng khi không hỏi được."""
+    try:
+        req = Request(f"{GITHUB_API}/commits/main",
+                      headers={"User-Agent": "VE3-Suite-Updater",
+                               "Accept": "application/vnd.github.sha"})
+        with urlopen(req, timeout=10) as resp:
+            return resp.read().decode("utf-8").strip()
+    except Exception:
+        return ""
+
+
 def check_update() -> dict:
+    """Có bản mới không?
+
+    ═══ SO MÃ COMMIT TRƯỚC, SO SỐ SAU ═══
+
+    Bản trước chỉ so hai con số, mà hai con số ấy đến từ HAI HỆ ĐẾM KHÁC NHAU:
+
+      * `get_local_version()`  — số commit của git trên máy, hoặc file `VERSION`
+        khi máy không có git;
+      * `get_remote_version()` — số commit đọc qua GitHub API, hoặc file
+        `VERSION` trên nhánh `main`.
+
+    Hai hệ đó lệch nhau là chuyện thường, và khi lệch thì hỏng theo hướng tệ
+    nhất: **im lặng không cập nhật**. Đo ngày 14/08/2026 — file `VERSION` ghi
+    `1.0.526` trong khi nhánh `main` có 525 commit. Máy không có git đọc `526`,
+    hỏi API ra `525`, thấy `525 > 526` là sai nên kết luận "đã mới nhất" và
+    **không bao giờ cập nhật nữa**. Cả đợt việc chuyển sang API shopapi nằm trên
+    GitHub mà máy đó không nhận được gì, nút Update bấm bao nhiêu lần cũng vậy.
+
+    Mã commit thì không có chuyện đó: khác mã = khác code, không cần ai nhớ tăng
+    số. Nó cũng đúng cả khi lịch sử bị viết lại (số commit giữ nguyên mà nội
+    dung đổi) — trường hợp vừa xảy ra hôm nay.
+
+    Số phiên bản vẫn giữ để HIỆN LÊN cho người dùng, chỉ thôi làm trọng tài.
+    """
     local = get_local_version()
     remote = get_remote_version()
+    l_sha, r_sha = _get_local_sha(), _get_remote_sha()
+
+    if l_sha and r_sha:
+        # Cả hai đầu đều nói được mình đang ở đâu -> câu trả lời chắc chắn.
+        return {"available": l_sha != r_sha, "local": local, "remote": remote,
+                "error": "", "local_sha": l_sha[:8], "remote_sha": r_sha[:8]}
+
     if not remote:
-        return {"available": False, "local": local, "remote": "", "error": "Không thể kết nối GitHub"}
+        return {"available": False, "local": local, "remote": "",
+                "error": "Không thể kết nối GitHub"}
+
     try:
         local_n = int(local.rsplit(".", 1)[-1])
         remote_n = int(remote.rsplit(".", 1)[-1])
-        has_update = remote_n > local_n
+        # ⚠ `!=` chứ KHÔNG phải `>`. Hai hệ đếm lệch nhau thì "số máy mình lớn
+        # hơn" KHÔNG có nghĩa là mình mới hơn — nó chỉ có nghĩa là hai bên đang
+        # đếm hai thứ khác nhau. Thà mời cập nhật thừa một lần còn hơn khoá cứng
+        # một máy ở bản cũ mà không ai hiểu vì sao.
+        has_update = remote_n != local_n
     except (ValueError, IndexError):
         has_update = remote != local
     return {"available": has_update, "local": local, "remote": remote, "error": ""}
