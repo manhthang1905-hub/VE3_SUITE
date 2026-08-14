@@ -892,3 +892,54 @@ def test_vong_chay_HA_NHIP_GUI_khi_an_429():
     than = inspect.getsource(sb.chay_ca_me)
     assert "thung.bi_chan()" in than, "429 ma khong ha nhip GUI"
     assert "thung.tron_tru()" in than, "di em ma khong bo len -> lui mot lan la lui mai"
+
+
+# ── Hồi nhịp: AIMD đúng với TCP, sai với job 70 giây ─────────────────────────
+
+
+def test_yen_lang_lau_ma_nhip_thap_thi_HOI():
+    """Luật tăng +1 mỗi lô mượt cần 595 job để leo từ 1 về 34.
+
+    TCP thoát được vì gói tin về trong mili-giây. Ở đây một "gói" là một video
+    70 giây, nên +1 mỗi lô nghĩa là hàng giờ. Log 00:00–01:03 ngày 15/08/2026:
+    nhịp tụt về 1 lúc 00:13, mọi lô từ 00:36–00:48 đều "ban them 1 job", sản
+    lượng rơi từ ~15-35/phút xuống ~4/phút suốt ba mươi phút.
+    """
+    class _N:
+        def cho_phep(self):
+            return 2
+    assert sb.can_hoi_nhip(_N(), tran=34, lan_nghen_cuoi=0.0, bay_gio=sb.YEN_LANG_GIAY + 1)
+
+
+def test_vua_nghen_xong_thi_KHONG_hoi_voi():
+    """Hồi ngay sau khi ăn 429 là đâm lại đúng bức tường vừa đụng."""
+    class _N:
+        def cho_phep(self):
+            return 1
+    assert not sb.can_hoi_nhip(_N(), tran=34, lan_nghen_cuoi=100.0, bay_gio=100.0 + 5)
+
+
+def test_nhip_da_gan_tran_thi_khong_can_hoi():
+    """Chỉ hồi khi nhịp THẤP HƠN HẲN trần — không thì cứ để AIMD dò tiếp."""
+    class _N:
+        def cho_phep(self):
+            return 30
+    assert not sb.can_hoi_nhip(_N(), tran=34, lan_nghen_cuoi=0.0, bay_gio=10_000)
+
+
+def test_nha_may_dang_dung_thi_khong_hoi():
+    """`tran == 0` = nhà máy dừng. Hồi lúc này là gửi vào chỗ chắc chắn 503."""
+    class _N:
+        def cho_phep(self):
+            return 1
+    assert not sb.can_hoi_nhip(_N(), tran=0, lan_nghen_cuoi=0.0, bay_gio=10_000)
+
+
+def test_vong_chay_CO_dung_phep_hoi_nhip():
+    """Viết luật mà quên cắm vào vòng chạy thì nó chỉ là mã chết."""
+    import inspect
+    than = inspect.getsource(sb.chay_ca_me)
+    assert "can_hoi_nhip(" in than, "chua dung can_hoi_nhip trong vong chay"
+    assert "lan_nghen[0] = time.monotonic()" in than, "khong ghi nhan luc nghen cuoi"
+    i = than.find("can_hoi_nhip(")
+    assert "_tao_nhip(bat_dau=" in than[i:i + 700], "phat hien can hoi ma khong hoi"

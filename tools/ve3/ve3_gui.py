@@ -6713,8 +6713,16 @@ Get-CimInstance Win32_Process |
     #: ra thêm hàng.
     MA_SONG_SONG_TOI_DA = 24
 
-    def _so_ma_song_song_shopapi(self):
+    #: Mỗi pha luôn giữ được ít nhất ngần này chỗ, kể cả khi nhà máy loại đó
+    #: đang hẹp. Bằng 0 thì việc của pha ấy tồn vĩnh viễn — đúng cảnh 146 mã
+    #: đứng ngoài suốt một giờ vì mã video giữ hết chỗ.
+    MA_MOI_PHA_TOI_THIEU = 4
+
+    def _so_ma_song_song_shopapi(self, pha=None):
         """Bao nhiêu MÃ chạy cùng lúc khi đi toàn API.
+
+        `pha` = `"image"` / `"video"` thì trả về rổ RIÊNG của pha đó, suy từ
+        trần của chính loại job ấy. `None` = tổng số chỗ làm (dùng cho số pair).
 
         ═══ VÌ SAO KHÔNG ĐỂ CON SỐ CỐ ĐỊNH NỮA ═══
 
@@ -6753,6 +6761,15 @@ Get-CimInstance Win32_Process |
             import shopapi_common as _sc
             # Mỗi mã góp được bao nhiêu job vào nhà máy: lấy trần LOẠI NHỎ HƠN
             # (video) làm mẫu số, vì đó là loại dễ hết việc trước.
+            if pha in ("image", "video"):
+                # Rổ RIÊNG của pha: trần của chính loại job đó, và không bao giờ
+                # để một pha bị bóp về 0 — mã ảnh phải luôn có ít nhất vài chỗ
+                # kể cả khi nhà máy ảnh đang hẹp, nếu không thì việc ảnh tồn mãi.
+                tran_pha = int(_sc.tran_song_song(pha, mac_dinh=0) or 0)
+                if tran_pha > 0:
+                    return max(self.MA_MOI_PHA_TOI_THIEU,
+                               min(self.MA_SONG_SONG_TOI_DA, int(round(tran_pha / 40.0))))
+                return self.MA_MOI_PHA_TOI_THIEU
             tran = max(int(_sc.tran_song_song("image", mac_dinh=0) or 0),
                        int(_sc.tran_song_song("video", mac_dinh=0) or 0))
             if tran > 0:
@@ -9866,7 +9883,23 @@ Get-CimInstance Win32_Process |
                     # chủ rồi. Cùng một con số với số chỗ làm ảo, nên hai cái
                     # chặn không đá nhau.
                     if che_do_toan_api(cfg):
-                        _maxcodes = self._so_ma_song_song_shopapi()
+                        # ⚠ ẢNH VÀ VIDEO LÀ HAI NHÀ MÁY RIÊNG — ĐỪNG CHO CHUNG RỔ.
+                        #
+                        # Máy chủ cấp trần TÁCH BIỆT cho `image` và `video`. Một
+                        # mã đang dựng video KHÔNG chiếm chỗ nào của nhà máy ảnh.
+                        # Nhưng bản trước dùng CHUNG một con số cho mọi pha, nên
+                        # mã video chiếm hết chỗ làm và mã cần ảnh đứng ngoài.
+                        #
+                        # Đo log 00:00–01:03 ngày 15/08/2026: **17 mã được chạy,
+                        # 146 mã ăn `skip no_free_pair`**. Cả 17 mã chạy đều đã
+                        # xong ảnh nên chỉ làm video (mỗi mã 80–100 video, giữ
+                        # chỗ hàng giờ), còn mã nào còn thiếu ảnh thì không bao
+                        # giờ tới lượt. Nhìn vào bảng thì "ảnh không ra" — thật
+                        # ra ảnh chưa từng được phát việc.
+                        #
+                        # Chia rổ theo pha thì mã ảnh luôn có đường vào, kể cả
+                        # lúc nhà máy video đang kín.
+                        _maxcodes = self._so_ma_song_song_shopapi(_stage)
                     elif _stage == "image":
                         _ic = int(cfg.get("max_concurrent_image_codes", 0) or 0)
                         _maxcodes = _ic if _ic > 0 else self._compute_pool_capacity()["img_codes"]   # 0 = TỰ TÍNH theo nhân sự

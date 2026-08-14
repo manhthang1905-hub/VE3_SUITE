@@ -1472,15 +1472,19 @@ def test_che_do_API_KHONG_hoi_pool_Chrome_de_chan_so_ma():
     ấy. Log cũ: `skip max_codes (video 2/2)` — trần 2 mã video trong khi máy chủ
     đang cấp 374 chỗ.
     """
-    nguon = VE3_GUI.read_text(encoding="utf-8", errors="replace")
-    i = nguon.find('_maxcodes = _ic if _ic > 0 else')
-    assert i > 0, "khong tim thay cho chan so ma"
-    truoc = nguon[max(0, i - 1200):i]
-    assert "che_do_toan_api(cfg)" in truoc, (
-        "che do API van hoi pool Chrome de chan so ma song song")
-    assert "_so_ma_song_song_shopapi()" in truoc, (
-        "che do API phai dung cung mot nguon voi so cho lam ao, khong thi hai "
-        "cai chan da nhau")
+    # Soi theo THU TU DONG, dung cat cua so ky tu: mot khoi chu thich them vao
+    # la day dieu kien ra ngoai cua so va bai kiem do oan. Da dinh hai lan.
+    nguon = VE3_GUI.read_text(encoding="utf-8", errors="replace").splitlines()
+    i_pool = next((k for k, d in enumerate(nguon)
+                   if "_maxcodes = _ic if _ic > 0 else" in d), -1)
+    assert i_pool > 0, "khong tim thay cho chan so ma theo pool Chrome"
+    i_api = next((k for k, d in enumerate(nguon[:i_pool])
+                  if "if che_do_toan_api(cfg):" in d), -1)
+    assert i_api > 0, "che do API van hoi pool Chrome de chan so ma song song"
+    giua = " ".join(nguon[i_api:i_pool])
+    assert "_so_ma_song_song_shopapi(_stage)" in giua, (
+        "che do API phai dung cung mot nguon voi so cho lam ao, VA phai chia ro "
+        "theo pha — anh va video la hai nha may rieng")
 
 
 # ── Ô chẩn đoán KHÔNG được kết tội oan ───────────────────────────────────────
@@ -1549,3 +1553,69 @@ def test_dong_KHAI_THAC_in_GIA_THAT_cua_duong_dang_dung():
     than = ast.get_source_segment(nguon, _ham("_so_lieu_api_len_tram")) or ""
     assert "_sb.req_moi_job()" in than, "van doc hang so cu REQ_MOI_JOB"
     assert "_gia = _sb.REQ_MOI_JOB" not in than
+
+
+# ── Hai nhà máy riêng: đừng cho chung một rổ chỗ làm ─────────────────────────
+
+
+def test_moi_PHA_co_ro_cho_lam_RIENG(monkeypatch):
+    """Máy chủ cấp trần TÁCH BIỆT cho `image` và `video`.
+
+    Một mã đang dựng video KHÔNG chiếm chỗ nào của nhà máy ảnh. Nhưng bản trước
+    dùng CHUNG một con số cho mọi pha, nên mã video chiếm hết chỗ làm và mã cần
+    ảnh đứng ngoài.
+
+    Đo log 00:00–01:03 ngày 15/08/2026: **17 mã được chạy, 146 mã ăn
+    `skip no_free_pair`**. Cả 17 mã chạy đều đã xong ảnh nên chỉ làm video (mỗi
+    mã 80–100 video, giữ chỗ hàng giờ). Nhìn bảng thì "ảnh không ra" — thật ra
+    ảnh chưa từng được phát việc.
+    """
+    g = _ve3_gui()
+    import shopapi_common as sc
+    monkeypatch.setattr(sc, "tran_song_song",
+                        lambda loai, api_key=None, mac_dinh=1, client=None:
+                        {"image": 800, "video": 40}.get(loai, 0))
+
+    class _App:
+        MA_SONG_SONG_TOI_DA = g.VE3App.MA_SONG_SONG_TOI_DA
+        MA_MOI_PHA_TOI_THIEU = g.VE3App.MA_MOI_PHA_TOI_THIEU
+        _so_ma_song_song_shopapi = g.VE3App._so_ma_song_song_shopapi
+        config_data = {"veo3top_image_mode": "shopapi", "generation_backend": "shopapi"}
+
+    a = _App()
+    ro_anh, ro_vid = a._so_ma_song_song_shopapi("image"), a._so_ma_song_song_shopapi("video")
+    assert ro_anh > ro_vid, (
+        "nha may anh rong gap 20 lan ma ro cho lam khong rong hon: {0} vs {1}"
+        .format(ro_anh, ro_vid))
+    assert ro_vid >= g.VE3App.MA_MOI_PHA_TOI_THIEU
+
+
+def test_pha_HEP_van_giu_duoc_cho_TOI_THIEU(monkeypatch):
+    """Bằng 0 thì việc của pha ấy tồn vĩnh viễn."""
+    g = _ve3_gui()
+    import shopapi_common as sc
+    monkeypatch.setattr(sc, "tran_song_song",
+                        lambda loai, api_key=None, mac_dinh=1, client=None:
+                        1 if loai == "image" else 900)
+
+    class _App:
+        MA_SONG_SONG_TOI_DA = g.VE3App.MA_SONG_SONG_TOI_DA
+        MA_MOI_PHA_TOI_THIEU = g.VE3App.MA_MOI_PHA_TOI_THIEU
+        _so_ma_song_song_shopapi = g.VE3App._so_ma_song_song_shopapi
+        config_data = {"veo3top_image_mode": "shopapi", "generation_backend": "shopapi"}
+
+    assert _App()._so_ma_song_song_shopapi("image") >= g.VE3App.MA_MOI_PHA_TOI_THIEU
+
+
+def test_khong_di_API_thi_pha_KHONG_doi_gi(monkeypatch):
+    g = _ve3_gui()
+
+    class _App:
+        MA_SONG_SONG_TOI_DA = g.VE3App.MA_SONG_SONG_TOI_DA
+        MA_MOI_PHA_TOI_THIEU = g.VE3App.MA_MOI_PHA_TOI_THIEU
+        _so_ma_song_song_shopapi = g.VE3App._so_ma_song_song_shopapi
+        config_data = {"veo3top_image_mode": "pool", "generation_backend": "veo3top_b_pool",
+                       "shopapi_ma_song_song": 8}
+
+    a = _App()
+    assert a._so_ma_song_song_shopapi("image") == 8 == a._so_ma_song_song_shopapi("video")

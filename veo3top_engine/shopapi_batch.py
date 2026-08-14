@@ -901,6 +901,55 @@ def _so_moi_truong(ten, mac_dinh):
         return float(mac_dinh)
 
 
+#: Bao lâu KHÔNG ăn nghẽn thì coi là nhà máy đã rảnh trở lại (giây).
+YEN_LANG_GIAY = 90.0
+
+#: Hồi lại tới mức nào so với trần máy chủ đang cấp. Nửa trần là mức TCP
+#: kinh điển: đủ mạnh để lấy lại thông lượng, đủ khiêm tốn để nếu nhà máy vẫn
+#: chật thì chỉ mất một cú chia đôi nữa.
+TI_LE_HOI = 0.5
+
+
+def can_hoi_nhip(nhip, tran, lan_nghen_cuoi, bay_gio):
+    """Có nên NHẢY nhịp về gần trần thay vì bò +1 không?
+
+    ═══ VÌ SAO AIMD HỎNG Ở ĐÂY, DÙ NÓ ĐÚNG VỚI TCP ═══
+
+    Luật tăng của `NhipDo` là **+1 mỗi lô mượt**, một "lô" = `ceil(nhịp)` job
+    liên tiếp không nghẽn. Đúng y TCP. Nhưng TCP có một thứ ta không có: gói tin
+    về trong mili-giây. Ở đây một "gói" là **một video 70 giây**.
+
+    Hệ quả đo được trong log 00:00–01:03 ngày 15/08/2026: nhà máy video chập
+    chờn, ăn 111 lần `429` và 98 lần `503`. Mỗi cú chia đôi nhịp — đúng. Nhưng
+    khi nhịp đã tụt về 1 thì mỗi lúc chỉ còn MỘT job đang bay, nên tốc độ hồi là
+    +1 mỗi 70 giây. Leo từ 1 về 34 cần 1+2+…+34 ≈ 595 job xong, tức hàng giờ.
+
+    Nhìn thẳng trong log:
+
+        00:02  nhip=15.5      00:13  nhip=1.0      00:14  cho_phep=0
+        00:36–00:48: MỌI lô đều "ban them 1 job"
+        san luong: 00:00-00:19 ~15-35/phut  ->  00:20-00:49 ~4/phut
+
+    Ba mươi phút chạy ở 4 video/phút trong khi máy chủ vẫn rao trần 12–17. Mất
+    khoảng 330 video chỉ trong một giờ đó.
+
+    Cái bẫy tự nuôi nó: nhịp thấp → ít job bay → ít job xong → tăng chậm → nhịp
+    vẫn thấp. Càng nghẽn càng lâu hồi.
+
+    Nên: giữ CHIA ĐÔI khi bị chặn (đó là phần đúng của AIMD), nhưng bỏ bò-lên
+    khi hồi. Yên lặng đủ lâu mà nhịp vẫn thấp hơn hẳn trần thì NHẢY về nửa trần.
+    """
+    if not tran or tran <= 0:
+        return False
+    if (bay_gio - lan_nghen_cuoi) < YEN_LANG_GIAY:
+        return False
+    try:
+        dang = int(nhip.cho_phep())
+    except Exception:
+        return False
+    return dang < int(tran * TI_LE_HOI)
+
+
 class DoHieuQua:
     """Trần theo SẢN LƯỢNG ĐO ĐƯỢC, không theo con số máy chủ rao.
 
@@ -1103,6 +1152,9 @@ def chay_ca_me(viec, chay_mot, loai, tran_tool=None, client=None, api_key=None,
     #: Trần theo SẢN LƯỢNG ĐO ĐƯỢC — lớp chặn duy nhất nhìn thấy kiểu nghẽn
     #: "máy chủ nhận hết rồi chạy chậm" (không 429, không 503, `queued = 0`).
     hieu_qua = DoHieuQua()
+    #: Lần cuối ăn `429`/`503`. Yên lặng đủ lâu thì nhịp được NHẢY về gần trần
+    #: thay vì bò +1 — xem `can_hoi_nhip`.
+    lan_nghen = [time.monotonic()]
     #: Ghìm NHỊP RÓT VÀO. `nhip`/`cong` chặn tổng số đang bay; cái này chặn tốc
     #: độ gửi, và thiếu nó thì một mẻ đúng trần song song vẫn đốt sạch hạn mức
     #: request của cả phút trong vài giây đầu.
@@ -1207,6 +1259,7 @@ def chay_ca_me(viec, chay_mot, loai, tran_tool=None, client=None, api_key=None,
             if trang_thai == "nghen":
                 # Bị từ chối NGAY Ở CỬA: chưa tốn tiền, việc chưa mất.
                 lai.append(i)
+                lan_nghen[0] = time.monotonic()
                 if gia_tri.ma == 429:
                     nhip.bi_chan(gia_tri.cho)
                     cong.bi_nghen(gia_tri.cho)
@@ -1275,6 +1328,19 @@ def chay_ca_me(viec, chay_mot, loai, tran_tool=None, client=None, api_key=None,
         # nhóm đọc trạng thái có hạn mức riêng). `dat_tran(0)` tự chuyển vòng dò
         # sang trạng thái "nhà máy đang dừng" -> vòng sau rơi vào nhánh ngủ trên.
         tran = _doc_tran()
+        # ⚠ HỒI NHỊP TRƯỚC KHI ĐẶT TRẦN. Nhà máy đã yên lặng đủ lâu mà nhịp vẫn
+        # thấp hơn hẳn trần được cấp -> nhảy về nửa trần thay vì bò +1 mỗi lô.
+        # Xem khối `why` dài ở `can_hoi_nhip`: bò +1 với job 70 giây nghĩa là
+        # ba mươi phút chạy ở một phần tư công suất.
+        if can_hoi_nhip(nhip, tran, lan_nghen[0], time.monotonic()):
+            _cu = int(nhip.cho_phep())
+            _moi = max(1, int(tran * TI_LE_HOI))
+            nhip = _tao_nhip(bat_dau=_moi)
+            nhip.dat_tran(tran)
+            lan_nghen[0] = time.monotonic()   # cho quãng yên lặng đếm lại
+            log("API shopapi: me {0} - {1:.0f}s khong nghen ma nhip van {2}/{3} -> HOI VE {4}. "
+                "(bo len +1 moi lo se mat hang gio voi job dai)"
+                .format(loai, YEN_LANG_GIAY, _cu, tran, _moi))
         nhip.dat_tran(tran)
         cong.dat_tran(tran)
         # ⚠ CỔNG CẮT SAU NHỊP. `nhip.cho_phep()` nói "chạy nhanh tới đâu";
