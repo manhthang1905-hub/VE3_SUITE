@@ -188,7 +188,10 @@ def test_hoi_khong_duoc_thi_doan_THAP_chu_khong_dung_im(monkeypatch, sc, nhat_ky
         raise RuntimeError("mat mang")
 
     monkeypatch.setattr(sc, "tran_song_song", _hong)
-    assert sb.so_luong_song_song("image", log=nhat_ky) == 1
+    monkeypatch.setattr(sc, "phan_luong_cua_toi", lambda *a, **k: 10 ** 6)
+    n = sb.so_luong_song_song("image", log=nhat_ky)
+    assert n == sb.TRAN_KHOI_DONG_MU, "hong doc thi mo vua phai, khong dung im ma cung khong ve 1"
+    assert 0 < n < sc.tran_cung("image"), "doan mu ma bang tran cung la dap vao nha may bang so bia"
 
 
 # ── `0` = nhà máy đang dừng ──────────────────────────────────────────────────
@@ -500,15 +503,39 @@ def test_doc_tran_hong_thi_GIU_tran_cu_chu_khong_tut_ve_1(tran_gia, nhat_ky, sc,
     assert any("GIU tr" in m for _lv, m in nhat_ky.dong), "khong bao la dang giu tran cu"
 
 
-def test_chua_tung_doc_duoc_lan_nao_thi_van_lui_ve_1(nhat_ky, sc, monkeypatch):
-    """Không có gì để giữ thì đoán thấp vẫn đúng — đứng im mới là sai."""
+def test_chua_tung_doc_duoc_lan_nao_thi_MO_VUA_PHAI_chu_khong_ve_1(nhat_ky, sc, monkeypatch):
+    """Một cú mạng chập không phải bằng chứng nhà máy chỉ còn một chỗ.
+
+    ═══ CÁI GIÁ CỦA VIỆC LÙI VỀ 1 ═══
+
+    Phép đo 10 phút ngày 15/08/2026: lời hỏi `/v1/me` ĐẦU TIÊN mất 121 giây rồi
+    hỏng (hạn mức 1.000 request/phút đang bão hoà vì tải của chính mình). Vòng
+    dò khởi động ở 1 job, AIMD +1 mỗi lô bò lên 1 → 3 → 8 → 16 → 45. Cả mẻ chạy
+    ở nhịp bò: **88 ảnh trong 657 giây**, trong khi ngay lúc đó nhà máy đang
+    nhận 61 job đồng thời của chính mình.
+
+    Mở vừa phải rồi để `429`/`503` nói — chúng đến từ lượt gửi THẬT nên đáng tin
+    hơn hẳn một lời hỏi trạng thái không tới nơi.
+    """
     def _no(loai, api_key=None, mac_dinh=1, client=None):
         raise OSError("mang chap")
 
     monkeypatch.setattr(sc, "tran_song_song", _no)
+    monkeypatch.setattr(sc, "phan_luong_cua_toi", lambda *a, **k: 10 ** 6)
     ket = sb.chay_ca_me(list(range(3)), lambda v: v, "image", log=nhat_ky)
     assert ket == [0, 1, 2]
-    assert any("doan thap con hon dung im" in m for _lv, m in nhat_ky.dong)
+    assert sb.TRAN_KHOI_DONG_MU >= 16, "mo qua hep = bo len tu day, mat ca me"
+    assert sb.so_luong_song_song("image", log=nhat_ky) == sb.TRAN_KHOI_DONG_MU
+
+
+def test_mu_tit_van_KHONG_vuot_suat_luong_cua_may(nhat_ky, sc, monkeypatch):
+    """Không đọc được gì cũng không được mở rộng hơn máy này chịu nổi."""
+    def _no(loai, api_key=None, mac_dinh=1, client=None):
+        raise OSError("mang chap")
+
+    monkeypatch.setattr(sc, "tran_song_song", _no)
+    monkeypatch.setattr(sc, "phan_luong_cua_toi", lambda *a, **k: 5)
+    assert sb.so_luong_song_song("image", log=nhat_ky) == 5
 
 
 def test_nha_may_dung_KHONG_bi_nho_lai_thanh_tran(tran_gia, nhat_ky, sc):
@@ -597,30 +624,78 @@ def test_san_luong_con_len_thi_KHONG_chan():
     assert hq.cho_phep() == 0, "dang len ma da chan"
 
 
-def test_dong_hon_ma_ra_it_hon_thi_LUI_ve_muc_tot_nhat():
-    """Quá đỉnh thì gửi thêm chỉ làm mỗi job lâu hơn và job đuôi chết vì hết hạn."""
+def test_MOT_luot_xau_CHUA_duoc_ha_tran():
+    """Vừa nâng số job lên thì chúng còn đang bay, chưa cái nào kịp xong.
+
+    ═══ BÀI NÀY DỰNG LẠI ĐÚNG LỖI ĐÃ XẢY RA ═══
+
+    Phép đo 10 phút ngày 15/08/2026, cửa sổ 45 giây trong khi một job ảnh mất
+    30–300 giây. Vòng dò vừa nâng lên 45 job cùng lúc, cửa sổ kế đọc ra "6
+    job/phút", so với kỷ lục "28 job/phút ở 8 job" rồi kết luận đã quá đỉnh và
+    **khoá trần xuống 8**. Cả phần còn lại của phép đo chạy ở 8 job. Bộ leo đồi
+    tự bóp mình bằng chính cái đáng lẽ để nới ra — 88 ảnh trong 657 giây.
+
+    Một cửa sổ tệ là ống đang đầy. Hai cửa sổ tệ liên tiếp mới là nghẽn thật.
+    """
     dh = _DongHo(); hq = sb.DoHieuQua(cua_so=50.0, dong_ho=dh)
-    _vong(hq, dh, 40, 100, 60.0)                 # 100 job/phut o 40 cung luc
-    assert hq.cho_phep() == 0
-    _vong(hq, dh, 120, 30, 60.0)                 # dong gap 3, ra mot phan ba
+    _vong(hq, dh, 8, 24, 60.0)                   # ky luc: 24 job/phut o 8
+    _vong(hq, dh, 45, 6, 60.0)                   # vua nang len, ong dang day
+    assert hq.cho_phep() == 0, "ha tran ngay o luot xau DAU TIEN — chinh la loi cu"
+
+
+def test_HAI_luot_xau_lien_tiep_thi_moi_LUI():
+    """Lặp lại thì không còn là ống đầy nữa — đó là nhà máy nghẽn thật."""
+    dh = _DongHo(); hq = sb.DoHieuQua(cua_so=50.0, dong_ho=dh)
+    _vong(hq, dh, 40, 100, 60.0)
+    _vong(hq, dh, 120, 20, 60.0)
+    _vong(hq, dh, 120, 18, 60.0)
     assert hq.cho_phep() == 40, (
         "khong lui ve muc tot nhat -> tiep tuc nhoi vao mot nha may dang nghen")
+
+
+def test_mot_luot_xau_roi_TOT_lai_thi_quen_di():
+    """Đếm lượt tệ phải reset, nếu không hai cú nhiễu cách xa nhau cũng cộng dồn."""
+    dh = _DongHo(); hq = sb.DoHieuQua(cua_so=50.0, dong_ho=dh)
+    _vong(hq, dh, 40, 100, 60.0)
+    _vong(hq, dh, 120, 20, 60.0)     # xau lan 1
+    _vong(hq, dh, 120, 95, 60.0)     # tot tro lai -> quen
+    _vong(hq, dh, 120, 20, 60.0)     # xau lan 1 (khong phai lan 2)
+    assert hq.cho_phep() == 0
 
 
 def test_nha_may_khoe_lai_thi_MO_TRAN_ra_ngay():
     """Lùi không được phép là lùi vĩnh viễn — thợ về đông là phải ăn theo ngay."""
     dh = _DongHo(); hq = sb.DoHieuQua(cua_so=50.0, dong_ho=dh)
     _vong(hq, dh, 40, 100, 60.0)
-    _vong(hq, dh, 120, 30, 60.0)
+    _vong(hq, dh, 120, 20, 60.0)
+    _vong(hq, dh, 120, 18, 60.0)
     assert hq.cho_phep() == 40
     _vong(hq, dh, 40, 300, 60.0)                 # nha may khoe han len
     assert hq.cho_phep() == 0, "san luong pha ky luc ma van con giu tran cu"
+
+
+def test_ky_luc_PHAI_DAN_chu_khong_ghim_mai():
+    """Một phút vàng hồi nào đó không được làm mốc so sánh vĩnh viễn."""
+    dh = _DongHo(); hq = sb.DoHieuQua(cua_so=50.0, dong_ho=dh)
+    _vong(hq, dh, 40, 500, 60.0)                 # ky luc rat cao
+    cao = hq._tot_nhat[0]
+    for _ in range(12):
+        _vong(hq, dh, 40, 0, 60.0)
+    assert hq._tot_nhat[0] < cao * 0.5, "ky luc khong phai -> khong bao gio pha duoc nua"
+
+
+def test_cua_so_phai_DAI_HON_tuoi_tho_mot_job():
+    """45 giây là quá ngắn cho job 30–300 giây — đó là gốc của lỗi 15/08/2026."""
+    assert sb.DoHieuQua.CUA_SO >= 120, (
+        "cua so ngan hon tuoi tho job = do nhieu khoi dong thanh 'da qua dinh'")
+    assert sb.DoHieuQua.XAU_LIEN_TIEP >= 2, "mot luot xau la nhieu, khong phai nghen"
 
 
 def test_khong_bao_gio_ha_xuong_duoi_SAN():
     """Hạ tới 0 là tool đứng im — luôn còn đủ chỗ để đo lại lần sau."""
     dh = _DongHo(); hq = sb.DoHieuQua(cua_so=50.0, dong_ho=dh)
     _vong(hq, dh, 1, 60, 60.0)
+    _vong(hq, dh, 200, 1, 60.0)
     _vong(hq, dh, 200, 1, 60.0)
     assert hq.cho_phep() >= sb.DoHieuQua.SAN
 

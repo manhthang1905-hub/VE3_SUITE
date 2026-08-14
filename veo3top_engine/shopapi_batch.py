@@ -562,6 +562,14 @@ TRAN_TTL = 15.0
 
 #: Tự điều tiết BẬT sẵn. Tắt bằng `SHOPAPI_TU_DIEU_TIET=0` khi cần ghim cứng
 #: số luồng để đo đạc — chứ không phải để chạy thật.
+#: Mở bao nhiêu job khi CHƯA từng đọc được `/v1/me` lần nào.
+#:
+#: Không phải 1 (tự bóp cả mẻ vì một cú mạng chập), cũng không phải trần cứng
+#: (đập vào nhà máy bằng một con số bịa). Đủ để mẻ chạy thật sự, và đủ nhỏ để
+#: một lần AIMD chia đôi là về mức lịch sự.
+TRAN_KHOI_DONG_MU = 32
+
+
 def _tu_dieu_tiet_mac_dinh():
     return (os.environ.get("SHOPAPI_TU_DIEU_TIET") or "1").strip() not in ("0", "false", "False")
 
@@ -620,9 +628,26 @@ def _hoi_tran(loai, tran_tool=None, client=None, api_key=None, log=print,
                 "(tut ve 1 la tu bop minh vi mot cu mang chap)"
                 .format(loai, int(truoc_do)), "WARN")
             return int(truoc_do)
-        log("API shopapi: khong hoi duoc GET /v1/me cho '{0}' -> tam chay 1 job "
-            "(chua tung doc duoc lan nao; doan thap con hon dung im)".format(loai), "WARN")
-        tran = 1
+        # ⚠ ĐỪNG LÙI VỀ 1. Bản trước làm thế với lý do "đoán thấp còn hơn đứng
+        # im", và cái giá của nó lộ ra trong phép đo 10 phút ngày 15/08/2026:
+        # lời hỏi `/v1/me` ĐẦU TIÊN mất 121 giây rồi hỏng (hạn mức 1.000
+        # request/phút đang bão hoà vì tải của chính mình). Vòng dò khởi động ở
+        # 1 job, rồi AIMD +1 mỗi lô bò lên 1 → 3 → 8 → 16 → 45. Cả mẻ chạy ở
+        # nhịp bò và ra 88 ảnh trong 657 giây, trong khi nhà máy nhận 61 job
+        # đồng thời cùng lúc đó.
+        #
+        # Một cú mạng chập KHÔNG phải bằng chứng nhà máy chỉ còn một chỗ. Mở
+        # vừa phải rồi để `429`/`503` nói — chúng đến từ lượt gửi THẬT nên đáng
+        # tin hơn hẳn một lời hỏi trạng thái không tới nơi. Và nếu nhà máy hẹp
+        # thật thì AIMD chia đôi, mất đúng một lô.
+        try:
+            _mo = max(1, min(TRAN_KHOI_DONG_MU, int(_sc.phan_luong_cua_toi())))
+        except Exception:
+            _mo = TRAN_KHOI_DONG_MU
+        log("API shopapi: khong hoi duoc GET /v1/me cho '{0}' -> tam chay {1} job "
+            "(chua tung doc duoc lan nao; lui ve 1 la tu bop minh ca me)"
+            .format(loai, _mo), "WARN")
+        tran = _mo
     if tran == 0:
         return 0
 
@@ -743,10 +768,22 @@ class DoHieuQua:
     bằng hàng ra, chứ không bằng lời máy chủ tự khai.
     """
 
-    #: Chốt sổ mỗi ngần này giây. Ngắn quá thì nhiễu, dài quá thì phản ứng chậm.
-    CUA_SO = 45.0
+    #: Chốt sổ mỗi ngần này giây.
+    #:
+    #: ⚠ PHẢI DÀI HƠN TUỔI THỌ MỘT JOB, nếu không là đo nhiễu khởi động. Bản đầu
+    #: để 45 giây trong khi một job ảnh mất 30–300 giây, và nó hỏng đúng như vậy
+    #: trong phép đo 10 phút ngày 15/08/2026: vừa nâng lên 45 job cùng lúc,
+    #: chúng còn đang bay chứ chưa cái nào xong, cửa sổ đọc ra "6 job/phút" rồi
+    #: kết luận đã quá đỉnh và KHOÁ TRẦN XUỐNG 8. Tự bóp mình bằng chính cái
+    #: đáng lẽ để nới ra.
+    CUA_SO = 150.0
     #: Sản lượng phải kém hơn mức tốt nhất ngần này mới coi là "đã quá đỉnh".
-    NGUONG_KEM = 0.85
+    NGUONG_KEM = 0.75
+    #: Phải thấy TỆ ngần này lượt LIÊN TIẾP mới được hạ. Một lượt là nhiễu.
+    XAU_LIEN_TIEP = 2
+    #: Mỗi lượt chốt, kỷ lục cũ phai đi ngần này — nhà máy đổi thì mốc cũ phải
+    #: chịu buông, nếu không một phút vàng hồi nào đó khoá trần mãi mãi.
+    PHAI = 0.9
     #: Không bao giờ hạ xuống dưới mức này — hạ nữa là đứng im.
     SAN = 4
 
@@ -761,6 +798,8 @@ class DoHieuQua:
         self._lan_do = dong_ho()
         #: `(sản lượng tốt nhất, số job cùng lúc lúc đó)`.
         self._tot_nhat = (0.0, 0)
+        #: Mấy lượt liên tiếp thấy "đông hơn mà ra ít hơn".
+        self._xau = 0
         #: Trần đang áp. `0` = chưa chặn gì.
         self.tran = 0
 
@@ -788,10 +827,21 @@ class DoHieuQua:
             # Còn leo được -> ghi mốc mới và MỞ trần ra (đừng giữ trần cũ).
             self._tot_nhat = (san_luong, max(cung_luc, self.SAN))
             self.tran = 0
+            self._xau = 0
         elif (tai_muc and cung_luc > tai_muc * 1.15
               and san_luong < tot * self.NGUONG_KEM):
-            # Đông hơn mà ra ít hơn -> đã quá đỉnh. Lùi về đúng mức tốt nhất.
-            self.tran = max(self.SAN, tai_muc)
+            # Đông hơn mà ra ít hơn. MỘT lượt như thế chưa nói lên gì: hàng vừa
+            # nâng lên còn đang bay, chưa cái nào kịp xong. Chỉ hạ khi thấy lặp
+            # lại — lúc đó mới là nhà máy nghẽn thật chứ không phải đang đầy ống.
+            self._xau += 1
+            if self._xau >= self.XAU_LIEN_TIEP:
+                self.tran = max(self.SAN, tai_muc)
+                self._xau = 0
+        else:
+            self._xau = 0
+        # Kỷ lục phai dần: nhà máy hôm nay khác hôm qua, và một cửa sổ may mắn
+        # không được phép làm mốc so sánh vĩnh viễn.
+        self._tot_nhat = (self._tot_nhat[0] * self.PHAI, self._tot_nhat[1])
         return san_luong, cung_luc
 
     def cho_phep(self):
