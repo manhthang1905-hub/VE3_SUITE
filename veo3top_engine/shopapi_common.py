@@ -53,6 +53,9 @@ __all__ = [
     "kiem_khoa",
     "tran_song_song",
     "tran_cung",
+    "ThuHoachChung",
+    "thu_hoach_cua",
+    "dung_thu_hoach_chung",
     "tran_cung_may_chu",
     "dung_sse",
     "TRAN_KET_NOI",
@@ -569,6 +572,154 @@ class NhipHoiTham:
 NHIP_HOI = NhipHoiTham()
 
 
+# ── Thu hoạch CHUNG: một lời hỏi cho cả trăm job ─────────────────────────────
+#
+# ═══ VÌ SAO ĐÂY LÀ TRẦN THẬT, VÀ VÌ SAO NỚI NÓ MỚI LÀ CÁCH KHAI THÁC ═══
+#
+# Hạn mức của tài khoản là **1.000 request/phút**. Đó là ngân sách cứng, và
+# thông lượng tối đa = ngân sách ÷ số lời gọi mỗi ảnh. Nên muốn ra nhiều ảnh
+# hơn thì không phải nới trần — mà phải làm mỗi ảnh RẺ ĐI.
+#
+#   đường hỏi thăm  : 1 POST + N lần GET (N tăng theo độ dài job)  -> ~5,7
+#   đường SSE       : 1 POST + 1 SSE + 1 GET kết quả               -> 3,0
+#   đường này       : 1 POST + (một lời hỏi CHUNG chia cho cả trăm job) -> ~1,05
+#
+# Đo 15/08/2026: `GET /v1/jobs?status=succeeded&limit=100` trả về **100 job KÈM
+# LUÔN `output`** trong một lời gọi. Nghĩa là không cần hỏi từng job nữa, cũng
+# không cần một kết nối SSE cho mỗi job.
+#
+#   850 req/phút ÷ 3,0  =  283 job/phút  =  2.830 ảnh / 10 phút
+#   850 req/phút ÷ 1,05 =  810 job/phút  =  8.100 ảnh / 10 phút
+#
+# Cùng một hạn mức, gấp gần ba lần hàng ra. Đây là chỗ duy nhất còn nới được mà
+# không phải xin máy chủ nâng gì cả.
+
+#: Nhịp hỏi của luồng thu hoạch chung (giây). Job ảnh/video mất hàng chục giây
+#: nên 3 giây là thừa nhanh, mà cả phút chỉ tốn 20 lời gọi cho MỌI job.
+NHIP_THU_HOACH = 3.0
+
+#: Mỗi lời hỏi lấy tối đa ngần này job. Trần của `GET /v1/jobs`.
+LO_THU_HOACH = 100
+
+#: Nhiều nhất bao nhiêu trang mỗi vòng — chặn để một hàng chờ khổng lồ không
+#: biến vòng thu hoạch thành cơn bão request đúng thứ nó sinh ra để dập.
+TRANG_TOI_DA = 8
+
+_KET_THUC = ("succeeded", "failed", "cancelled", "rejected")
+
+
+class ThuHoachChung:
+    """Một luồng hỏi thăm CHUNG cho mọi job đang bay của một client.
+
+    Thay cho "mỗi job một kết nối SSE + một lời hỏi kết quả". Job đăng ký rồi
+    ngồi chờ trên `threading.Event`; luồng nền hỏi `GET /v1/jobs` theo lô và
+    đánh thức đúng những job đã xong.
+
+    Chi phí mỗi job tiệm cận **một** lời gọi (chỉ còn `POST` lúc tạo), vì lời
+    hỏi thu hoạch được chia cho cả trăm job cùng lúc.
+    """
+
+    def __init__(self, client, nhip=None, lo=None):
+        self._client = client
+        self._nhip = float(NHIP_THU_HOACH if nhip is None else nhip)
+        self._lo = int(LO_THU_HOACH if lo is None else lo)
+        self._khoa = threading.Lock()
+        #: `job_id -> [Event, job đã xong hoặc None]`
+        self._cho = {}
+        self._luong = None
+        #: Số lời gọi thu hoạch đã tốn và số job đã nhặt — để đo chi phí thật.
+        self.so_loi_goi = 0
+        self.so_nhat_duoc = 0
+
+    # ── Bề mặt cho người gọi ────────────────────────────────────────────────
+
+    def dang_ky(self, job_id):
+        ô = [threading.Event(), None]
+        with self._khoa:
+            self._cho[job_id] = ô
+            if self._luong is None or not self._luong.is_alive():
+                self._luong = threading.Thread(target=self._vong, daemon=True,
+                                               name="shopapi-thu-hoach")
+                self._luong.start()
+        return ô
+
+    def cho(self, job_id, timeout):
+        """Chờ job xong. Trả job dict, hoặc `None` khi hết hạn."""
+        ô = self.dang_ky(job_id)
+        try:
+            if not ô[0].wait(timeout=max(0.0, float(timeout))):
+                return None
+            return ô[1]
+        finally:
+            with self._khoa:
+                self._cho.pop(job_id, None)
+
+    # ── Luồng nền ───────────────────────────────────────────────────────────
+
+    def _vong(self):
+        while True:
+            time.sleep(self._nhip)
+            with self._khoa:
+                if not self._cho:
+                    return                      # hết việc thì luồng tự nghỉ
+                con_cho = set(self._cho)
+            try:
+                self._mot_vong(con_cho)
+            except Exception:
+                # Một lượt hỏi hỏng KHÔNG được giết luồng: job đang chờ sẽ treo
+                # tới hết hạn mà không ai biết vì sao.
+                pass
+
+    def _mot_vong(self, con_cho):
+        cursor = None
+        for _ in range(TRANG_TOI_DA):
+            if not con_cho:
+                return
+            r = self._client.jobs.list(limit=self._lo, cursor=cursor)
+            self.so_loi_goi += 1
+            data = _lay(r, "data") or []
+            for j in data:
+                ma = _lay(j, "id")
+                if ma not in con_cho:
+                    continue
+                if _lay(j, "status") not in _KET_THUC:
+                    con_cho.discard(ma)         # đã thấy, còn chạy -> thôi tìm
+                    continue
+                job = j if isinstance(j, dict) else (
+                    j.to_dict() if hasattr(j, "to_dict") else dict(j._data))
+                con_cho.discard(ma)
+                self.so_nhat_duoc += 1
+                with self._khoa:
+                    ô = self._cho.get(ma)
+                if ô is not None:
+                    ô[1] = job
+                    ô[0].set()
+            if not _lay(r, "has_more"):
+                return
+            cursor = _lay(r, "next_cursor")
+            if not cursor:
+                return
+
+
+#: Một bộ thu hoạch cho mỗi client — job của cùng một client gộp chung lời hỏi.
+_thu_hoach = {}
+_thu_hoach_khoa = threading.Lock()
+
+
+def thu_hoach_cua(client):
+    with _thu_hoach_khoa:
+        bo = _thu_hoach.get(id(client))
+        if bo is None or bo._client is not client:
+            bo = ThuHoachChung(client)
+            _thu_hoach[id(client)] = bo
+        return bo
+
+
+def dung_thu_hoach_chung():
+    """Có gộp lời hỏi không? Tắt bằng `SHOPAPI_THU_HOACH_CHUNG=0`."""
+    return (os.environ.get("SHOPAPI_THU_HOACH_CHUNG") or "1").strip()         not in ("0", "false", "False")
+
+
 def dung_sse():
     """Có đi đường SSE không? Tắt bằng `SHOPAPI_SSE=0`."""
     return (os.environ.get("SHOPAPI_SSE") or "1").strip() not in ("0", "false", "False")
@@ -646,9 +797,35 @@ def _cho_job_xong(client, job_id, timeout, on_progress=None, uoc_giay=None):
     bootstrap_sdk()
     from shopapi._exceptions import JobFailedError, JobTimeoutError
 
-    # ĐƯỜNG SSE TRƯỚC. Hỏng thì lùi về hỏi thăm — chậm hơn nhiều nhưng vẫn ra
-    # hàng, và job đã trả tiền rồi nên tuyệt đối không được bỏ vì một đường
-    # truyền không dựng nổi.
+    # ═══ BA ĐƯỜNG, RẺ TRƯỚC ĐẮT SAU ═══
+    #
+    # Ngân sách 1.000 request/phút là trần cứng, nên thông lượng = ngân sách ÷
+    # số lời gọi mỗi ảnh. Đường nào rẻ hơn thì ra được nhiều hàng hơn với đúng
+    # cùng một hạn mức:
+    #
+    #   thu hoạch chung : ~1,05 lời gọi/ảnh  ->  ~810 job/phút
+    #   SSE             :  3,0               ->   283 job/phút
+    #   hỏi thăm        :  5,7               ->   149 job/phút
+    #
+    # Hai đường sau giữ nguyên làm lưới: job đã trả tiền thì tuyệt đối không
+    # được bỏ chỉ vì một cách chờ không dựng nổi.
+    if dung_thu_hoach_chung() and hasattr(getattr(client, "jobs", None), "list"):
+        try:
+            job = thu_hoach_cua(client).cho(job_id, timeout)
+            if job is not None:
+                tt = job.get("status")
+                if tt == "succeeded":
+                    return job
+                raise JobFailedError(
+                    "Job {0} ket thuc voi trang thai '{1}'.".format(job_id, tt), job=job)
+            # `None` = hết hạn chờ. KHÔNG ném ở đây: có thể luồng thu hoạch vừa
+            # chết hoặc job chưa kịp lên danh sách. Để hai đường dưới thử tiếp,
+            # chúng còn `timeout` của chính chúng.
+        except JobFailedError:
+            raise
+        except Exception:
+            pass
+
     if dung_sse() and hasattr(getattr(client, "jobs", None), "stream"):
         try:
             return _cho_bang_sse(client, job_id, timeout, on_progress=on_progress)

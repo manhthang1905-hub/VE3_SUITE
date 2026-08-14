@@ -745,9 +745,34 @@ def so_luong_song_song(loai, tran_tool=None, client=None, api_key=None, log=prin
 #: `/v1/me` và các lời hỏi khác, nên ngân sách gửi để dưới mức trần.
 NGAN_SACH_REQ_PHUT = 850
 
-#: Mỗi job tốn khoảng ngần này lời gọi: `POST` tạo + 1 kết nối SSE + 1 `GET`
-#: lấy kết quả. Đã đo: 2,0 request/ảnh trên đường SSE, để 3 cho có biên.
-REQ_MOI_JOB = 3.0
+#: Giá mỗi job, theo ĐƯỜNG CHỜ đang dùng. ĐO THẬT 15/08/2026, 40 ảnh mỗi lượt,
+#: đếm cả `stream_request` (bộ đếm cũ bỏ sót nó nên báo 2,0 thay vì 3,0):
+#:
+#:   gộp lời hỏi : 1,27  (1 POST + một lời hỏi CHUNG chia cho cả trăm job)
+#:   SSE         : 3,00  (1 POST + 1 SSE + 1 GET kết quả)
+#:   hỏi từng job: 5,70  (1 POST + N lần GET, N tăng theo độ dài job)
+#:
+#: ⚠ PHẢI ĐI THEO ĐƯỜNG ĐANG DÙNG. Ghim cứng 3,0 trong khi chạy đường 1,27 là
+#: tự bóp nhịp gửi xuống còn 42% — thùng token tưởng mỗi ảnh đắt gấp 2,4 lần
+#: thực tế. Ngân sách request là trần THẬT của cả dây chuyền
+#: (thông lượng = ngân sách ÷ giá mỗi ảnh), nên sai ở đây là mất thẳng sản lượng.
+GIA_MOI_JOB = {"gop": 1.3, "sse": 3.0, "hoi": 5.7}
+
+
+def req_moi_job():
+    """Giá mỗi job của đường chờ đang bật."""
+    try:
+        if _sc.dung_thu_hoach_chung():
+            return GIA_MOI_JOB["gop"]
+        if _sc.dung_sse():
+            return GIA_MOI_JOB["sse"]
+    except Exception:
+        pass
+    return GIA_MOI_JOB["hoi"]
+
+
+#: Giữ tên cũ cho chỗ nào còn đọc thẳng — nhưng ĐỪNG dùng nó để tính nhịp gửi.
+REQ_MOI_JOB = GIA_MOI_JOB["sse"]
 
 #: Được gửi bao nhiêu job liền một mạch trước khi phải rót đều.
 #:
@@ -798,7 +823,7 @@ class ThungGui:
                 ban = int(_sc.dem_ban_dang_chay(""))
             except Exception:
                 ban = 1
-        return max(0.2, self._ngan_sach / 60.0 / REQ_MOI_JOB / max(1, int(ban)))
+        return max(0.2, self._ngan_sach / 60.0 / req_moi_job() / max(1, int(ban)))
 
     def xin(self, n):
         """Xin gửi `n` job. Trả số ĐƯỢC PHÉP gửi ngay bây giờ (có thể là 0)."""

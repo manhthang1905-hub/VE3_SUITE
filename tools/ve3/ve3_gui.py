@@ -1411,6 +1411,32 @@ class HomePage(ctk.CTkScrollableFrame):
                                   .format(ma, chay, cho, (gio or 0) / 60.0,
                                           con if con is not None else "?"), GREEN)
             status.append("{0}: chạy {1} · chờ {2} · trần {3}".format(loai, chay, cho, tran))
+
+        # ═══ DÒNG KHAI THÁC: cái gì đang là trần THẬT, ngay lúc này ═══
+        #
+        # Tám ô ở trên nói về TỪNG LOẠI job. Nhưng thứ quyết định tổng sản lượng
+        # lại là mấy con số dùng CHUNG cho cả máy, và trước bản này chúng không
+        # hiện ở đâu cả — muốn biết phải đọc mã nguồn.
+        #
+        # Đo 15/08/2026 mới thấy rõ: trần thật KHÔNG phải số job chạy song song
+        # (máy chủ cấp 979) mà là **1.000 request/phút** của tài khoản. Thông
+        # lượng tối đa = ngân sách ÷ số lời gọi mỗi ảnh, nên "chi phí mỗi ảnh"
+        # mới là cái núm thật, và nó phải nhìn thấy được.
+        try:
+            import shopapi_batch as _sb
+            _th = _sb.ThungGui()
+            _ban = _sc.dem_ban_dang_chay("")
+            _job_phut = _th.toc_do() * 60.0
+            _gia = _sb.REQ_MOI_JOB
+            _duong = ("gộp lời hỏi" if _sc.dung_thu_hoach_chung()
+                      else ("SSE" if _sc.dung_sse() else "hỏi từng job"))
+            status.append(
+                "KHAI THÁC · {0} tiến trình mã · đường chờ: {1} (~{2:.1f} lời gọi/ảnh) · "
+                "nhịp gửi {3:.0f} job/phút = {4:.0f} sản phẩm/10 phút · suất luồng {5}"
+                .format(_ban, _duong, _gia, _job_phut, _job_phut * 10,
+                        _sc.phan_luong_cua_toi()))
+        except Exception as _e:
+            status.append("KHAI THÁC · chưa đọc được ({0})".format(type(_e).__name__))
         return vals, status
 
     def _apply_pool_health(self, vals, status_text):

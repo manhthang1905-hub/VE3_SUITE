@@ -729,13 +729,47 @@ def test_vong_chay_that_CO_dung_tran_san_luong():
 
 
 def test_thung_gui_cho_BUNG_mot_loat_roi_moi_rot_deu():
-    """Mẻ cỡ thường phải đi thẳng; quá mức bùng thì mới nhỏ giọt."""
+    """Mẻ cỡ thường phải đi thẳng; quá mức bùng thì mới nhỏ giọt.
+
+    Nhịp SUY RA TỪ GIÁ MỖI JOB, không gõ cứng: giá đổi theo đường chờ đang bật
+    (gộp lời hỏi 1,3 · SSE 3,0 · hỏi từng job 5,7), nên một con số cứng ở đây
+    sẽ đỏ oan mỗi lần đổi đường — mà đổi đường lại đúng là việc cần khuyến khích.
+    """
     dh = _DongHo()
-    th = sb.ThungGui(so_ban=1, ngan_sach=1800.0, dong_ho=dh)   # 10 job/giay
+    NGAN_SACH = 1800.0
+    th = sb.ThungGui(so_ban=1, ngan_sach=NGAN_SACH, dong_ho=dh)
+    moi_giay = NGAN_SACH / 60.0 / sb.req_moi_job()
     assert th.xin(1000) == sb.TRAN_BUNG, "lo dau phai duoc bung tron muc cho phep"
     assert th.xin(1000) == 0, "bung xong ma van cho gui tiep = khong ghim gi ca"
-    dh.tien(3.0)
-    assert th.xin(1000) == 30, "rot deu sai nhip"
+    dh.tien(1.0)
+    assert th.xin(1000) == int(min(moi_giay, sb.TRAN_BUNG)), "rot deu sai nhip"
+
+
+def test_gia_moi_job_DI_THEO_duong_cho_dang_bat(monkeypatch, sc):
+    """Ghim cứng 3,0 trong khi chạy đường 1,27 là tự bóp nhịp gửi còn 42%.
+
+    Ngân sách request là trần THẬT của cả dây chuyền (thông lượng = ngân sách ÷
+    giá mỗi ảnh), nên sai ở đây là mất thẳng sản lượng. Đo 15/08/2026, 40 ảnh
+    mỗi lượt, đếm cả `stream_request`: gộp lời hỏi 1,27 · SSE 3,00.
+    """
+    monkeypatch.setattr(sc, "dung_thu_hoach_chung", lambda: True)
+    assert sb.req_moi_job() == sb.GIA_MOI_JOB["gop"]
+    monkeypatch.setattr(sc, "dung_thu_hoach_chung", lambda: False)
+    monkeypatch.setattr(sc, "dung_sse", lambda: True)
+    assert sb.req_moi_job() == sb.GIA_MOI_JOB["sse"]
+    monkeypatch.setattr(sc, "dung_sse", lambda: False)
+    assert sb.req_moi_job() == sb.GIA_MOI_JOB["hoi"]
+    assert (sb.GIA_MOI_JOB["gop"] < sb.GIA_MOI_JOB["sse"] < sb.GIA_MOI_JOB["hoi"]),         "thu tu gia sai -> chon duong dat hon lai tuong la re hon"
+
+
+def test_duong_re_nhat_duoc_uu_tien(sc):
+    """Ba đường xếp rẻ trước đắt sau, và mặc định phải là đường rẻ nhất."""
+    import inspect
+    than = inspect.getsource(sc._cho_job_xong)
+    i_gop = than.find("dung_thu_hoach_chung()")
+    i_sse = than.find("dung_sse()")
+    assert 0 < i_gop < i_sse, "duong gop loi hoi phai duoc thu TRUOC SSE"
+    assert sc.dung_thu_hoach_chung() is True, "duong re nhat phai BAT san"
 
 
 def test_thung_gui_KHONG_cho_don_qua_muc_bung():
