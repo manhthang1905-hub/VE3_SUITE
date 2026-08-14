@@ -53,6 +53,18 @@ __all__ = [
     "kiem_khoa",
     "tran_song_song",
     "tran_cung",
+    "tran_cung_may_chu",
+    "dung_sse",
+    "TRAN_KET_NOI",
+    "NGAN_SACH_LUONG_MAC_DINH",
+    "don_nhip_song_cu",
+    "phan_luong_cua_toi",
+    "ha_ngan_sach_luong",
+    "ngan_sach_luong",
+    "thu_muc_nhip_song",
+    "dem_ban_dang_chay",
+    "NhipSong",
+    "doc_tran_chi_tiet",
     "phan_loai_nghen",
     "BiNghen",
     "MA_NGHEN_CAP_JOB",
@@ -338,7 +350,31 @@ def tao_client(api_key=None, base_url=None, timeout=180.0, max_retries=3):
         base_url=base_url or None,
         timeout=timeout,
         max_retries=max_retries,
+        http_client=_http_rong(timeout),
     )
+
+
+#: Trần kết nối HTTP mở cùng lúc trong MỘT tiến trình.
+#:
+#: ⚠ `httpx.Client()` mặc định chặn ở `max_connections=100`. Với đường SSE thì
+#: mỗi job đang chờ GIỮ một kết nối suốt vòng đời nó, nên con số mặc định đó
+#: chính là trần số job chạy song song — 100, bất kể máy chủ đang mời 979. Và
+#: nó chặn IM LẶNG: job thứ 101 không lỗi, chỉ nằm đợi trong hàng của httpx.
+TRAN_KET_NOI = 1200
+
+
+def _http_rong(timeout):
+    """`httpx.Client` đã nới trần kết nối. `None` nếu thiếu httpx (SDK sẽ tự dựng)."""
+    try:
+        import httpx
+        return httpx.Client(
+            timeout=httpx.Timeout(float(timeout)),
+            follow_redirects=True,
+            limits=httpx.Limits(max_connections=TRAN_KET_NOI,
+                                max_keepalive_connections=max(64, TRAN_KET_NOI // 4)),
+        )
+    except Exception:
+        return None
 
 
 # ── Tỉ lệ khung ───────────────────────────────────────────────────────────────
@@ -533,6 +569,69 @@ class NhipHoiTham:
 NHIP_HOI = NhipHoiTham()
 
 
+def dung_sse():
+    """Có đi đường SSE không? Tắt bằng `SHOPAPI_SSE=0`."""
+    return (os.environ.get("SHOPAPI_SSE") or "1").strip() not in ("0", "false", "False")
+
+
+def _cho_bang_sse(client, job_id, timeout, on_progress=None):
+    """Chờ job qua `GET /v1/jobs/{id}/events` — MỘT kết nối, KHÔNG hỏi thăm lần nào.
+
+    ═══ VÌ SAO ĐÂY LÀ CHỖ THÁO NÚT THẮT ═══
+
+    Trần thật của dây chuyền không phải sức chứa nhà máy mà là **1.000
+    request/phút** của cả tài khoản. Với đường hỏi thăm, một job tốn 1 `POST` +
+    N lần `GET` trong suốt vòng đời — N tăng theo thời gian job chạy. Đo
+    12/08/2026: 100 job × hỏi mỗi 1–5 giây = vài nghìn request/phút, tool tự đâm
+    vào trần của chính nó và "nhà máy bão hoà ở 40 chỗ" — trong khi cùng ngày,
+    đẩy thuần `POST` cho ra 134 job đồng thời.
+
+    `NhipHoiTham` chữa bằng cách giãn nhịp hỏi, nhưng đó là chia lại một cái
+    bánh quá nhỏ: 600 job đang bay trên ngân sách 10 lời gọi/giây nghĩa là mỗi
+    job được hỏi 60 giây một lần, tức là biết tin job xong muộn cả phút.
+
+    SSE bỏ hẳn cái bánh đó. Đo thật 15/08/2026 trên `api.shopapi.vn`: một job
+    ảnh trả 11 sự kiện tiến độ trong 30,7 giây qua **một** kết nối, và báo
+    `succeeded` ngay giây nó xong. Số request mỗi job trở thành HẰNG SỐ — không
+    còn phụ thuộc job chạy bao lâu:
+
+        POST tạo job  +  1 kết nối SSE  +  1 GET lấy kết quả  =  3
+
+    Sự kiện cuối KHÔNG mang `output`/`outputs` (đã đo: chỉ có `status`,
+    `progress`, `job_id`, `at`), nên vẫn phải hỏi một lần để lấy đường tải.
+
+    Ném y hợp đồng của `jobs.wait`: `JobFailedError` khi job hỏng,
+    `JobTimeoutError` khi quá hạn.
+    """
+    bootstrap_sdk()
+    from shopapi._exceptions import JobFailedError, JobTimeoutError
+
+    t0 = time.monotonic()
+    tt_cuoi = None
+    for ev in client.jobs.stream(job_id, timeout=timeout):
+        tt_cuoi = ev.get("status") or tt_cuoi
+        if on_progress is not None:
+            try:
+                on_progress(ev)
+            except Exception:       # noqa: BLE001 — báo tiến độ hỏng không giết job
+                pass
+    if tt_cuoi is None:
+        # Dòng đóng mà chưa nói trạng thái nào -> không kết luận gì, để nơi gọi
+        # lùi về đường hỏi thăm. Đoán bừa ở đây là báo hỏng cho job có thể đang chạy.
+        raise RuntimeError("dong SSE dong ma chua bao trang thai")
+    j = client.jobs.retrieve(job_id)
+    job = j if isinstance(j, dict) else j.to_dict()
+    tt = job.get("status") or tt_cuoi
+    if tt == "succeeded":
+        return job
+    if tt in ("failed", "cancelled", "rejected"):
+        raise JobFailedError(
+            "Job {0} ket thuc voi trang thai '{1}'.".format(job_id, tt), job=job)
+    raise JobTimeoutError(
+        "Dong SSE dong ma job {0} van '{1}'.".format(job_id, tt),
+        job=job, job_id=job_id, waited_seconds=time.monotonic() - t0)
+
+
 def _cho_job_xong(client, job_id, timeout, on_progress=None, uoc_giay=None):
     """Chờ job kết thúc, TRA LẠI NHỊP HỎI MỖI VÒNG.
 
@@ -546,6 +645,17 @@ def _cho_job_xong(client, job_id, timeout, on_progress=None, uoc_giay=None):
     """
     bootstrap_sdk()
     from shopapi._exceptions import JobFailedError, JobTimeoutError
+
+    # ĐƯỜNG SSE TRƯỚC. Hỏng thì lùi về hỏi thăm — chậm hơn nhiều nhưng vẫn ra
+    # hàng, và job đã trả tiền rồi nên tuyệt đối không được bỏ vì một đường
+    # truyền không dựng nổi.
+    if dung_sse() and hasattr(getattr(client, "jobs", None), "stream"):
+        try:
+            return _cho_bang_sse(client, job_id, timeout, on_progress=on_progress)
+        except (JobFailedError, JobTimeoutError):
+            raise          # kết luận THẬT về job — đừng chờ lại lần nữa
+        except Exception:
+            pass           # đường truyền hỏng -> lùi về hỏi thăm
 
     KET_THUC = ("succeeded", "failed", "cancelled", "rejected")
     #: Bao nhiêu lượt đọc trạng thái hỏng LIÊN TIẾP thì thôi coi là "mạng chập".
@@ -910,6 +1020,322 @@ def doc_v1_me(api_key=None, client=None, timeout=20.0):
         return me if isinstance(me, dict) else dict(me)
     except Exception:
         return {}
+
+
+def doc_tran_chi_tiet(loai, api_key=None, client=None):
+    """`(trần_đang_cấp, trần_cứng)` của một loại job, đọc trong MỘT lời gọi.
+
+    ═══ VÌ SAO KHÔNG DÙNG HẰNG SỐ TRẦN CỨNG NỮA ═══
+
+    :data:`TRAN_CUNG_MAC_DINH` và `shopapi._constants.CONCURRENCY_HARD_CAP` đều
+    là BẢN CHÉP của một con số sống bên máy chủ, và cả hai đã cũ. Đo lúc 03:0x
+    ngày 15/08/2026, `GET /v1/me` nói:
+
+        image : limit  979   hard_cap 1536      (bản chép:  384)
+        video : limit  374   hard_cap  832      (bản chép:   64)
+
+    `_hoi_tran` lấy `min(limit, trần_cứng)`, nên bản chép cũ đang cắt video từ
+    374 xuống **64** — bóp 5,8 lần — và ảnh từ 979 xuống 384. Máy chủ mở rộng
+    nhà máy mà tool không hề ăn theo, đúng thứ ghi chú ở `TRAN_CUNG_MAC_DINH`
+    đã cảnh báo sẽ xảy ra ("bản chép này sẽ cũ đi") — chỉ có điều nó cảnh báo
+    nhầm chỗ: SDK cũng chỉ là một bản chép nữa, cũ y như thế.
+
+    Máy chủ trả `hard_cap` ngay trong `/v1/me`. Đọc thẳng từ đó thì không còn
+    bản chép nào để cũ. Hằng số chỉ còn là lưới cuối khi hỏi không được.
+    """
+    # ⚠ TRẦN ĐANG CẤP đi qua ĐÚNG MỘT CỬA: :func:`tran_song_song`. Đọc thẳng
+    # `/v1/me` ở đây nữa là dựng cửa thứ hai cho cùng một con số — hai đường thì
+    # sớm muộn lệch nhau, và mọi thứ đã cắm vào cửa cũ (kể cả bài kiểm) im lặng
+    # thành vô hiệu.
+    tran = int(tran_song_song(loai, api_key=api_key, mac_dinh=-1, client=client))
+    return tran, tran_cung_may_chu(loai, api_key=api_key, client=client)
+
+
+#: `hard_cap` đổi hoạ hoằn (chỉ khi máy chủ dựng thêm nhà máy), nên nhớ lâu.
+_TRAN_CUNG_TTL = 300.0
+_tran_cung_nho = {}
+_tran_cung_khoa = threading.Lock()
+
+
+def tran_cung_may_chu(loai, api_key=None, client=None, bay_gio=None):
+    """Trần CỨNG do máy chủ tự khai trong `/v1/me`, có nhớ tạm.
+
+    Lùi về hằng số chép sẵn khi hỏi không được — nhưng chỉ khi CHƯA đọc được
+    lần nào. Đo 15/08/2026: máy chủ khai ảnh 1.536 / video 832, còn hằng số
+    trong SDK vẫn là 384 / 64. Lấy nhầm bản chép là bóp video 5,8 lần.
+    """
+    gio = float(time.time() if bay_gio is None else bay_gio)
+    with _tran_cung_khoa:
+        cu = _tran_cung_nho.get(loai)
+        if cu and (gio - cu[1]) < _TRAN_CUNG_TTL:
+            return cu[0]
+    me = doc_v1_me(api_key=api_key, client=client, timeout=30.0)
+    v = _so(_lay(_lay(_lay(_lay(me, "limits"), "concurrent_jobs_detail"), loai),
+                 "hard_cap"), 0)
+    if v <= 0:
+        with _tran_cung_khoa:
+            cu = _tran_cung_nho.get(loai)
+        return cu[0] if cu else int(tran_cung(loai))
+    with _tran_cung_khoa:
+        _tran_cung_nho[loai] = (v, gio)
+    return v
+
+
+def _lay(o, khoa):
+    """Đọc một khoá từ dict HOẶC từ `Model` của SDK. `None` khi không có."""
+    if o is None:
+        return None
+    if isinstance(o, dict):
+        return o.get(khoa)
+    try:
+        return o[khoa]
+    except Exception:
+        return getattr(o, khoa, None)
+
+
+def _so(v, mac_dinh):
+    try:
+        return int(v)
+    except (TypeError, ValueError):
+        return mac_dinh
+
+
+# ── Nhịp sống: mấy tiến trình đang tranh nhau cùng một loại job ──────────────
+#
+# Mỗi mã chạy trong MỘT TIẾN TRÌNH RIÊNG, và trần máy chủ (`limit`) là của CẢ
+# TÀI KHOẢN chứ không phải của một tiến trình. Không có chỗ nào để tám tiến
+# trình bàn với nhau, nên bản trước chia bằng một con số cứng trong
+# `settings.yaml` — `max_concurrent: 40`, `shopapi_video_concurrency: 16`.
+#
+# Con số cứng sai theo cả hai chiều, và luôn sai:
+#
+#   * đặt thấp  -> tám mã ăn 320/979 chỗ ảnh, bỏ phí hai phần ba nhà máy;
+#   * đặt cao   -> lúc chỉ MỘT mã chạy thì nó xin trọn phần của tám mã.
+#
+# Người dùng thấy đúng cái đó: "xin 290 mà chỉ 22 job chạy thật", và "video còn
+# dư chỗ, 1 mã × 16".
+#
+# Cách chữa không cần ai bàn với ai: mỗi tiến trình đang chạy một mẻ để lại một
+# file trong thư mục chung, chạm lại vài chục giây một lần. Đếm file còn tươi
+# ra ĐÚNG số tiến trình đang tranh nhau loại job đó — sống thật, không phải con
+# số trong cấu hình. Tiến trình chết đột ngột thì file của nó nguội đi và tự
+# hết tính, khỏi cần dọn.
+#
+# Đếm RIÊNG theo loại job là điều quan trọng: lúc bảy mã đang làm ảnh và một mã
+# làm video, mã video phải được trọn 374 chỗ video chứ không phải một phần tám.
+
+#: File nhịp sống cũ hơn ngần này giây = tiến trình đã chết, không tính nữa.
+NHIP_SONG_HAN = 90.0
+
+#: Chạm lại file nhịp sống thưa nhất ngần này giây một lần.
+NHIP_SONG_NHIP = 20.0
+
+
+def thu_muc_nhip_song():
+    """Thư mục chung để các tiến trình mã điểm danh. Tạo sẵn nếu chưa có."""
+    d = (os.environ.get("SHOPAPI_NHIP_DIR") or "").strip()
+    if not d:
+        import tempfile
+        d = os.path.join(tempfile.gettempdir(), "shopapi-nhip")
+    try:
+        os.makedirs(d, exist_ok=True)
+    except OSError:
+        pass
+    return d
+
+
+class NhipSong:
+    """Ghi danh "tiến trình này đang chạy một mẻ `loai`" cho tới khi `dong()`.
+
+    Dùng như context manager. Hỏng ở đây KHÔNG được làm chết mẻ chạy: thiếu
+    điểm danh thì cùng lắm chia trần bảo thủ hơn, còn ném lỗi là mất cả mẻ.
+    """
+
+    def __init__(self, loai, thu_muc=None, pid=None):
+        self.loai = str(loai)
+        self.thu_muc = thu_muc or thu_muc_nhip_song()
+        self.pid = int(pid if pid is not None else os.getpid())
+        # `id(self)` để một tiến trình chạy hai mẻ cùng loại vẫn ra hai chỗ ngồi.
+        self.duong_dan = os.path.join(
+            self.thu_muc, "{0}-{1}-{2}".format(self.loai, self.pid, id(self)))
+        self._lan_cuoi = 0.0
+        self.diem_danh(ep=True)
+
+    def diem_danh(self, ep=False):
+        """Chạm lại file. Gọi thoải mái — tự thưa ra `NHIP_SONG_NHIP` giây/lần."""
+        gio = time.time()
+        if not ep and (gio - self._lan_cuoi) < NHIP_SONG_NHIP:
+            return
+        try:
+            with open(self.duong_dan, "w", encoding="utf-8") as f:
+                f.write(str(int(gio)))
+            self._lan_cuoi = gio
+        except OSError:
+            pass
+
+    def dong(self):
+        try:
+            os.remove(self.duong_dan)
+        except OSError:
+            pass
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *a):
+        self.dong()
+        return False
+
+
+def dem_ban_dang_chay(loai, thu_muc=None, han=None, bay_gio=None):
+    """Bao nhiêu tiến trình đang chạy mẻ `loai` NGAY LÚC NÀY. Tối thiểu 1.
+
+    Trả 1 khi không đếm được — chia cho 1 là không chia, tức là lùi về hành vi
+    "một mình một chợ". Thà xin rộng rồi để `429`/hàng chờ kéo xuống, còn hơn
+    chia cho một con số bịa rồi tự bóp.
+    """
+    thu_muc = thu_muc or thu_muc_nhip_song()
+    han = float(NHIP_SONG_HAN if han is None else han)
+    gio = float(time.time() if bay_gio is None else bay_gio)
+    # `loai=""` -> đếm MỌI loại (dùng cho ngân sách luồng của cả máy).
+    tien_to = (str(loai) + "-") if loai else ""
+    n = 0
+    try:
+        for ten in os.listdir(thu_muc):
+            if ten == _TEN_FILE_NGAN_SACH:
+                continue          # file ngân sách, không phải một chỗ ngồi
+            if tien_to and not ten.startswith(tien_to):
+                continue
+            try:
+                if (gio - os.path.getmtime(os.path.join(thu_muc, ten))) <= han:
+                    n += 1
+            except OSError:
+                pass
+    except OSError:
+        return 1
+    return max(1, n)
+
+
+# ── Ngân sách LUỒNG của cả máy ───────────────────────────────────────────────
+#
+# Trần máy chủ không phải trần duy nhất. Thiết kế hiện tại mở MỘT LUỒNG cho mỗi
+# job đang bay (`pool.submit(_boc, ...)` — gửi, chờ, tải file, ghi Excel), nên
+# số job chạy cùng lúc trên máy này bị chặn bởi số luồng Windows chịu mở.
+#
+# Đã chạm trần thật: 8 tiến trình mã × 88 luồng = 704 luồng thì
+# `ThreadPoolExecutor.submit` bắt đầu ném `RuntimeError: can't start new
+# thread`. Nên ngân sách mặc định để dưới mức đó, và nó là ngân sách CỦA CẢ
+# MÁY — chia cho số tiến trình đang chạy, chứ không phải mỗi tiến trình một suất.
+#
+# Con số này TỰ HẠ khi máy nói không: tiến trình nào ăn `RuntimeError` sẽ chia
+# đôi ngân sách và ghi vào file chung, nên mọi tiến trình anh em cùng biết mà
+# lùi — thay vì từng đứa một tự đâm vào tường rồi tự rút ra.
+
+#: Tổng số job được phép bay cùng lúc trên MỘT MÁY, cộng cả ảnh lẫn video.
+#:
+#: ⚠ CON SỐ NÀY ĐÃ ĐO, KHÔNG PHẢI ĐOÁN. Ghi chú cũ nói Windows từ chối mở luồng
+#: quanh 704, nên bản đầu để 600. Đo lại ngày 15/08/2026 trên chính máy này:
+#: **3.000 luồng mở hết, không chạm trần, bộ nhớ không đáng kể**. Luồng chờ
+#: mạng gần như không tốn gì — sự cố 704 hôm đó là chuyện khác, không phải trần
+#: luồng của hệ điều hành.
+#:
+#: Trần thật giờ là hai thứ khác, và cả hai đều cao hơn 600 nhiều:
+#:
+#:   * máy chủ đang mời 979 chỗ ảnh + 374 chỗ video = 1.353;
+#:   * `httpx` chặn 100 kết nối/tiến trình -> đã nới, xem :data:`TRAN_KET_NOI`.
+#:
+#: Để 1.400 là vừa đủ ôm trọn phần máy chủ mời mà vẫn còn chốt chặn. Nó TỰ HẠ
+#: khi máy thật sự nói không (xem :func:`ha_ngan_sach_luong`), nên đặt rộng
+#: không phải là đánh cược — đặt hẹp mới là bỏ phí chắc chắn.
+NGAN_SACH_LUONG_MAC_DINH = 1400
+
+#: Không bao giờ hạ ngân sách xuống dưới mức này — hạ nữa là tool đứng im.
+NGAN_SACH_LUONG_SAN = 24
+
+_TEN_FILE_NGAN_SACH = "ngan-sach-luong"
+
+
+#: Mức đã hạ chỉ có giá trị trong ngần này giây, sau đó tự lành lại.
+#:
+#: ⚠ NGÂN SÁCH CHỈ BIẾT ĐI XUỐNG LÀ MỘT CÁI BẪY MỘT CHIỀU. Đã dính thật ngày
+#: 15/08/2026: bộ kiểm thử mô phỏng "máy hết luồng" chạy trên thư mục nhịp sống
+#: CHUNG (lúc đó chưa cách ly), gọi `ha_ngan_sach_luong` mấy lượt, và ghim ngân
+#: sách của cả máy xuống sàn **24**. Sau đó mọi lần chạy THẬT đều khởi động ở 24
+#: job thay vì 979 — không một dòng nào nói vì sao, và không có đường nào tự lên
+#: lại. Một cú nghẹn thoáng qua (hay một lần chạy kiểm) không được phép định
+#: đoạt phần còn lại của đời máy.
+NGAN_SACH_HA_TTL = 1800.0
+
+
+def ngan_sach_luong(thu_muc=None, bay_gio=None):
+    """Ngân sách luồng của cả máy hiện tại.
+
+    Ưu tiên mức đã hạ — nó là bằng chứng máy này thật sự không mở nổi nhiều hơn
+    thế. Nhưng bằng chứng đó CÓ HẠN DÙNG (:data:`NGAN_SACH_HA_TTL`): hết hạn thì
+    quay về mức mặc định và thăm dò lại. Máy vẫn chật thì lần nghẹn sau lại hạ,
+    mất đúng một lô; còn máy đã rảnh thì tool lấy lại được cả nhà máy.
+    """
+    thu_muc = thu_muc or thu_muc_nhip_song()
+    mac_dinh = max(NGAN_SACH_LUONG_SAN,
+                   _so(os.environ.get("SHOPAPI_NGAN_SACH_LUONG"), NGAN_SACH_LUONG_MAC_DINH))
+    d = os.path.join(thu_muc, _TEN_FILE_NGAN_SACH)
+    try:
+        gio = float(time.time() if bay_gio is None else bay_gio)
+        if (gio - os.path.getmtime(d)) > NGAN_SACH_HA_TTL:
+            return mac_dinh          # bằng chứng đã cũ -> thăm dò lại
+        with open(d, "r", encoding="utf-8") as f:
+            v = int((f.read() or "0").strip())
+        if v > 0:
+            return max(NGAN_SACH_LUONG_SAN, min(v, mac_dinh))
+    except (OSError, ValueError):
+        pass
+    return mac_dinh
+
+
+def ha_ngan_sach_luong(thu_muc=None):
+    """Máy vừa từ chối mở luồng → chia đôi ngân sách CHUNG. Trả mức mới.
+
+    Ghi ra file để mọi tiến trình anh em cùng lùi. Một đứa đâm vào tường là cả
+    nhà biết, thay vì bảy đứa còn lại lần lượt đâm lại đúng chỗ đó.
+    """
+    thu_muc = thu_muc or thu_muc_nhip_song()
+    moi = max(NGAN_SACH_LUONG_SAN, ngan_sach_luong(thu_muc) // 2)
+    # Ghi lại mốc thời gian: mức hạ có hạn dùng, xem `NGAN_SACH_HA_TTL`.
+    try:
+        with open(os.path.join(thu_muc, _TEN_FILE_NGAN_SACH), "w", encoding="utf-8") as f:
+            f.write(str(moi))
+    except OSError:
+        pass
+    return moi
+
+
+def phan_luong_cua_toi(thu_muc=None, so_ban=None):
+    """Suất luồng của TIẾN TRÌNH NÀY = ngân sách cả máy ÷ số tiến trình đang chạy.
+
+    Đếm bạn theo MỌI loại job, không riêng loại mình đang làm: luồng là tài
+    nguyên chung của máy, mã đang dựng video cũng ăn vào đúng cái ngân sách mà
+    mã đang dựng ảnh đang dùng.
+    """
+    thu_muc = thu_muc or thu_muc_nhip_song()
+    n = so_ban if so_ban else dem_ban_dang_chay("", thu_muc=thu_muc)
+    return max(1, ngan_sach_luong(thu_muc) // max(1, int(n)))
+
+
+def don_nhip_song_cu(thu_muc=None, han=None):
+    """Xoá file nhịp sống đã nguội. Gọi lúc khởi động cho thư mục khỏi phình."""
+    thu_muc = thu_muc or thu_muc_nhip_song()
+    han = float(NHIP_SONG_HAN if han is None else han) * 4
+    gio = time.time()
+    try:
+        for ten in os.listdir(thu_muc):
+            d = os.path.join(thu_muc, ten)
+            try:
+                if (gio - os.path.getmtime(d)) > han:
+                    os.remove(d)
+            except OSError:
+                pass
+    except OSError:
+        pass
 
 
 def tran_song_song(loai, api_key=None, mac_dinh=1, client=None):

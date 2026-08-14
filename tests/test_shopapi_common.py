@@ -387,3 +387,70 @@ def test_SDK_tim_duoc_KHONG_can_duong_dan_rieng_cua_may_nay(sc):
     if ngoai:
         assert co.index(kem) < min(co.index(p) for p in ngoai), \
             "duong dan rieng cua may nay thang ban kem repo -> may khac van thieu SDK"
+
+
+# ── Ngân sách luồng: hạ được thì phải LÊN lại được ───────────────────────────
+
+
+def test_ngan_sach_ha_roi_TU_LANH_sau_khi_het_han(sc, tmp_path, monkeypatch):
+    """Bẫy một chiều: hạ thì dễ, lên thì không có đường.
+
+    Đã dính thật 15/08/2026. Bộ kiểm thử mô phỏng "máy hết luồng" chạy trên thư
+    mục nhịp sống CHUNG (lúc đó chưa cách ly), gọi `ha_ngan_sach_luong` mấy
+    lượt, và ghim ngân sách của cả máy xuống sàn 24. Sau đó MỌI lần chạy thật
+    khởi động ở 24 job thay vì 979 — không một dòng nào nói vì sao. Một cú nghẹn
+    thoáng qua không được phép định đoạt phần còn lại của đời máy.
+    """
+    import os, time
+    d = str(tmp_path)
+    monkeypatch.setenv("SHOPAPI_NHIP_DIR", d)
+    goc = sc.ngan_sach_luong(thu_muc=d)
+    ha = sc.ha_ngan_sach_luong(thu_muc=d)
+    assert ha == max(sc.NGAN_SACH_LUONG_SAN, goc // 2)
+    assert sc.ngan_sach_luong(thu_muc=d) == ha, "vua ha xong ma khong nho"
+    # Đẩy dấu thời gian ra quá hạn -> phải quay về mức mặc định để thăm dò lại.
+    f = os.path.join(d, "ngan-sach-luong")
+    cu = time.time() - sc.NGAN_SACH_HA_TTL - 60
+    os.utime(f, (cu, cu))
+    assert sc.ngan_sach_luong(thu_muc=d) == goc, "het han roi ma van ghim o muc da ha"
+
+
+def test_ngan_sach_khong_bao_gio_xuong_duoi_SAN(sc, tmp_path, monkeypatch):
+    monkeypatch.setenv("SHOPAPI_NHIP_DIR", str(tmp_path))
+    for _ in range(20):
+        sc.ha_ngan_sach_luong(thu_muc=str(tmp_path))
+    assert sc.ngan_sach_luong(thu_muc=str(tmp_path)) == sc.NGAN_SACH_LUONG_SAN
+
+
+def test_ngan_sach_khong_vuot_muc_MAC_DINH(sc, tmp_path, monkeypatch):
+    """File rác ghi 999999 không được biến thành 999999 luồng."""
+    import os
+    monkeypatch.setenv("SHOPAPI_NHIP_DIR", str(tmp_path))
+    with open(os.path.join(str(tmp_path), "ngan-sach-luong"), "w", encoding="utf-8") as f:
+        f.write("999999")
+    assert sc.ngan_sach_luong(thu_muc=str(tmp_path)) <= sc.NGAN_SACH_LUONG_MAC_DINH
+
+
+def test_dem_ban_BO_QUA_file_ngan_sach(sc, tmp_path, monkeypatch):
+    """File ngân sách nằm chung thư mục — đếm nhầm nó là một chỗ ngồi là chia sai trần."""
+    monkeypatch.setenv("SHOPAPI_NHIP_DIR", str(tmp_path))
+    sc.ha_ngan_sach_luong(thu_muc=str(tmp_path))
+    assert sc.dem_ban_dang_chay("", thu_muc=str(tmp_path)) == 1
+    with sc.NhipSong("image", thu_muc=str(tmp_path)):
+        assert sc.dem_ban_dang_chay("image", thu_muc=str(tmp_path)) == 1
+        assert sc.dem_ban_dang_chay("video", thu_muc=str(tmp_path)) == 1   # san la 1
+
+
+def test_nhip_song_NGUOI_DA_CHET_khong_con_tinh(sc, tmp_path, monkeypatch):
+    """Tiến trình chết đột ngột để lại file — nguội đi thì tự hết tính, khỏi dọn."""
+    import os, time
+    monkeypatch.setenv("SHOPAPI_NHIP_DIR", str(tmp_path))
+    n = sc.NhipSong("image", thu_muc=str(tmp_path))
+    assert sc.dem_ban_dang_chay("image", thu_muc=str(tmp_path)) == 1
+    cu = time.time() - sc.NHIP_SONG_HAN - 10
+    os.utime(n.duong_dan, (cu, cu))
+    assert sc.dem_ban_dang_chay("image", thu_muc=str(tmp_path)) == 1, "san phai la 1"
+    n2 = sc.NhipSong("image", thu_muc=str(tmp_path))
+    assert sc.dem_ban_dang_chay("image", thu_muc=str(tmp_path)) == 1, \
+        "file nguoi da chet van bi tinh -> chia tran cho ca ma khong con chay"
+    n2.dong()

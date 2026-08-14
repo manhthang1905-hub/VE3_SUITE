@@ -4217,13 +4217,27 @@ Write-Output $kill.Count
         # con số đã giết nhà máy ngày 12/08/2026 (nó khai 3.072 luồng rồi tiến
         # trình biến mất, 9 lần trong ngày).
         #
-        # Số dưới đây là số ĐÃ CHẠY THẬT: 8 mã × 40 ảnh = 320, × 16 video = 128.
-        # Giờ đỉnh 13/08/2026 ra 396 ảnh + 483 video = 879 sản phẩm. Máy chủ đo
-        # được dựng 134 job đồng thời ở 222 ảnh/phút, nên 320 còn dư đầu cho
-        # AIMD dò lên/xuống mà không chạm trần nhà máy.
-        self.config_data.setdefault("max_concurrent", 40)              # ảnh / mã
-        self.config_data.setdefault("shopapi_video_concurrency", 16)   # video / mã
+        # ⚠ HAI SỐ ẢNH/VIDEO DƯỚI ĐÂY GIỜ CHỈ CÒN DÙNG KHI TẮT TỰ ĐIỀU TIẾT.
+        #
+        # Chúng từng là TRẦN CỨNG mỗi mã (40 ảnh, 16 video), và con số gõ tay
+        # thì sai theo cả hai chiều cùng một lúc. Đo 15/08/2026, `/v1/me` đang
+        # mời **979 chỗ ảnh** và **374 chỗ video**:
+        #
+        #   * tám mã chạy  -> 8×40 = 320 trên 979, bỏ phí hai phần ba nhà máy;
+        #   * một mã chạy  -> 16 trên 374 chỗ video, bỏ phí 96%.
+        #
+        # Đúng hai thứ người vận hành nhìn thấy: "xin 290 mà chỉ 22 job chạy
+        # thật", và "video còn dư chỗ, 1 mã × 16".
+        #
+        # Giờ trần đến từ máy chủ, chia cho SỐ TIẾN TRÌNH ĐANG SỐNG THẬT (đếm
+        # theo file nhịp sống, riêng từng loại job), rồi cắt lần nữa bằng suất
+        # luồng của máy. Xem `shopapi_batch._hoi_tran` và `shopapi_common`.
+        self.config_data.setdefault("shopapi_tu_dieu_tiet", True)
+        self.config_data.setdefault("max_concurrent", 40)              # ảnh / mã (chỉ khi tắt tự điều tiết)
+        self.config_data.setdefault("shopapi_video_concurrency", 16)   # video / mã (nt)
         self.config_data.setdefault("shopapi_ma_song_song", SHOPAPI_MA_SONG_SONG_MAC_DINH)
+        os.environ["SHOPAPI_TU_DIEU_TIET"] = (
+            "1" if self.config_data.get("shopapi_tu_dieu_tiet", True) else "0")
         self._chia_ngan_sach_hoi_tham()
         self.config_data.setdefault("music_workspace_mode_enabled", True)
         self.config_data.setdefault("image_hide_chrome", True)   # mặc định ẩn chrome tạo ảnh

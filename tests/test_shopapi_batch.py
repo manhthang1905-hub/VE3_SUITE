@@ -115,24 +115,72 @@ def test_so_luong_lay_dung_con_so_may_chu_tra_ve(tran_gia, nhat_ky):
 
 
 def test_so_luong_bi_chan_tren_boi_tran_nguoi_dung_dat(tran_gia, nhat_ky):
-    """Máy chủ rộng bao nhiêu cũng không được phá giới hạn người dùng đã đặt."""
+    """TẮT tự điều tiết thì máy chủ rộng bao nhiêu cũng không phá được trần người dùng.
+
+    Bật tự điều tiết (mặc định) thì `tran_tool` KHÔNG còn là trần — trần đến từ
+    máy chủ chia cho số tiến trình đang sống. Muốn ghim cứng thì tắt cờ; đó là
+    lý do cờ tồn tại. Xem `test_TU_DIEU_TIET_bo_qua_tran_go_tay` ngay dưới.
+    """
     tran_gia(50)
-    assert sb.so_luong_song_song("image", tran_tool=4, log=nhat_ky) == 4
+    assert sb.so_luong_song_song("image", tran_tool=4, log=nhat_ky,
+                                 tu_dieu_tiet=False) == 4
 
 
-def test_so_luong_khong_bao_gio_vuot_tran_CUNG_cua_loai_job(tran_gia, nhat_ky, sc):
+def test_TU_DIEU_TIET_bo_qua_tran_go_tay_va_an_theo_may_chu(tran_gia, nhat_ky, monkeypatch, sc):
+    """Con số gõ tay không được phép bóp nhà máy khi máy chủ đang mời rộng.
+
+    Đây là lỗi người vận hành thấy ngày 15/08/2026: `/v1/me` mời 979 chỗ ảnh mà
+    `max_concurrent: 40` giữ tool ở 40 — "xin 290 mà chỉ 22 job chạy thật".
+    """
+    monkeypatch.setattr(sc, "dem_ban_dang_chay", lambda *a, **k: 1)
+    monkeypatch.setattr(sc, "phan_luong_cua_toi", lambda *a, **k: 10 ** 6)
+    monkeypatch.setattr(sc, "tran_cung_may_chu", lambda *a, **k: 10 ** 6)
+    tran_gia(500)
+    assert sb.so_luong_song_song("image", tran_tool=4, log=nhat_ky,
+                                 tu_dieu_tiet=True) == 500
+
+
+def test_TU_DIEU_TIET_chia_deu_cho_so_tien_trinh_dang_song(tran_gia, nhat_ky, monkeypatch, sc):
+    """Tám mã cùng chạy thì mỗi mã một phần tám, không phải mỗi mã trọn trần."""
+    monkeypatch.setattr(sc, "phan_luong_cua_toi", lambda *a, **k: 10 ** 6)
+    monkeypatch.setattr(sc, "tran_cung_may_chu", lambda *a, **k: 10 ** 6)
+    tran_gia(800)
+    for ban, mong_doi in ((1, 800), (2, 400), (8, 100)):
+        monkeypatch.setattr(sc, "dem_ban_dang_chay", lambda *a, **k: ban)
+        assert sb.so_luong_song_song("image", log=nhat_ky, tu_dieu_tiet=True) == mong_doi
+
+
+def test_TU_DIEU_TIET_con_bi_cat_boi_SUAT_LUONG_cua_may(tran_gia, nhat_ky, monkeypatch, sc):
+    """Máy chủ rộng mấy cũng không mở nổi nhiều luồng hơn máy này chịu."""
+    monkeypatch.setattr(sc, "dem_ban_dang_chay", lambda *a, **k: 1)
+    monkeypatch.setattr(sc, "tran_cung_may_chu", lambda *a, **k: 10 ** 6)
+    monkeypatch.setattr(sc, "phan_luong_cua_toi", lambda *a, **k: 75)
+    tran_gia(900)
+    assert sb.so_luong_song_song("image", log=nhat_ky, tu_dieu_tiet=True) == 75
+
+
+def test_so_luong_khong_bao_gio_vuot_tran_CUNG_cua_loai_job(tran_gia, nhat_ky, sc, monkeypatch):
     """Một lời `/v1/me` trả số vô lý cũng không biến thành 9999 luồng."""
     # KHONG go cung con so: may chu nang tran la `tran_cung` an theo ngay. Da
     # lech mot lan (anh 128 -> 384) va lam do bai kiem nay du ma van dung.
     # Doi chieu VOI NGUON THAT, chi doi hoi no la mot tran huu han > 0.
-    tran_gia(9999)
-    tran_anh = sc.tran_cung("image")
-    assert 0 < tran_anh < 9999
-    assert sb.so_luong_song_song("image", log=nhat_ky) == tran_anh
-    tran_gia(9999)
-    tran_video = sc.tran_cung("video")
-    assert 0 < tran_video < 9999
-    assert sb.so_luong_song_song("video", log=nhat_ky) == tran_video
+    # NGUỒN THẬT của trần cứng giờ là `/v1/me` (`hard_cap`), KHÔNG phải hằng số
+    # chép trong SDK. Đo 15/08/2026: máy chủ khai ảnh 1.536 / video 832, còn
+    # hằng số vẫn 384 / 64 — đối chiếu với bản chép là khoá tool vào số đã cũ.
+    for loai, cung in (("image", 1536), ("video", 832)):
+        monkeypatch.setattr(sc, "tran_cung_may_chu", lambda *a, **k: cung)
+        tran_gia(9999)
+        assert sb.so_luong_song_song(loai, log=nhat_ky, tu_dieu_tiet=False) == cung
+
+
+def test_may_chu_khong_khai_tran_cung_thi_lui_ve_HANG_SO(tran_gia, nhat_ky, sc, monkeypatch):
+    """Không đọc được `hard_cap` thì hằng số chép sẵn là lưới cuối, không phải 9999."""
+    monkeypatch.setattr(sc, "tran_cung_may_chu", lambda loai, **k: sc.tran_cung(loai))
+    for loai in ("image", "video"):
+        tran_gia(9999)
+        cung = sc.tran_cung(loai)
+        assert 0 < cung < 9999
+        assert sb.so_luong_song_song(loai, log=nhat_ky, tu_dieu_tiet=False) == cung
 
 
 def test_hoi_khong_duoc_thi_doan_THAP_chu_khong_dung_im(monkeypatch, sc, nhat_ky):
@@ -318,7 +366,8 @@ def test_lo_KHONG_BAO_GIO_vuot_tran_may_chu(tran_gia, nhat_ky):
 
 def test_tran_nguoi_dung_dat_van_thang_khi_may_chu_rong(tran_gia, nhat_ky):
     tran_gia(64)
-    sb.chay_ca_me(list(range(30)), lambda v: v, "image", tran_tool=2, log=nhat_ky)
+    sb.chay_ca_me(list(range(30)), lambda v: v, "image", tran_tool=2, log=nhat_ky,
+                  tu_dieu_tiet=False)
     assert max(_dang_bay(nhat_ky)) <= 2
 
 
@@ -512,3 +561,82 @@ def test_het_luong_thi_TRA_VIEC_VE_HANG_CHO_chu_khong_lam_mat(tran_gia, nhat_ky,
 
     assert ket == list(range(24)), "mat viec khi het luong"
     assert any("khong mo them duoc luong" in m for _lv, m in nhat_ky.dong)
+
+
+# ── Trần theo SẢN LƯỢNG ĐO ĐƯỢC ──────────────────────────────────────────────
+#
+# Kiểu nghẽn mà `NhipDo` và `CongHangCho` đều mù: máy chủ NHẬN HẾT rồi chạy
+# chậm. Không `429`, không `503`, `queued = 0`. Đo 15/08/2026: `/v1/me` khai
+# `capacity 1088` cho nhà máy ảnh trong khi `workers_online = 1`; bắn 60 ảnh ra
+# 8,5 ảnh/phút và 2 job chết vì quá hạn 300 giây, dù một ảnh chạy một mình chỉ
+# mất 30 giây. Thứ duy nhất nhìn thấy nó là số job xong mỗi phút.
+
+
+class _DongHo:
+    def __init__(self): self.t = 0.0
+    def __call__(self): return self.t
+    def tien(self, giay): self.t += giay
+
+
+def _vong(hq, dh, dang_bay, xong, giay):
+    """Một cửa sổ: giữ `dang_bay` job cùng lúc, `xong` job hoàn thành."""
+    for _ in range(xong):
+        hq.ghi_xong()
+    hq.nhip_tich(dang_bay)
+    dh.tien(giay)
+    hq.nhip_tich(dang_bay)
+    return hq.chot_so()
+
+
+def test_san_luong_con_len_thi_KHONG_chan():
+    """Còn leo được thì cứ leo — đây là 'khai thác tối đa'."""
+    dh = _DongHo(); hq = sb.DoHieuQua(cua_so=50.0, dong_ho=dh)
+    assert _vong(hq, dh, 20, 40, 60.0)[0] > 0
+    assert hq.cho_phep() == 0
+    _vong(hq, dh, 40, 90, 60.0)          # đông gấp đôi, ra nhiều hơn
+    assert hq.cho_phep() == 0, "dang len ma da chan"
+
+
+def test_dong_hon_ma_ra_it_hon_thi_LUI_ve_muc_tot_nhat():
+    """Quá đỉnh thì gửi thêm chỉ làm mỗi job lâu hơn và job đuôi chết vì hết hạn."""
+    dh = _DongHo(); hq = sb.DoHieuQua(cua_so=50.0, dong_ho=dh)
+    _vong(hq, dh, 40, 100, 60.0)                 # 100 job/phut o 40 cung luc
+    assert hq.cho_phep() == 0
+    _vong(hq, dh, 120, 30, 60.0)                 # dong gap 3, ra mot phan ba
+    assert hq.cho_phep() == 40, (
+        "khong lui ve muc tot nhat -> tiep tuc nhoi vao mot nha may dang nghen")
+
+
+def test_nha_may_khoe_lai_thi_MO_TRAN_ra_ngay():
+    """Lùi không được phép là lùi vĩnh viễn — thợ về đông là phải ăn theo ngay."""
+    dh = _DongHo(); hq = sb.DoHieuQua(cua_so=50.0, dong_ho=dh)
+    _vong(hq, dh, 40, 100, 60.0)
+    _vong(hq, dh, 120, 30, 60.0)
+    assert hq.cho_phep() == 40
+    _vong(hq, dh, 40, 300, 60.0)                 # nha may khoe han len
+    assert hq.cho_phep() == 0, "san luong pha ky luc ma van con giu tran cu"
+
+
+def test_khong_bao_gio_ha_xuong_duoi_SAN():
+    """Hạ tới 0 là tool đứng im — luôn còn đủ chỗ để đo lại lần sau."""
+    dh = _DongHo(); hq = sb.DoHieuQua(cua_so=50.0, dong_ho=dh)
+    _vong(hq, dh, 1, 60, 60.0)
+    _vong(hq, dh, 200, 1, 60.0)
+    assert hq.cho_phep() >= sb.DoHieuQua.SAN
+
+
+def test_chua_du_mot_cua_so_thi_CHUA_ket_luan_gi():
+    """Chốt sổ sớm là đọc nhiễu thành xu hướng."""
+    dh = _DongHo(); hq = sb.DoHieuQua(cua_so=45.0, dong_ho=dh)
+    hq.ghi_xong(5); hq.nhip_tich(10); dh.tien(10.0)
+    assert hq.chot_so() is None
+    assert hq.cho_phep() == 0
+
+
+def test_vong_chay_that_CO_dung_tran_san_luong():
+    """Viết lớp mà quên cắm vào vòng chạy thì nó chỉ là mã chết."""
+    import inspect
+    than = inspect.getsource(sb.chay_ca_me)
+    assert "DoHieuQua()" in than, "chua dung DoHieuQua trong chay_ca_me"
+    assert "hieu_qua.ghi_xong()" in than, "khong ghi nhan job xong -> khong do duoc gi"
+    assert "hieu_qua.cho_phep()" in than, "do xong ma khong dung ket qua de chan"

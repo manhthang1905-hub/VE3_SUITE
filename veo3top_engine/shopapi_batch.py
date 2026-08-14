@@ -47,6 +47,7 @@ thay phần "chạy một job" bằng một hàm do nơi gọi đưa vào.
 from __future__ import annotations
 
 import math
+import os
 import threading
 import time
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor
@@ -559,8 +560,14 @@ NHIP_KIEM_DUNG = 2.0
 TRAN_TTL = 15.0
 
 
+#: Tự điều tiết BẬT sẵn. Tắt bằng `SHOPAPI_TU_DIEU_TIET=0` khi cần ghim cứng
+#: số luồng để đo đạc — chứ không phải để chạy thật.
+def _tu_dieu_tiet_mac_dinh():
+    return (os.environ.get("SHOPAPI_TU_DIEU_TIET") or "1").strip() not in ("0", "false", "False")
+
+
 def _hoi_tran(loai, tran_tool=None, client=None, api_key=None, log=print,
-              truoc_do=None):
+              truoc_do=None, so_ban=None, tu_dieu_tiet=None):
     """Một lời hỏi `/v1/me`, đã chặn trên. Trả `0` khi nhà máy đang dừng.
 
     `truoc_do` là trần đọc được lần gần nhất. Hỏi không được thì trả LẠI con số
@@ -575,14 +582,26 @@ def _hoi_tran(loai, tran_tool=None, client=None, api_key=None, log=print,
 
     Hỏi không được thì trả `1`: đoán thấp còn hơn đứng im, và cũng còn hơn đoán
     cao rồi đập vào máy chủ bằng một con số bịa.
+
+    `tu_dieu_tiet` (mặc định BẬT) đổi vai của `tran_tool`: bật thì trần đến từ
+    máy chủ chia cho số tiến trình đang chạy thật, và `tran_tool` không còn
+    được dùng; tắt thì quay về hành vi cũ — `tran_tool` là trần cứng.
     """
+    if tu_dieu_tiet is None:
+        tu_dieu_tiet = _tu_dieu_tiet_mac_dinh()
     try:
-        # `tran_song_song` đã tự nuốt lỗi mạng, nhưng vẫn bọc thêm một lớp: hàm
-        # này chạy trong vòng lặp của cả mẻ, một ngoại lệ lọt ra là chết cả mẻ vì
-        # một lời hỏi trạng thái — cái giá quá đắt cho thứ chỉ để đoán số luồng.
-        tran = int(_sc.tran_song_song(loai, api_key=api_key, client=client, mac_dinh=-1))
+        # `doc_tran_chi_tiet` đã tự nuốt lỗi mạng, nhưng vẫn bọc thêm một lớp:
+        # hàm này chạy trong vòng lặp của cả mẻ, một ngoại lệ lọt ra là chết cả
+        # mẻ vì một lời hỏi trạng thái — quá đắt cho thứ chỉ để đoán số luồng.
+        #
+        # ⚠ ĐỌC `hard_cap` TỪ MÁY CHỦ, ĐỪNG DÙNG BẢN CHÉP. Đo 15/08/2026:
+        # `/v1/me` nói ảnh `hard_cap 1536`, video `832`; hằng số chép trong SDK
+        # vẫn là `384` và `64`. `min(limit, trần_cứng)` với bản chép cũ đang bóp
+        # video từ 374 xuống 64 — 5,8 lần — mà không một dòng log nào nói.
+        tran, cung_sv = _sc.doc_tran_chi_tiet(loai, api_key=api_key, client=client)
+        tran = int(tran)
     except Exception:
-        tran = -1
+        tran, cung_sv = -1, 0
 
     if tran < 0:
         # ⚠ HỎNG MỘT LƯỢT ĐỌC KHÔNG PHẢI LÀ "NHÀ MÁY CHỈ CÒN MỘT CHỖ".
@@ -607,8 +626,45 @@ def _hoi_tran(loai, tran_tool=None, client=None, api_key=None, log=print,
     if tran == 0:
         return 0
 
-    n = min(tran, _sc.tran_cung(loai))
-    if tran_tool:
+    try:
+        cung = int(cung_sv) if int(cung_sv) > 0 else int(_sc.tran_cung(loai))
+    except (TypeError, ValueError):
+        cung = int(_sc.tran_cung(loai))
+    n = min(tran, cung)
+
+    if tu_dieu_tiet:
+        # ═══ CHIA PHẦN THAY VÌ GÕ CỨNG ═══
+        #
+        # `tran` là trần của CẢ TÀI KHOẢN, còn mỗi mã chạy trong một TIẾN TRÌNH
+        # RIÊNG. Bản trước chia bằng một con số gõ tay trong `settings.yaml`
+        # (`max_concurrent: 40`, `shopapi_video_concurrency: 16`), và con số gõ
+        # tay thì sai theo cả hai chiều cùng lúc:
+        #
+        #   * tám mã đang chạy  -> 8×40 = 320 trên 979 chỗ ảnh, bỏ phí 2/3;
+        #   * một mã đang chạy  -> 16 trên 374 chỗ video, bỏ phí 96%.
+        #
+        # Đúng hai triệu chứng người dùng thấy ngày 15/08/2026.
+        #
+        # Giờ chia bằng SỐ TIẾN TRÌNH ĐANG SỐNG THẬT (`NhipSong` đếm theo file,
+        # xem `shopapi_common`), đếm RIÊNG từng loại job — nên lúc bảy mã làm
+        # ảnh và một mã làm video, mã video được trọn 374 chỗ chứ không phải
+        # một phần tám.
+        #
+        # Rồi cắt lần nữa bằng SUẤT LUỒNG của máy này. Trần máy chủ không phải
+        # trần duy nhất: thiết kế mở một luồng cho mỗi job đang bay, và Windows
+        # bắt đầu từ chối quanh 700 luồng. Ngân sách luồng là của cả máy, chia
+        # cho mọi tiến trình bất kể loại job — luồng là tài nguyên chung.
+        try:
+            ban = int(so_ban) if so_ban else int(_sc.dem_ban_dang_chay(loai))
+        except (TypeError, ValueError):
+            ban = 1
+        phan_may_chu = max(1, n // max(1, ban))
+        try:
+            phan_luong = int(_sc.phan_luong_cua_toi())
+        except Exception:
+            phan_luong = phan_may_chu
+        n = max(1, min(phan_may_chu, phan_luong))
+    elif tran_tool:
         try:
             gioi_han = int(tran_tool)
         except (TypeError, ValueError):
@@ -620,7 +676,7 @@ def _hoi_tran(loai, tran_tool=None, client=None, api_key=None, log=print,
 
 def so_luong_song_song(loai, tran_tool=None, client=None, api_key=None, log=print,
                        ngu=time.sleep, cho_khi_dung=CHO_KHI_DUNG,
-                       cho_toi_da=CHO_TOI_DA, dung_lai=None):
+                       cho_toi_da=CHO_TOI_DA, dung_lai=None, tu_dieu_tiet=None):
     """Bắn được bao nhiêu job loại `loai` cùng lúc NGAY BÂY GIỜ.
 
     Dùng cho chỗ chỉ cần **một con số** để dựng `ThreadPoolExecutor`, không cần
@@ -641,7 +697,8 @@ def so_luong_song_song(loai, tran_tool=None, client=None, api_key=None, log=prin
     while True:
         if dung_lai is not None and dung_lai():
             return 0
-        tran = _hoi_tran(loai, tran_tool, client=client, api_key=api_key, log=log)
+        tran = _hoi_tran(loai, tran_tool, client=client, api_key=api_key, log=log,
+                         tu_dieu_tiet=tu_dieu_tiet)
         if tran > 0:
             return tran
         if da_cho >= cho_toi_da:
@@ -657,6 +714,89 @@ def so_luong_song_song(loai, tran_tool=None, client=None, api_key=None, log=prin
 
 
 # ── Chạy cả mẻ ───────────────────────────────────────────────────────────────
+
+
+class DoHieuQua:
+    """Trần theo SẢN LƯỢNG ĐO ĐƯỢC, không theo con số máy chủ rao.
+
+    ═══ VÌ SAO TRẦN CỦA MÁY CHỦ CHƯA ĐỦ ĐỂ TIN ═══
+
+    Đo 15/08/2026 lúc 03:2x, `GET /v1/me` nói nhà máy ảnh có `capacity 1088` và
+    mời `limit 979` — nhưng cùng lúc đó `workers_online = 1`. Một tiến trình thợ
+    khai 1.088 chỗ. Bắn 60 ảnh vào đấy: đỉnh 63 job đồng thời, mà **56 ảnh mất
+    393 giây — 8,5 ảnh/phút**, và 2 job chết vì quá hạn 300 giây. Một ảnh chạy
+    một mình hôm đó mất 30 giây.
+
+    Nghĩa là quá một mức nào đó, gửi thêm KHÔNG ra thêm hàng: nó chỉ chia cùng
+    một năng lực thật cho nhiều job hơn, mỗi job lâu hơn, và job ở đuôi chết vì
+    hết hạn. Tệ hơn cả phí — nó làm HỎNG việc đã trả tiền.
+
+    Và không có tín hiệu nào báo: `queued = 0`, không `429`, không `503`. Máy
+    chủ nhận hết rồi chạy chậm. `NhipDo` chờ `429` để lùi, `CongHangCho` chờ
+    hàng dài để lùi — cả hai đều mù trước kiểu nghẽn này.
+
+    Thứ duy nhất nhìn thấy nó là **số job xong mỗi phút**. Lớp này đo đúng cái
+    đó rồi leo đồi: còn tăng số job cùng lúc mà sản lượng còn lên thì cứ tăng;
+    tăng mà sản lượng không lên nữa thì lùi về mức tốt nhất từng đo được.
+
+    Đây chính là "server mà có thể khai thác thì cứ khai thác tối đa" — nhưng đo
+    bằng hàng ra, chứ không bằng lời máy chủ tự khai.
+    """
+
+    #: Chốt sổ mỗi ngần này giây. Ngắn quá thì nhiễu, dài quá thì phản ứng chậm.
+    CUA_SO = 45.0
+    #: Sản lượng phải kém hơn mức tốt nhất ngần này mới coi là "đã quá đỉnh".
+    NGUONG_KEM = 0.85
+    #: Không bao giờ hạ xuống dưới mức này — hạ nữa là đứng im.
+    SAN = 4
+
+    def __init__(self, cua_so=None, dong_ho=time.monotonic):
+        self.cua_so = float(cua_so if cua_so is not None else self.CUA_SO)
+        self._dong_ho = dong_ho
+        self._moc = dong_ho()
+        self._xong = 0
+        #: Tổng số job-giây đã bay trong cửa sổ, để ra số job cùng lúc BÌNH QUÂN
+        #: — dùng con số tức thời thì một lần nhặt hàng loạt làm lệch hẳn.
+        self._tich = 0.0
+        self._lan_do = dong_ho()
+        #: `(sản lượng tốt nhất, số job cùng lúc lúc đó)`.
+        self._tot_nhat = (0.0, 0)
+        #: Trần đang áp. `0` = chưa chặn gì.
+        self.tran = 0
+
+    def ghi_xong(self, so=1):
+        self._xong += int(so)
+
+    def nhip_tich(self, dang_bay):
+        """Gọi mỗi vòng lặp: cộng dồn job-giây để tính bình quân."""
+        gio = self._dong_ho()
+        self._tich += max(0, int(dang_bay)) * (gio - self._lan_do)
+        self._lan_do = gio
+
+    def chot_so(self):
+        """Hết cửa sổ thì chốt. Trả `(sản lượng/phút, số cùng lúc)` hoặc `None`."""
+        gio = self._dong_ho()
+        troi = gio - self._moc
+        if troi < self.cua_so:
+            return None
+        san_luong = 60.0 * self._xong / troi
+        cung_luc = int(round(self._tich / troi)) if troi > 0 else 0
+        self._moc, self._xong, self._tich, self._lan_do = gio, 0, 0.0, gio
+
+        tot, tai_muc = self._tot_nhat
+        if san_luong > tot:
+            # Còn leo được -> ghi mốc mới và MỞ trần ra (đừng giữ trần cũ).
+            self._tot_nhat = (san_luong, max(cung_luc, self.SAN))
+            self.tran = 0
+        elif (tai_muc and cung_luc > tai_muc * 1.15
+              and san_luong < tot * self.NGUONG_KEM):
+            # Đông hơn mà ra ít hơn -> đã quá đỉnh. Lùi về đúng mức tốt nhất.
+            self.tran = max(self.SAN, tai_muc)
+        return san_luong, cung_luc
+
+    def cho_phep(self):
+        """Trần theo sản lượng, hoặc `0` khi chưa có căn cứ để chặn."""
+        return int(self.tran)
 
 
 def _boc(chay_mot, viec, gia_tri_khi_hong, log, cong=None):
@@ -697,7 +837,8 @@ def _boc(chay_mot, viec, gia_tri_khi_hong, log, cong=None):
 def chay_ca_me(viec, chay_mot, loai, tran_tool=None, client=None, api_key=None,
                log=print, ngu=time.sleep, dung_lai=None,
                cho_khi_dung=CHO_KHI_DUNG, cho_toi_da=CHO_TOI_DA,
-               gia_tri_khi_hong=False, nhip=None, cong=None, han_giay=0.0):
+               gia_tri_khi_hong=False, nhip=None, cong=None, han_giay=0.0,
+               tu_dieu_tiet=None):
     """Chạy cả mẻ `viec` bằng `chay_mot`, tự dò nhịp. Trả kết quả **ĐÚNG THỨ TỰ ĐƯA VÀO**.
 
     `chay_mot(mot_viec)` làm trọn một việc (gửi job, chờ, tải file, ghi Excel,
@@ -737,6 +878,15 @@ def chay_ca_me(viec, chay_mot, loai, tran_tool=None, client=None, api_key=None,
 
     ket_qua = {}
     con_lai = list(range(tong))
+    #: Chỗ ngồi của tiến trình này trong bảng chia trần. Hỏng thì thôi, chạy
+    #: tiếp — thiếu điểm danh cùng lắm là chia bảo thủ hơn.
+    try:
+        _nhip_song = _sc.NhipSong(loai)
+    except Exception:
+        _nhip_song = None
+    #: Trần theo SẢN LƯỢNG ĐO ĐƯỢC — lớp chặn duy nhất nhìn thấy kiểu nghẽn
+    #: "máy chủ nhận hết rồi chạy chậm" (không 429, không 503, `queued = 0`).
+    hieu_qua = DoHieuQua()
     #: Trần đọc gần nhất + lúc đọc. Vòng lặp hỏi qua `_doc_tran`, không hỏi thẳng.
     _tran_moi_nhat = [0, 0.0]
 
@@ -747,10 +897,15 @@ def chay_ca_me(viec, chay_mot, loai, tran_tool=None, client=None, api_key=None,
         lần mỗi job xong, nên hỏi thẳng ở đây là hỏi ~88 lần một mẻ thay vì 13.
         """
         gio = time.monotonic()
+        # Điểm danh mỗi lần ghé qua đây: `NhipSong` tự thưa ra 20 giây một lần,
+        # nên gọi thoải mái. Tiến trình chết đột ngột thì file nguội đi và tự
+        # hết tính sau 90 giây — không cần ai dọn.
+        if _nhip_song is not None:
+            _nhip_song.diem_danh()
         if _tran_moi_nhat[0] > 0 and (gio - _tran_moi_nhat[1]) < TRAN_TTL:
             return _tran_moi_nhat[0]
         t = _hoi_tran(loai, tran_tool, client=client, api_key=api_key, log=log,
-                      truoc_do=_tran_moi_nhat[0])
+                      truoc_do=_tran_moi_nhat[0], tu_dieu_tiet=tu_dieu_tiet)
         # `0` = nhà máy ĐANG DỪNG. KHÔNG nhớ nó: nhớ số 0 thì lượt sau đọc phải
         # số 0 đã cũ và tưởng nhà máy vẫn chết, trong khi nó có thể vừa sống lại.
         if t > 0:
@@ -776,8 +931,13 @@ def chay_ca_me(viec, chay_mot, loai, tran_tool=None, client=None, api_key=None,
     #: Một pool sống suốt cả mẻ. `ThreadPoolExecutor` dựng luồng LƯỜI nên đặt
     #: rộng bằng trần cứng không tốn gì: số luồng thật sự mở ra luôn bằng số job
     #: đang bay, mà số đó đã bị `nhip` + `cong` chặn ở trên rồi.
+    # ⚠ ĐẶT BẰNG SUẤT LUỒNG, KHÔNG BẰNG TRẦN CỨNG. Bản trước lấy `tran_cung`
+    # (nay đọc từ máy chủ là 1.536 cho ảnh) — dựng pool rộng đến thế là mời
+    # `RuntimeError: can't start new thread`, vì luồng là tài nguyên CỦA CẢ MÁY
+    # mà tám tiến trình mã cùng ăn. Suất luồng đã chia sẵn phần cho mỗi tiến
+    # trình; `nhip` + `cong` còn cắt thêm ở trên.
     try:
-        _tran_pool = max(1, int(_sc.tran_cung(loai)))
+        _tran_pool = max(1, int(_sc.phan_luong_cua_toi()))
     except Exception:
         _tran_pool = 64
     pool = ThreadPoolExecutor(max_workers=_tran_pool,
@@ -836,6 +996,7 @@ def chay_ca_me(viec, chay_mot, loai, tran_tool=None, client=None, api_key=None,
                 continue
             ket_qua[i] = gia_tri
             nhip.xong()
+            hieu_qua.ghi_xong()
         return lai
 
     try:
@@ -897,7 +1058,19 @@ def chay_ca_me(viec, chay_mot, loai, tran_tool=None, client=None, api_key=None,
         # ⚠ TRỪ ĐI SỐ JOB ĐANG BAY. `cho_phep()` là trần cho TỔNG số job đang
         # chạy, không phải cho mỗi lần gửi. Quên trừ là mỗi vòng lại xin thêm
         # trọn một trần nữa, và tool vượt trần máy chủ trong vài vòng.
+        # Chốt sổ sản lượng: đông hơn mà ra ít hơn thì lùi về mức tốt nhất.
+        hieu_qua.nhip_tich(len(dang_bay))
+        _chot = hieu_qua.chot_so()
+        if _chot is not None:
+            _sl, _cl = _chot
+            log("API shopapi: me {0} - do duoc {1:.0f} job/phut o {2} job cung luc{3}"
+                .format(loai, _sl, _cl,
+                        " -> HA tran xuong {0} (dong hon ma ra it hon)".format(hieu_qua.cho_phep())
+                        if hieu_qua.cho_phep() else ""))
         n = max(0, int(nhip.cho_phep()) - len(dang_bay))
+        _tran_hq = hieu_qua.cho_phep()
+        if _tran_hq:
+            n = min(n, max(0, _tran_hq - len(dang_bay)))
         # ⚠ CẮT THEO SỐ VIỆC CÒN LẠI **TRƯỚC KHI** GIỮ CHỖ, đừng làm ngược.
         # Xin 6 chỗ khi chỉ còn 5 việc là giữ 6 mà chỉ trả 5 — mỗi lượt cuối rò
         # một chỗ, và sau vài mẻ nối tiếp thì cổng khoá cứng vì tưởng còn job
@@ -954,10 +1127,18 @@ def chay_ca_me(viec, chay_mot, loai, tran_tool=None, client=None, api_key=None,
                 con_lai = lo[vi_tri:] + con_lai
                 cong.tra_cho(len(lo) - vi_tri)
                 nhip.bi_chan()
+                # ⚠ HẠ NGÂN SÁCH CHUNG, KHÔNG CHỈ HẠ NHỊP CỦA MÌNH. Máy vừa nói
+                # "không mở thêm luồng được nữa" — đó là sự thật về CẢ MÁY, nên
+                # bảy tiến trình anh em cũng phải biết. Không ghi ra chỗ chung
+                # thì từng đứa lần lượt đâm vào đúng bức tường đó, mỗi lần mất
+                # một lô và một nhịp.
+                try:
+                    moi_muc = _sc.ha_ngan_sach_luong()
+                except Exception:
+                    moi_muc = "?"
                 log("API shopapi: me {0} khong mo them duoc luong ({1}: {2}) -> tra {3} "
-                    "viec ve hang cho va HA NHIP. Neu lap lai, ha `shopapi_ma_song_song` "
-                    "hoac `max_concurrent` trong settings.yaml."
-                    .format(loai, type(e).__name__, e, len(lo) - vi_tri), "ERROR")
+                    "viec ve hang cho, HA NHIP, va ha ngan sach luong CA MAY xuong {4}."
+                    .format(loai, type(e).__name__, e, len(lo) - vi_tri, moi_muc), "ERROR")
                 break
             gui_duoc += 1
         log("API shopapi: me {0} lo {1} -> ban them {2} job ({3} dang bay, {4} viec con lai) | {5}"
@@ -988,5 +1169,10 @@ def chay_ca_me(viec, chay_mot, loai, tran_tool=None, client=None, api_key=None,
         # Không chờ job dở: `dung_lai` nghĩa là khách bấm Dừng, đứng đợi thêm
         # vài phút nữa là đúng thứ họ vừa bảo đừng làm.
         pool.shutdown(wait=False)
+        # Nhả chỗ ngồi NGAY, đừng đợi file nguội: mẻ vừa xong là phần trần của
+        # nó phải về tay các mã còn đang chạy trong vòng vài giây, không phải
+        # sau 90 giây.
+        if _nhip_song is not None:
+            _nhip_song.dong()
 
     return [ket_qua.get(i) for i in range(tong)]

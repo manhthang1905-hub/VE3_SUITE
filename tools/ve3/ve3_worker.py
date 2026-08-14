@@ -3756,10 +3756,19 @@ Generator/context error:
         except Exception:
             return {"tts": 16, "image": 128, "video": 64}.get(loai, 1)
 
+    def _tu_dieu_tiet(self):
+        """Cho phep tool tu chia tran theo may chu? Mac dinh CO."""
+        return bool(self.config.get("shopapi_tu_dieu_tiet", True))
+
     def _shopapi_luong(self, loai, tran_tool=None):
         """So job loai `loai` duoc ban CUNG LUC ngay bay gio.
 
-        = min(tran dong cua may chu, tran cung cua loai, tran nguoi dung dat).
+        BAT tu dieu tiet (mac dinh): = tran may chu CHIA cho so tien trinh ma
+        dang song that, roi cat them bang suat luong cua may. `tran_tool` KHONG
+        con duoc dung — chinh con so go tay la thu giu tool o 40 job trong khi
+        may chu moi 979 (do 15/08/2026).
+
+        TAT: = min(tran dong cua may chu, tran cung cua loai, tran nguoi dung dat).
         KHONG go cung mot con so nao: `GET /v1/me` moi la nguon su that, va no
         doi lien tuc theo suc chua nha may chia cho so khach dang cho.
 
@@ -3776,6 +3785,7 @@ Generator/context error:
             loai, tran_tool=tran_tool, api_key=self.shopapi_key, log=self.log,
             ngu=lambda giay: self._sleep_with_stop(giay),
             dung_lai=lambda: bool(self._stop_flag),
+            tu_dieu_tiet=self._tu_dieu_tiet(),
         ))
 
     def _chay_me_shopapi(self, loai, viec, chay_mot, tran_tool=None):
@@ -3821,6 +3831,7 @@ Generator/context error:
                     else self.shopapi_image_timeout)
         return sb.chay_ca_me(
             viec, chay_mot, loai, tran_tool=tran_tool, api_key=self.shopapi_key,
+            tu_dieu_tiet=self._tu_dieu_tiet(),
             log=self.log, han_giay=han_giay, nhip=kho[loai],
             ngu=lambda giay: self._sleep_with_stop(giay),
             dung_lai=lambda: bool(self._stop_flag),

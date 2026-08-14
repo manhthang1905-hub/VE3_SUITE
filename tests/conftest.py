@@ -50,6 +50,26 @@ def chan_khoa_that(monkeypatch):
     yield
 
 
+@pytest.fixture(autouse=True)
+def nhip_song_rieng(monkeypatch, tmp_path):
+    """Mỗi bài kiểm một thư mục nhịp sống RIÊNG, và không hỏi mạng.
+
+    `dem_ban_dang_chay` đếm file trong một thư mục CHUNG của cả máy để biết mấy
+    tiến trình mã đang tranh nhau trần. Rất đúng lúc chạy thật, và rất sai lúc
+    chạy kiểm: một tool đang chạy thật ở cửa sổ bên cạnh — hay đúng hơn, một
+    lần chạy tay của chính người đang sửa — để lại file trong đó, và bài kiểm
+    lặng lẽ chia trần cho 2 rồi đỏ ở một con số hoàn toàn không liên quan.
+
+    `tran_cung_may_chu` cũng bị chặn: nó gọi `GET /v1/me` THẬT, nên không chặn
+    thì mỗi bài kiểm là một lượt ra mạng — chậm, và đỏ khi mất mạng.
+    """
+    import shopapi_common as _sc
+    monkeypatch.setenv("SHOPAPI_NHIP_DIR", str(tmp_path / "nhip"))
+    monkeypatch.setattr(_sc, "tran_cung_may_chu",
+                        lambda loai, api_key=None, client=None, bay_gio=None: 10 ** 6)
+    yield
+
+
 @pytest.fixture
 def sc():
     """Module `shopapi_common` đã nạp."""

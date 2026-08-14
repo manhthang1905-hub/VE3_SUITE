@@ -181,12 +181,28 @@ def test_so_luong_lay_tu_v1_me_chu_khong_go_cung(tmp_path, nhat_ky, co_khoa, mon
 
 def test_so_luong_bi_chan_tren_boi_max_concurrent_cua_tool(tmp_path, nhat_ky, co_khoa,
                                                            monkeypatch, sc):
-    """Máy chủ rộng 40 nhưng người dùng đặt 3 thì phải là 3 — máy họ, tiền họ."""
+    """TẮT tự điều tiết: máy chủ rộng 40 mà người dùng đặt 3 thì phải là 3.
+
+    Bật (mặc định) thì con số gõ tay KHÔNG còn là trần — xem bài ngay dưới. Đó
+    là chủ ý: chính con số gõ tay giữ tool ở 40 job trong khi máy chủ mời 979.
+    """
     monkeypatch.setattr(sc, "tran_song_song",
                         lambda loai, api_key=None, mac_dinh=1, client=None: 40)
-    w = _worker(tmp_path, nhat_ky, {"max_concurrent": 3})
+    w = _worker(tmp_path, nhat_ky, {"max_concurrent": 3, "shopapi_tu_dieu_tiet": False})
     assert w.max_concurrent == 3
     assert w._shopapi_luong("image", w.max_concurrent) == 3
+
+
+def test_TU_DIEU_TIET_bo_qua_con_so_go_tay(tmp_path, nhat_ky, co_khoa, monkeypatch, sc):
+    """Mặc định BẬT, và bật thì ăn theo máy chủ chứ không theo `max_concurrent`."""
+    monkeypatch.setattr(sc, "tran_song_song",
+                        lambda loai, api_key=None, mac_dinh=1, client=None: 400)
+    monkeypatch.setattr(sc, "tran_cung_may_chu", lambda *a, **k: 10 ** 6)
+    monkeypatch.setattr(sc, "dem_ban_dang_chay", lambda *a, **k: 1)
+    monkeypatch.setattr(sc, "phan_luong_cua_toi", lambda *a, **k: 10 ** 6)
+    w = _worker(tmp_path, nhat_ky, {"max_concurrent": 3})
+    assert w._tu_dieu_tiet() is True, "tu dieu tiet phai BAT san"
+    assert w._shopapi_luong("image", w.max_concurrent) == 400
 
 
 def test_anh_va_video_hoi_TRAN_RIENG_cua_tung_loai(tmp_path, nhat_ky, co_khoa,
