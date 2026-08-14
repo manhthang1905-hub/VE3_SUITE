@@ -11,8 +11,11 @@ File này **không** import `shopapi` ở mức module: máy chưa cài SDK vẫ
 
 BỐN CÁI BẪY ĐÃ GHI RÕ TRONG MÃ (đọc trước khi sửa)
 --------------------------------------------------
-1. **Link kết quả chỉ sống 7 ngày** (CONTRACT §2.2) → phải tải ngay về ổ cứng,
-   tuyệt đối không lưu URL vào Excel rồi dùng lại tuần sau.
+1. **Link kết quả HẾT HẠN NHANH** → phải tải ngay về ổ cứng, tuyệt đối không
+   lưu URL rồi dùng lại. Từ 14/08/2026 ảnh/video do Google giữ
+   (`flow-content.google`) và link chỉ sống ~6 giờ thay vì nhiều ngày. ĐỪNG gõ
+   cứng con số nào — dùng :func:`tai_ket_qua`, nó đi qua đường
+   `GET /v1/jobs/{id}/download` vốn KHÔNG hết hạn.
 2. **`n>1` thì ảnh nằm ở `outputs`, KHÔNG phải `output`** — `output` chỉ là file
    đầu tiên (`job.mapper.ts`). Đọc nhầm là mất ảnh mà không báo lỗi.
 3. **Veo3 chỉ nhận `duration: 8`, Seedance chỉ nhận `10`** → xem
@@ -49,6 +52,8 @@ __all__ = [
     "doc_hang_cho",
     "tao_va_cho",
     "tai_ve",
+    "tai_ket_qua",
+    "duoi_cua_output",
     "mo_ta_loi",
     "kiem_khoa",
     "tran_song_song",
@@ -950,12 +955,14 @@ def tao_va_cho(client, ten_tai_nguyen, timeout, on_progress=None, on_hang_cho=No
 TAI_VE_SO_LAN = 4
 
 
-def tai_ve(url, dest_path, timeout=600.0, so_lan=None, ngu=None):
+def tai_ve(url, dest_path, timeout=600.0, so_lan=None, ngu=None, headers=None):
     """Tải `url` về `dest_path`, trả lại đường dẫn thật đã ghi.
 
-    ⚠ Link kết quả của ShopAPI **sống 7 ngày** rồi bị xoá. Đó là lý do tool tải
-    ngay tại đây thay vì ghi URL vào Excel: mã cũ mở lại sau một tuần sẽ thấy
-    toàn 404, mà lúc đó tiền đã tiêu rồi.
+    ⚠ HÀM NÀY TẢI MỘT URL ĐÃ CÓ. Muốn tải kết quả của một job thì gọi
+    :func:`tai_ket_qua` — nó biết đường `/download` không hết hạn và biết xin
+    link mới khi link cũ chết. Link trong `output.url` hết hạn nhanh (từ
+    14/08/2026: ~6 giờ, do Google giữ file), nên giữ lại URL để dùng sau là mất
+    trắng thứ đã trả tiền.
 
     Ghi ra `.part` rồi mới đổi tên → không bao giờ để lại file dở dang trông như
     đã tải xong (caller chỉ kiểm `output_path.exists()`).
@@ -992,7 +999,7 @@ def tai_ve(url, dest_path, timeout=600.0, so_lan=None, ngu=None):
     loi_cuoi = None
     for lan in range(lan_toi_da):
         try:
-            return _tai_ve_mot_lan(url, temp_path, dest_path, timeout, httpx)
+            return _tai_ve_mot_lan(url, temp_path, dest_path, timeout, httpx, headers)
         except _KhongTaiLai:
             raise
         except Exception as exc:
@@ -1002,19 +1009,107 @@ def tai_ve(url, dest_path, timeout=600.0, so_lan=None, ngu=None):
     raise loi_cuoi
 
 
+def tai_ket_qua(client, job_id, dich, index=0, timeout=600.0, url_du_phong="",
+                so_lan=None, ngu=None, log=None):
+    """Tải file kết quả của một job về `dich`. Trả đường dẫn thật đã ghi.
+
+    ═══ VÌ SAO KHÔNG TẢI THẲNG `output.url` NỮA ═══
+
+    Từ 14/08/2026 ShopAPI thôi giữ bản sao ảnh/video: `output.url` trỏ thẳng
+    sang Google (`flow-content.google`), và nó **chỉ sống khoảng 6 giờ** thay vì
+    nhiều ngày. Tải ngay thì không sao; nhưng bất cứ chỗ nào giữ URL lại — hàng
+    chờ nghẽn, mẻ chạy dài, một lần thử lại sau đêm — đều nhận về trang lỗi của
+    Google cho thứ đã trả tiền.
+
+    Nên hàm này đi ba tầng, rẻ và bền trước:
+
+      1. `GET /v1/jobs/{id}/download` — địa chỉ này **KHÔNG hết hạn**, sống
+         chừng nào job còn. Mỗi lần gọi máy chủ tự lái sang một đường tải tươi.
+         Cần `Authorization: Bearer …` và **phải đi theo chuyển hướng** (nó trả
+         `302`; không đi theo thì nhận đúng một thân RỖNG và tưởng API hỏng).
+      2. `url_du_phong` — chính `output.url` vừa đọc được. Dùng khi đường trên
+         không dựng nổi (khoá thiếu, endpoint lạ).
+      3. Hỏi lại `GET /v1/jobs/{id}` để xin link TƯƠI rồi tải. Job còn thì luôn
+         xin lại được — đây là đường thoát khi link cũ vừa chết.
+
+    ⚠ ĐỪNG GÕ CỨNG THỜI HẠN NÀO vào mã, và đừng cache `output.url`. Cache
+    `job_id` — nó không hết hạn.
+    """
+    def _noi(m):
+        if log:
+            try:
+                log(m, "WARN")
+            except Exception:
+                pass
+
+    loi = []
+    base = str(getattr(client, "base_url", "") or DEFAULT_BASE_URL).rstrip("/")
+    khoa = str(getattr(client, "api_key", "") or "")
+
+    if job_id and khoa:
+        duong = "{0}/v1/jobs/{1}/download".format(base, job_id)
+        if int(index or 0) > 0:
+            duong += "?index={0}".format(int(index))
+        try:
+            return tai_ve(duong, dich, timeout=timeout, so_lan=so_lan, ngu=ngu,
+                          headers={"Authorization": "Bearer {0}".format(khoa)})
+        except Exception as exc:
+            loi.append("/download: {0}".format(mo_ta_loi(exc)))
+            _noi("tai qua /download hong ({0}) -> thu output.url".format(type(exc).__name__))
+
+    if url_du_phong:
+        try:
+            return tai_ve(url_du_phong, dich, timeout=timeout, so_lan=so_lan, ngu=ngu)
+        except Exception as exc:
+            loi.append("output.url: {0}".format(mo_ta_loi(exc)))
+            _noi("link cu het han hoac hong -> xin link moi")
+
+    # Tầng cuối: xin link tươi. `GET /v1/jobs/{id}` khiến máy chủ tự đi lấy
+    # đường tải mới, nên đây là cách chữa đúng cho "link vừa hết hạn".
+    if job_id and client is not None:
+        try:
+            j = client.jobs.retrieve(job_id)
+            job = j if isinstance(j, dict) else (
+                j.to_dict() if hasattr(j, "to_dict") else dict(j._data))
+            outs = lay_outputs(job)
+            i = int(index or 0)
+            u = url_cua_output(outs[i]) if i < len(outs) else ""
+            if u:
+                return tai_ve(u, dich, timeout=timeout, so_lan=so_lan, ngu=ngu)
+            loi.append("xin lai: job khong con output[{0}]".format(i))
+        except Exception as exc:
+            loi.append("xin lai: {0}".format(mo_ta_loi(exc)))
+
+    raise IOError("Khong tai duoc ket qua job {0} (index {1}). Da thu: {2}"
+                  .format(job_id or "?", index, " | ".join(loi) or "khong co duong nao"))
+
+
+def duoi_cua_output(output, mac_dinh=".png"):
+    """Đuôi file ĐÚNG cho một output, đọc từ trường `format`.
+
+    ⚠ ĐỪNG ĐOÁN TỪ URL. Link Google không có đuôi file — cắt chuỗi ra chỉ được
+    một mớ tham số chữ ký. Máy chủ đã tính sẵn `format` (`mp4`, `jpeg`, `png`…),
+    dùng nó.
+    """
+    v = str(_lay(output, "format") or "").strip().lower().lstrip(".")
+    if not v:
+        return mac_dinh
+    return "." + {"jpg": "jpg", "jpeg": "jpg"}.get(v, v)
+
+
 class _KhongTaiLai(IOError):
     """Kho lưu trữ trả `4xx` — tải lại cũng vẫn thế (link hết hạn / sai)."""
 
 
-def _tai_ve_mot_lan(url, temp_path, dest_path, timeout, httpx):
+def _tai_ve_mot_lan(url, temp_path, dest_path, timeout, httpx, headers=None):
     """Đúng MỘT lượt tải. Dọn `.part` khi hỏng để lần sau bắt đầu sạch."""
     try:
         if httpx is not None:
             with httpx.Client(timeout=timeout, follow_redirects=True) as http:
-                with http.stream("GET", url) as response:
+                with http.stream("GET", url, headers=headers or None) as response:
                     if response.status_code >= 400:
-                        loi = ("Kho luu tru tra ma {0} khi tai ket qua. Link ket qua chi "
-                               "song 7 ngay.".format(response.status_code))
+                        loi = ("Kho luu tru tra ma {0} khi tai ket qua (link co the da "
+                               "het han).".format(response.status_code))
                         # 4xx: link het han/sai -> tai lai cung the. 5xx thi thu lai.
                         raise (_KhongTaiLai(loi) if response.status_code < 500 else IOError(loi))
                     with open(temp_path, "wb") as handle:
@@ -1022,7 +1117,8 @@ def _tai_ve_mot_lan(url, temp_path, dest_path, timeout, httpx):
                             handle.write(chunk)
         else:
             import requests  # dự phòng: requests đã có sẵn trong requirements.txt
-            response = requests.get(url, stream=True, timeout=timeout)
+            response = requests.get(url, stream=True, timeout=timeout,
+                                    headers=headers or None, allow_redirects=True)
             if response.status_code >= 400:
                 loi = "Kho luu tru tra ma {0} khi tai ket qua.".format(response.status_code)
                 raise (_KhongTaiLai(loi) if response.status_code < 500 else IOError(loi))

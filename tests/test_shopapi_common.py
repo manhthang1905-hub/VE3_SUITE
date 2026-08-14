@@ -194,7 +194,9 @@ def test_tai_ve_ghi_ra_dung_duong_dan_va_khong_de_lai_file_part(sc, tmp_path, mo
         def __exit__(self, *a):
             return False
 
-        def stream(self, method, url):
+        def stream(self, method, url, headers=None):
+            # Chữ ký phải khớp bản thật: `_tai_ve_mot_lan` truyền
+            # `headers=` để mang `Authorization` cho đường `/download`.
             return _Resp()
 
     import httpx
@@ -293,7 +295,9 @@ def _httpx_gia(dem, dut_toi_lan=0, ma=200):
         def __exit__(self, *a):
             return False
 
-        def stream(self, method, url):
+        def stream(self, method, url, headers=None):
+            # Chữ ký phải khớp bản thật: `_tai_ve_mot_lan` truyền
+            # `headers=` để mang `Authorization` cho đường `/download`.
             dem["n"] += 1
             return _LuongGia(dem, dut_toi_lan, ma)
 
@@ -557,3 +561,149 @@ def test_tran_song_song_DI_QUA_ban_dung_chung(sc, tmp_path, monkeypatch):
         assert sc.tran_song_song("video") == 55
         assert sc.tran_song_song("image") == 55
     assert gia.so_lan == 1, "20 luot hoi tran ton {0} loi goi".format(gia.so_lan)
+
+
+# ── ShopAPI đổi cách giao file, 14/08/2026 ───────────────────────────────────
+#
+# `output.url` của ảnh/video giờ trỏ thẳng sang Google (`flow-content.google`)
+# và chỉ sống ~6 giờ thay vì nhiều ngày. Không có gì hỏng ngay — tên trường,
+# cách tạo job, SSE, tính tiền đều y nguyên. Thứ hỏng là mọi chỗ GIỮ LẠI URL:
+# hàng chờ nghẽn, mẻ chạy dài, một lượt thử lại sau đêm.
+#
+# Đường `GET /v1/jobs/{id}/download` KHÔNG hết hạn — đó mới là thứ nên dùng.
+
+
+class _ClientTai:
+    """Client giả đủ để `tai_ket_qua` đi hết ba tầng."""
+
+    def __init__(self, job=None, loi_retrieve=None):
+        self.base_url = "https://api.example.invalid"
+        self.api_key = "sk_gia_ABCDEF1234567890"
+        self._job = job
+        self._loi = loi_retrieve
+        self.so_lan_retrieve = 0
+
+        class _Jobs:
+            def retrieve(_s, job_id):
+                self.so_lan_retrieve += 1
+                if self._loi:
+                    raise self._loi
+                return self._job
+        self.jobs = _Jobs()
+
+
+def test_tai_ket_qua_UU_TIEN_duong_download_khong_het_han(sc, tmp_path, monkeypatch):
+    da_goi = []
+
+    def _gia(url, dest, timeout=600.0, so_lan=None, ngu=None, headers=None):
+        da_goi.append((url, headers))
+        open(str(dest), "wb").write(b"x")
+        return str(dest)
+
+    monkeypatch.setattr(sc, "tai_ve", _gia)
+    sc.tai_ket_qua(_ClientTai(), "job_abc", str(tmp_path / "a.png"),
+                   url_du_phong="https://flow-content.google/image/x?Signature=y")
+    url, headers = da_goi[0]
+    assert url.endswith("/v1/jobs/job_abc/download"), "khong di duong /download: " + url
+    assert headers and headers.get("Authorization", "").startswith("Bearer "), \
+        "/download can Authorization, thieu la 401"
+    assert len(da_goi) == 1, "da tai duoc roi ma van thu them duong khac"
+
+
+def test_index_duoc_gui_cho_job_NHIEU_ANH(sc, tmp_path, monkeypatch):
+    da_goi = []
+    monkeypatch.setattr(sc, "tai_ve", lambda url, dest, **k: (da_goi.append(url), str(dest))[1])
+    sc.tai_ket_qua(_ClientTai(), "job_abc", str(tmp_path / "b.png"), index=2)
+    assert da_goi[0].endswith("/download?index=2"), da_goi[0]
+    # index 0 là mặc định của máy chủ — đừng thêm tham số thừa.
+    da_goi.clear()
+    sc.tai_ket_qua(_ClientTai(), "job_abc", str(tmp_path / "c.png"), index=0)
+    assert "index" not in da_goi[0]
+
+
+def test_download_hong_thi_LUI_VE_output_url(sc, tmp_path, monkeypatch):
+    da_goi = []
+
+    def _gia(url, dest, timeout=600.0, so_lan=None, ngu=None, headers=None):
+        da_goi.append(url)
+        if "/download" in url:
+            raise IOError("endpoint la")
+        open(str(dest), "wb").write(b"x")
+        return str(dest)
+
+    monkeypatch.setattr(sc, "tai_ve", _gia)
+    p = sc.tai_ket_qua(_ClientTai(), "job_abc", str(tmp_path / "d.png"),
+                       url_du_phong="https://flow-content.google/image/x")
+    assert p and len(da_goi) == 2 and "flow-content" in da_goi[1]
+
+
+def test_LINK_HET_HAN_thi_XIN_LAI_link_moi(sc, tmp_path, monkeypatch):
+    """Đây là cả lý do bản vá này tồn tại: link cũ chết thì phải xin link tươi.
+
+    `GET /v1/jobs/{id}` khiến máy chủ tự đi lấy đường tải mới. Job còn thì luôn
+    xin lại được — bỏ cuộc ở đây là vứt thứ đã trả tiền.
+    """
+    tuoi = {"output": {"url": "https://flow-content.google/image/TUOI", "format": "jpeg"}}
+    client = _ClientTai(job=tuoi)
+    da_goi = []
+
+    def _gia(url, dest, timeout=600.0, so_lan=None, ngu=None, headers=None):
+        da_goi.append(url)
+        if "TUOI" not in url:
+            raise IOError("403 het han")
+        open(str(dest), "wb").write(b"x")
+        return str(dest)
+
+    monkeypatch.setattr(sc, "tai_ve", _gia)
+    p = sc.tai_ket_qua(client, "job_abc", str(tmp_path / "e.png"),
+                       url_du_phong="https://flow-content.google/image/CHET")
+    assert p, "link chet ma khong xin lai -> mat anh da tra tien"
+    assert client.so_lan_retrieve == 1
+    assert "TUOI" in da_goi[-1]
+
+
+def test_het_duong_thi_bao_RO_da_thu_nhung_gi(sc, tmp_path, monkeypatch):
+    def _no(url, dest, timeout=600.0, so_lan=None, ngu=None, headers=None):
+        raise IOError("404")
+
+    monkeypatch.setattr(sc, "tai_ve", _no)
+    with pytest.raises(IOError) as e:
+        sc.tai_ket_qua(_ClientTai(loi_retrieve=RuntimeError("khong co job")),
+                       "job_abc", str(tmp_path / "f.png"), url_du_phong="https://x.invalid/y")
+    m = str(e.value)
+    assert "/download" in m and "output.url" in m and "xin lai" in m, \
+        "thong bao khong noi da thu nhung duong nao: " + m
+
+
+def test_duoi_file_doc_tu_FORMAT_khong_doan_tu_URL(sc):
+    """Link Google không có đuôi file — cắt chuỗi ra chỉ được mớ tham số chữ ký."""
+    assert sc.duoi_cua_output({"format": "mp4"}) == ".mp4"
+    assert sc.duoi_cua_output({"format": "png"}) == ".png"
+    # `jpg` và `jpeg` là một thứ — đừng đẻ ra hai đuôi khác nhau cho cùng định dạng.
+    assert sc.duoi_cua_output({"format": "jpeg"}) == sc.duoi_cua_output({"format": "jpg"}) == ".jpg"
+    assert sc.duoi_cua_output({"format": ".WEBP"}) == ".webp"
+    assert sc.duoi_cua_output({}) == ".png"
+    assert sc.duoi_cua_output({"format": ""}, mac_dinh=".mp4") == ".mp4"
+
+
+def test_tai_ve_CHIU_header_va_DI_THEO_chuyen_huong(sc):
+    """`/download` trả `302`. Không đi theo là nhận thân RỖNG rồi tưởng API hỏng.
+
+    Đo thật 15/08/2026 trên `api.shopapi.vn`:
+        khong di theo -> 302, than 0 byte
+        co  di theo   -> 200 image/jpeg, 33.400 byte
+    """
+    import inspect
+    than = inspect.getsource(sc._tai_ve_mot_lan)
+    assert "headers=headers" in than, "khong truyen header -> /download tra 401"
+    assert "follow_redirects=True" in than, "khong di theo 302 -> nhan than rong"
+    assert "allow_redirects=True" in than, "nhanh requests du phong cung phai di theo"
+    assert "headers" in inspect.signature(sc.tai_ve).parameters
+
+
+def test_KHONG_con_go_cung_thoi_han_nao(sc):
+    """Ghi chú đổi giao file nói rõ: đừng gõ cứng con số thời hạn nào."""
+    from pathlib import Path
+    nguon = Path(sc.__file__).read_text(encoding="utf-8", errors="replace")
+    assert "song 7 ngay" not in nguon and "sống 7 ngày" not in nguon, \
+        "van con gia dinh 'link song 7 ngay' — sai tu 14/08/2026"

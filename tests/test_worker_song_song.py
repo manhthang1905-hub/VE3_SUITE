@@ -347,7 +347,11 @@ def test_trong_me_thi_429_duoc_nem_de_TRA_VIEC_VE_HANG_CHO(tmp_path, nhat_ky, co
         return FakeClient(image_job=job_anh(n=1))
 
     monkeypatch.setattr(sc, "tao_client", _client)
-    monkeypatch.setattr(sc, "tai_ve", lambda url, dest, timeout=600.0: str(dest))
+    monkeypatch.setattr(sc, "tai_ve",
+                        # Chữ ký khớp bản thật — `tai_ket_qua` truyền cả
+                        # `so_lan`/`ngu`/`headers`, thiếu là `TypeError`.
+                        lambda url, dest, timeout=600.0, so_lan=None, ngu=None,
+                        headers=None: str(dest))
 
     ket = {"completed": 0, "failed": 0}
     w._chay_me("image", [w.img_dir / "A.png"],
@@ -374,7 +378,11 @@ def test_video_trong_me_cung_nem_429(tmp_path, nhat_ky, co_khoa, monkeypatch, sc
         return FakeClient(video_job=job_video())
 
     monkeypatch.setattr(sc, "tao_client", _client)
-    monkeypatch.setattr(sc, "tai_ve", lambda url, dest, timeout=600.0: str(dest))
+    monkeypatch.setattr(sc, "tai_ve",
+                        # Chữ ký khớp bản thật — `tai_ket_qua` truyền cả
+                        # `so_lan`/`ngu`/`headers`, thiếu là `TypeError`.
+                        lambda url, dest, timeout=600.0, so_lan=None, ngu=None,
+                        headers=None: str(dest))
 
     ket = {"completed": 0, "failed": 0}
     w._chay_me("video", [w.vid_dir / "S1.mp4"],

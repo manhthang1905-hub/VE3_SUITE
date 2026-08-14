@@ -229,7 +229,10 @@ def tai_ve_gia(monkeypatch, sc):
     """
     da_tai = []
 
-    def _gia(url, dest_path, timeout=600.0):
+    def _gia(url, dest_path, timeout=600.0, so_lan=None, ngu=None, headers=None):
+        # ⚠ CHỮ KÝ PHẢI KHỚP BẢN THẬT. Bản giả thiếu tham số thì lời gọi ném
+        # `TypeError`, `tai_ket_qua` nuốt nó rồi lùi sang tầng sau, và bài kiểm
+        # đỏ ở một chỗ chẳng liên quan gì tới thứ nó định kiểm.
         da_tai.append((url, str(dest_path)))
         folder = os.path.dirname(os.path.abspath(str(dest_path)))
         if folder:

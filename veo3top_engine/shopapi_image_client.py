@@ -23,6 +23,19 @@ except ImportError:        # chạy như một gói: import tương đối
 __all__ = ["generate_image", "chuan_bi_reference_urls", "duong_dan_phu"]
 
 #: Ảnh của tool luôn là PNG (`img/X.png`, `nv/X.png`) — dùng làm đuôi mặc định.
+#: Đuôi file khi caller không nói rõ.
+#:
+#: ⚠ ĐUÔI DO TA ĐẶT, KHÔNG ĐỌC TỪ URL — VÀ CŨNG KHÔNG THEO `output.format`.
+#:
+#: Cả dây chuyền ràng buộc `vid/X.mp4` phải có `img/X.png` cùng tên gốc, nên đổi
+#: đuôi theo định dạng máy chủ trả về sẽ làm đứt liên kết đó. Máy chủ hay trả
+#: `jpeg` cho ảnh; ta vẫn lưu tên `.png` và **đó là cố ý**: bước tải video lên
+#: nhận dạng bằng magic bytes (JPEG được chấp nhận), nên tên file không quan
+#: trọng, còn tên gốc thì có.
+#:
+#: Ghi chú đổi giao file 14/08/2026 có cảnh báo "đừng đọc đuôi từ URL" — ta chưa
+#: bao giờ làm thế. Cần đuôi đúng theo định dạng thật thì đã có
+#: `shopapi_common.duoi_cua_output`.
 _DUOI_MAC_DINH = ".png"
 
 
@@ -210,6 +223,7 @@ def generate_image(prompt, out_path, aspect=None, seed=None, reference_images=No
         return False, {}, "shopapi-img: job {0} bao thanh cong nhung khong co file ket qua".format(
             _lay(job, "id"))
 
+    ma_job = _lay(job, "id")
     extra_paths = []
     da_ghi = []
     try:
@@ -224,8 +238,15 @@ def generate_image(prompt, out_path, aspect=None, seed=None, reference_images=No
                     else duong_dan_phu(danh_sach_dich[-1], i - len(danh_sach_dich) + 1)
             else:
                 dich = duong_dan_phu(out_path, i)
-            # Link sống 7 ngày -> tải NGAY, không lưu URL lại dùng sau.
-            _sc.tai_ve(url, dich, timeout=float(timeout))
+            # ⚠ TẢI QUA `/download`, ĐỪNG BÁM `output.url`.
+            #
+            # Từ 14/08/2026 `output.url` trỏ thẳng sang Google và chỉ sống ~6
+            # giờ. Ở đây tải ngay nên phần lớn lần vẫn kịp — nhưng một mẻ lớn
+            # nghẽn hàng chờ, hoặc một lượt thử lại, là quá đủ để link chết.
+            # `tai_ket_qua` đi đường `/download` (không hết hạn), rồi mới lùi về
+            # `output.url`, rồi mới xin link tươi.
+            _sc.tai_ket_qua(client, ma_job, dich, index=i, timeout=float(timeout),
+                            url_du_phong=url, log=log)
             da_ghi.append(dich)
             if i > 0:
                 extra_paths.append(dich)

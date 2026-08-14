@@ -222,8 +222,11 @@ def generate(image_path, prompt, out_path, aspect=None, seed=None, timeout=1600,
             _sc._lay_truong(job, "id"))
 
     try:
-        # Link sống 7 ngày -> tải NGAY về đĩa, không lưu URL lại dùng tuần sau.
-        _sc.tai_ve(url, str(out_path), timeout=float(timeout))
+        # ⚠ TẢI QUA `/download` — xem chú thích cùng chỗ ở `shopapi_image_client`.
+        # Video nằm ở cuối một hàng chờ có lúc dài 90+ giây, nên nó dính hạn 6
+        # giờ của `output.url` sớm hơn ảnh.
+        _sc.tai_ket_qua(client, _sc._lay_truong(job, "id"), str(out_path),
+                        timeout=float(timeout), url_du_phong=url, log=log)
     except Exception as exc:
         return False, {}, "shopapi-vid: tai video ve dia that bai: {0}".format(
             _sc.mo_ta_loi(exc))
