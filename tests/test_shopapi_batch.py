@@ -715,3 +715,83 @@ def test_vong_chay_that_CO_dung_tran_san_luong():
     assert "DoHieuQua()" in than, "chua dung DoHieuQua trong chay_ca_me"
     assert "hieu_qua.ghi_xong()" in than, "khong ghi nhan job xong -> khong do duoc gi"
     assert "hieu_qua.cho_phep()" in than, "do xong ma khong dung ket qua de chan"
+
+
+# ── Nhịp GỬI: khác hẳn số job SONG SONG ──────────────────────────────────────
+#
+# Trần máy chủ (`limit`) nói bao nhiêu job được CHẠY cùng lúc. Hạn mức
+# `requests_per_minute` nói bao nhiêu lời gọi được GỬI mỗi phút. Mở đủ 979 chỗ
+# chạy KHÔNG có nghĩa là được tạo 979 job trong một nhịp thở.
+#
+# Đo 15/08/2026, ngay sau khi sửa cho vòng dò khởi động đúng ở 979: mẻ bắn một
+# loạt, ăn 2.651 lần `429`, 71 job chết vì quá hạn, và ra ĐÚNG 0 ẢNH. Trần song
+# song thì đúng, cách tiêu nó thì sai.
+
+
+def test_thung_gui_cho_BUNG_mot_loat_roi_moi_rot_deu():
+    """Mẻ cỡ thường phải đi thẳng; quá mức bùng thì mới nhỏ giọt."""
+    dh = _DongHo()
+    th = sb.ThungGui(so_ban=1, ngan_sach=1800.0, dong_ho=dh)   # 10 job/giay
+    assert th.xin(1000) == sb.TRAN_BUNG, "lo dau phai duoc bung tron muc cho phep"
+    assert th.xin(1000) == 0, "bung xong ma van cho gui tiep = khong ghim gi ca"
+    dh.tien(3.0)
+    assert th.xin(1000) == 30, "rot deu sai nhip"
+
+
+def test_thung_gui_KHONG_cho_don_qua_muc_bung():
+    """Ngồi im mười phút rồi bắn một phát 6.000 job là đúng cái đã gây thảm hoạ."""
+    dh = _DongHo()
+    th = sb.ThungGui(so_ban=1, ngan_sach=1800.0, dong_ho=dh)
+    th.xin(sb.TRAN_BUNG)
+    dh.tien(600.0)
+    assert th.xin(10 ** 6) == sb.TRAN_BUNG
+
+
+def test_thung_gui_CHIA_cho_so_tien_trinh_dang_song():
+    """Tám mã cùng chạy thì hạn mức request cũng phải chia tám."""
+    dh = _DongHo()
+    mot = sb.ThungGui(so_ban=1, ngan_sach=1800.0, dong_ho=dh)
+    tam = sb.ThungGui(so_ban=8, ngan_sach=1800.0, dong_ho=dh)
+    assert abs(mot.toc_do() - 8 * tam.toc_do()) < 1e-9
+
+
+def test_thung_gui_luon_con_nhich_duoc():
+    """Chia cho bao nhiêu tiến trình cũng không được về 0 — về 0 là đứng hẳn."""
+    th = sb.ThungGui(so_ban=10 ** 6, ngan_sach=1.0)
+    assert th.toc_do() > 0
+
+
+def test_vong_chay_CO_ghim_nhip_gui():
+    """Viết thùng mà quên cắm vào vòng chạy thì nó chỉ là mã chết."""
+    import inspect
+    than = inspect.getsource(sb.chay_ca_me)
+    assert "ThungGui()" in than
+    assert "thung.xin(" in than, "khong xin token truoc khi gui"
+    assert "thung.cho_bao_lau()" in than, "het token ma khong nghi -> vong quay tit"
+
+
+def test_job_HONG_khong_duoc_tinh_la_san_luong():
+    """Bộ leo đồi đếm job hỏng là hàng ra thì nó leo lên đúng chỗ chết.
+
+    Đo 15/08/2026: nhật ký báo "262 job/phút ở 715 job cùng lúc" trong khi số
+    ảnh THẬT ra được là 0 — toàn bộ là `429`. Bộ leo đồi tưởng đang ở đỉnh phong
+    độ và cứ thế nhồi thêm.
+    """
+    import inspect
+    than = inspect.getsource(sb.chay_ca_me)
+    assert 'if trang_thai == "xong":' in than, \
+        "khong phan biet xong that voi hong -> dem ca job hong la san luong"
+    boc = inspect.getsource(sb._boc)
+    assert '"hong", gia_tri_khi_hong' in boc, "_boc van gop job hong vao nhanh 'xong'"
+
+
+def test_viec_hong_VAN_giu_dung_cho_trong_ket_qua():
+    """Tách 'hỏng' khỏi 'xong' không được làm lệch thứ tự kết quả."""
+    def _chay(v):
+        if v % 3 == 0:
+            raise ValueError("hong that")
+        return v * 10
+
+    ket = sb.chay_ca_me(list(range(9)), _chay, "image", log=lambda *a, **k: None,
+                        gia_tri_khi_hong=None, tu_dieu_tiet=False, tran_tool=4)
+    assert ket == [None, 10, 20, None, 40, 50, None, 70, 80]

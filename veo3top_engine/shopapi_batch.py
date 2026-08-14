@@ -741,6 +741,95 @@ def so_luong_song_song(loai, tran_tool=None, client=None, api_key=None, log=prin
 # ── Chạy cả mẻ ───────────────────────────────────────────────────────────────
 
 
+#: Hạn mức request/phút của cả TÀI KHOẢN (hợp đồng API). Chừa lại một phần cho
+#: `/v1/me` và các lời hỏi khác, nên ngân sách gửi để dưới mức trần.
+NGAN_SACH_REQ_PHUT = 850
+
+#: Mỗi job tốn khoảng ngần này lời gọi: `POST` tạo + 1 kết nối SSE + 1 `GET`
+#: lấy kết quả. Đã đo: 2,0 request/ảnh trên đường SSE, để 3 cho có biên.
+REQ_MOI_JOB = 3.0
+
+#: Được gửi bao nhiêu job liền một mạch trước khi phải rót đều.
+#:
+#: 979 là con số đã gây thảm hoạ; 5 (một giây rót) thì mẻ nhỏ nào cũng bị nhỏ
+#: giọt vô cớ. 64 cho mọi mẻ cỡ thường đi thẳng trong một lượt, mà vẫn giữ cú
+#: bùng đầu tiên trong tầm hạn mức.
+TRAN_BUNG = 64
+
+
+class ThungGui:
+    """Ghìm TỐC ĐỘ GỬI job, tách hẳn khỏi SỐ JOB SONG SONG.
+
+    ═══ HAI THỨ KHÁC NHAU, VÀ TÔI ĐÃ NHẦM ═══
+
+    Trần máy chủ (`limit`) nói **bao nhiêu job được CHẠY cùng lúc**. Hạn mức
+    `requests_per_minute` nói **bao nhiêu lời gọi được GỬI mỗi phút**. Mở đủ
+    979 chỗ chạy không có nghĩa là được phép tạo 979 job trong một nhịp thở.
+
+    Đo 15/08/2026, sau khi sửa cho vòng dò khởi động đúng ở 979: mẻ bắn một
+    loạt và ăn **2.651 lần `429`**, 71 job chết vì quá hạn, và ra **0 ảnh**.
+    Trần song song thì đúng, nhưng cách tiêu nó thì sai — cả ngân sách
+    request của một phút bị đốt trong vài giây đầu, rồi mọi thứ kể cả
+    `GET /v1/me` đều bị chặn ở cửa.
+
+    Thùng token này rót đều: `ngân_sách_phút ÷ số_request_mỗi_job ÷ số_tiến
+    _trình_đang_sống` job mỗi giây. Nó KHÔNG thay `nhip`/`cong` — chúng chặn
+    *tổng số đang bay*, còn cái này chặn *nhịp rót vào*. Cần cả hai: một mẻ có
+    thể vừa đúng trần song song vừa gửi quá nhanh, và ngược lại.
+    """
+
+    def __init__(self, so_ban=None, ngan_sach=None, dong_ho=time.monotonic):
+        self._dong_ho = dong_ho
+        self._lan_cuoi = dong_ho()
+        # ⚠ ĐẦY SẴN, KHÔNG RỖNG. Thùng rỗng nghĩa là lô ĐẦU TIÊN của mọi mẻ chỉ
+        # được một job — đúng cái nhịp bò mà cả đợt sửa này đi chữa.
+        self._token = float(TRAN_BUNG)
+        self._so_ban = so_ban
+        self._ngan_sach = float(ngan_sach if ngan_sach is not None
+                                else _so_moi_truong("SHOPAPI_NGAN_SACH_REQ", NGAN_SACH_REQ_PHUT))
+
+    def toc_do(self):
+        """Bao nhiêu job được gửi mỗi giây, phần của TIẾN TRÌNH NÀY."""
+        ban = self._so_ban
+        if ban is None:
+            try:
+                ban = int(_sc.dem_ban_dang_chay(""))
+            except Exception:
+                ban = 1
+        return max(0.2, self._ngan_sach / 60.0 / REQ_MOI_JOB / max(1, int(ban)))
+
+    def xin(self, n):
+        """Xin gửi `n` job. Trả số ĐƯỢC PHÉP gửi ngay bây giờ (có thể là 0)."""
+        gio = self._dong_ho()
+        self._token += (gio - self._lan_cuoi) * self.toc_do()
+        self._lan_cuoi = gio
+        # ⚠ TRẦN THÙNG = MỨC BÙNG CHO PHÉP. Thảm hoạ 15/08/2026 là bùng 979
+        # job trong một nhịp thở (2.651 lần `429`, 0 ảnh ra). Nhưng chặn xuống
+        # "một giây rót" thì mẻ nhỏ nào cũng phải nhỏ giọt vô cớ — một mẻ 30
+        # scene lẽ ra đi trong một lượt lại kéo thành bảy giây.
+        #
+        # `TRAN_BUNG` là điểm giữa: đủ rộng để mọi mẻ cỡ thường đi thẳng, đủ hẹp
+        # để không đốt sạch ngân sách một phút. Quá mức đó thì rót đều theo
+        # `toc_do()`.
+        self._token = min(self._token, max(float(TRAN_BUNG), self.toc_do()))
+        cho = int(min(int(n), int(self._token)))
+        if cho > 0:
+            self._token -= cho
+        return cho
+
+    def cho_bao_lau(self):
+        """Chưa đủ một token thì phải nghỉ bao lâu nữa."""
+        thieu = max(0.0, 1.0 - self._token)
+        return thieu / self.toc_do() if thieu > 0 else 0.0
+
+
+def _so_moi_truong(ten, mac_dinh):
+    try:
+        return float(os.environ.get(ten) or mac_dinh)
+    except (TypeError, ValueError):
+        return float(mac_dinh)
+
+
 class DoHieuQua:
     """Trần theo SẢN LƯỢNG ĐO ĐƯỢC, không theo con số máy chủ rao.
 
@@ -852,7 +941,13 @@ class DoHieuQua:
 def _boc(chay_mot, viec, gia_tri_khi_hong, log, cong=None):
     """Chạy MỘT việc sao cho **không có gì lọt ra ngoài** làm chết cả mẻ.
 
-    Trả `("nghen", BiNghen)` hoặc `("xong", giá_trị)`. Không bao giờ ném.
+    Trả `("nghen", BiNghen)`, `("xong", giá_trị)`, hoặc `("hong", giá_trị)`.
+    Không bao giờ ném.
+
+    ⚠ "XONG" VÀ "HỎNG" PHẢI TÁCH RA. Bản trước gộp cả hai thành `"xong"`, và
+    `DoHieuQua` đếm luôn job hỏng là sản lượng. Phép đo 10 phút ngày 15/08/2026
+    báo "262 job/phút" trong khi số ảnh thật ra được là **0** — 2.651 job dính
+    `429`. Bộ leo đồi tưởng đang ở đỉnh phong độ và cứ thế nhồi thêm.
 
     Đây là chỗ phân biệt hai loại thất bại hoàn toàn khác nhau:
 
@@ -878,7 +973,7 @@ def _boc(chay_mot, viec, gia_tri_khi_hong, log, cong=None):
                 .format(_sc.mo_ta_loi(exc)), "WARN")
         except Exception:
             pass
-        return "xong", gia_tri_khi_hong
+        return "hong", gia_tri_khi_hong
     finally:
         _cuc_bo.trong_me = False
         _cuc_bo.cong = None
@@ -937,6 +1032,10 @@ def chay_ca_me(viec, chay_mot, loai, tran_tool=None, client=None, api_key=None,
     #: Trần theo SẢN LƯỢNG ĐO ĐƯỢC — lớp chặn duy nhất nhìn thấy kiểu nghẽn
     #: "máy chủ nhận hết rồi chạy chậm" (không 429, không 503, `queued = 0`).
     hieu_qua = DoHieuQua()
+    #: Ghìm NHỊP RÓT VÀO. `nhip`/`cong` chặn tổng số đang bay; cái này chặn tốc
+    #: độ gửi, và thiếu nó thì một mẻ đúng trần song song vẫn đốt sạch hạn mức
+    #: request của cả phút trong vài giây đầu.
+    thung = ThungGui()
     #: Trần đọc gần nhất + lúc đọc. Vòng lặp hỏi qua `_doc_tran`, không hỏi thẳng.
     _tran_moi_nhat = [0, 0.0]
 
@@ -1046,7 +1145,8 @@ def chay_ca_me(viec, chay_mot, loai, tran_tool=None, client=None, api_key=None,
                 continue
             ket_qua[i] = gia_tri
             nhip.xong()
-            hieu_qua.ghi_xong()
+            if trang_thai == "xong":
+                hieu_qua.ghi_xong()   # CHỈ đếm hàng ra thật, không đếm job hỏng
         return lai
 
     try:
@@ -1127,6 +1227,8 @@ def chay_ca_me(viec, chay_mot, loai, tran_tool=None, client=None, api_key=None,
         # đang bay. Bài `test_cong_nha_HET_cho_du_lo_an_429` bắt đúng lỗi này.
         n = min(n, len(con_lai))
         if n > 0:
+            n = thung.xin(n)          # ghìm nhịp rót TRƯỚC khi giữ chỗ
+        if n > 0:
             n = cong.giu_cho(n)
         if n <= 0:
             if dang_bay:
@@ -1138,6 +1240,12 @@ def chay_ca_me(viec, chay_mot, loai, tran_tool=None, client=None, api_key=None,
                         "DAU HANG CHO, KHONG mat viec, KHONG bi tru tien"
                         .format(loai, len(tra_lai), nhip.mo_ta()), "WARN")
                     con_lai = sorted(tra_lai) + con_lai
+                continue
+            _cho_gui = thung.cho_bao_lau()
+            if _cho_gui > 0:
+                # Hết token gửi: nghỉ ĐÚNG tới lúc có token, không nghỉ trọn
+                # quãng dài — hàng còn đang bay và phải quay lại nhặt.
+                ngu(min(_cho_gui, NHIP_KIEM_DUNG))
                 continue
             if nhip.cho_bao_lau() <= 0 and cong.cho_bao_lau() <= 0:
                 # Cổng đóng vì hàng dài chứ không vì một quãng dừng có hạn -> phải

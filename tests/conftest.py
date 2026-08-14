@@ -65,6 +65,11 @@ def nhip_song_rieng(monkeypatch, tmp_path):
     """
     import shopapi_common as _sc
     monkeypatch.setenv("SHOPAPI_NHIP_DIR", str(tmp_path / "nhip"))
+    # Ngân sách GỬI để rất rộng: `ThungGui` ghìm theo ĐỒNG HỒ THẬT, nên để mức
+    # thật thì mọi bài kiểm về TRẦN lại vô tình đo luôn nhịp gửi — vừa sai thứ
+    # cần đo, vừa kéo cả bộ kiểm từ 12 giây lên 83 giây vì ngồi chờ token.
+    # Nhịp gửi có bộ kiểm riêng, với đồng hồ tiêm vào: `test_thung_gui_*`.
+    monkeypatch.setenv("SHOPAPI_NGAN_SACH_REQ", "100000000")
     monkeypatch.setattr(_sc, "tran_cung_may_chu",
                         lambda loai, api_key=None, client=None, bay_gio=None: 10 ** 6)
     yield
