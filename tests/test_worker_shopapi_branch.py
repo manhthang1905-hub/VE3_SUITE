@@ -483,3 +483,73 @@ def test_nhan_ca_ma_201(tmp_path, nhat_ky, co_khoa, monkeypatch):
     monkeypatch.setattr(_rq, "post", lambda *a, **k: _R())
     w = _worker(tmp_path, nhat_ky)
     assert w._call_shopapi_rewrite("viet lai") == "cau moi"
+
+
+# ── Nhà máy nghẽn KHÔNG phải prompt hỏng ─────────────────────────────────────
+
+
+def test_nhan_ra_loi_do_NGHEN_chu_khong_phai_prompt(tmp_path, nhat_ky, co_khoa):
+    """Viết lại prompt để né bộ lọc là đúng — nhưng chỉ khi prompt thật sự bị chặn."""
+    w = _worker(tmp_path, nhat_ky, {})
+    for cau in ("May chu bao qua tai (429 / resource_exhausted)",
+                "EngineUnavailableError: Nha may anh hien khong co cho nao nhan viec",
+                "503 service unavailable",
+                "Nhà máy đang dừng, không có máy xử lý nào online",
+                "rate limit exceeded"):
+        assert w._loi_do_nghen(cau), "khong nhan ra nghen: {0}".format(cau)
+    for cau in ("content_rejected: prompt vi pham chinh sach",
+                "PUBLIC_ERROR_UNSAFE_GENERATION",
+                "prompt contains prohibited content",
+                ""):
+        assert not w._loi_do_nghen(cau), "nham loi noi dung thanh nghen: {0}".format(cau)
+
+
+def test_NGHEN_thi_KHONG_chay_last_resort_prompt():
+    """Một cú nghẹn thoáng qua của nhà máy không được thành 'lượt trắng'.
+
+    Đã dính thật lúc 17:17:02 ngày 15/08/2026, mã TH1-0182:
+
+        me video lo 1 -> ban them 1 job | tran may chu 172
+        Video scene 81: thu last-resort prompt de tranh fail
+        Video scene 81 FAIL (0.0s) [error: retry lt sau]
+        KET QUA: CO LOI - Video: 0/1
+        TH1-0182: lượt trắng 1/3
+
+    Cùng giây đó mã TH1-0097 nhận đúng lỗi ấy nhưng xử lý đúng: "nha may DANG
+    DUNG (503) -> cho 30s roi tham do lai". Ba lượt trắng là mã bị ĐỖ LẠI, dù
+    nó chẳng có gì sai.
+
+    Vòng viết lại prompt ở trên đã kiểm `_is_policy_violation_error`; khối
+    last-resort thì quên — nên `503` cũng kéo nó chạy, tốn thêm một lượt gửi
+    nữa (cũng `503`) rồi ghi scene là hỏng.
+    """
+    import ast, inspect
+    import ve3_worker
+    nguon = inspect.getsource(ve3_worker)
+    cay = ast.parse(nguon)
+    for node in ast.walk(cay):
+        if isinstance(node, ast.FunctionDef) and node.name == "_fail_status_for":
+            break
+    i = nguon.find("video_last_resort_enabled")
+    assert i > 0, "khong tim thay khoi last-resort"
+    quanh = nguon[max(0, i - 300):i + 300]
+    assert "_loi_do_nghen(error_text)" in quanh, (
+        "khoi last-resort van chay ke ca khi nha may nghen -> bien 503 thanh "
+        "scene hong va an mot luot trang")
+
+
+def test_di_TOAN_API_thi_khong_bao_ERROR_thieu_server(tmp_path, nhat_ky, co_khoa):
+    """`ServerPool` là đường Chrome/VM — đi API thì không có server, và đó là ĐÚNG.
+
+    Log 17:16–17:17 ngày 15/08/2026 có `ERROR Khong co server URL!` ở CẢ SÁU mã
+    đang chạy tốt. ERROR giả làm hỏng đúng thứ log sinh ra để làm: người đọc
+    quét tìm ERROR, thấy nó ở mọi mã, rồi thôi không tin dòng ERROR nào nữa.
+    """
+    import inspect
+    import ve3_worker
+    nguon = inspect.getsource(ve3_worker)
+    i = nguon.find('"Khong co server URL!"')
+    assert i > 0, "khong tim thay dong ERROR"
+    truoc = nguon[max(0, i - 1500):i]
+    assert "use_shopapi_for_image and self.use_shopapi_for_video" in truoc, (
+        "che do toan API van roi vao nhanh ERROR 'Khong co server URL!'")

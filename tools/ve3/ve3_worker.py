@@ -645,7 +645,20 @@ class VE3Worker:
             self.pool.refresh_all()
             self.log(f"Server pool: {len(self.pool.servers)} server(s)")
         else:
-            if self.generation_backend in ("nanopic", "flowkit", "combined"):
+            if self.use_shopapi_for_image and self.use_shopapi_for_video:
+                # ⚠ ĐI TOÀN API THÌ KHÔNG CÓ SERVER NÀO, VÀ ĐÓ LÀ ĐÚNG.
+                #
+                # `ServerPool` là đường Chrome/VM. Chạy qua api.shopapi.vn thì
+                # không có `local_server_list` lẫn `local_server_url` — nên
+                # nhánh này rơi vào `else` và bắn ERROR "Khong co server URL!"
+                # cho MỌI mã, mỗi lần khởi động. Log máy khác 17:16-17:17 ngày
+                # 15/08/2026 có dòng đó ở cả sáu mã đang chạy tốt.
+                #
+                # ERROR giả làm hỏng đúng thứ log sinh ra để làm: người đọc quét
+                # tìm ERROR, thấy nó ở mọi mã, rồi thôi không tin dòng ERROR nào
+                # nữa. Lần sau có lỗi thật thì nó lẫn vào đám này.
+                self.log("Khong dung server nao: ca anh lan video di API shopapi", "INFO")
+            elif self.generation_backend in ("nanopic", "flowkit", "combined"):
                 self.log(f"Khong co server URL, dang chay {self.generation_backend} mode", "INFO")
             elif self.nanopic_fallback_enabled and self.config.get("nanopic_use_flow_proxy", False):
                 self.log("Khong co server URL, se dung NanoPic fallback", "WARN")
@@ -1968,6 +1981,42 @@ Generator/context error:
             self.log(f"[QUEUE] {reason} — project tạm nghỉ {int(seconds)}s (resume {time.strftime('%H:%M:%S', time.localtime(resume_ts))}), sẽ tự retry", "WARN")
         except Exception as e:
             self.log(f"[QUEUE] Failed to write retry-wait marker: {e}", "ERROR")
+
+    #: Dấu hiệu NHÀ MÁY NGHẼN trong câu lỗi — không phải lỗi của prompt.
+    #:
+    #: Giữ cả tiếng Việt lẫn tiếng Anh: `shopapi_common.mo_ta_loi` dịch lỗi SDK
+    #: sang tiếng Việt trước khi nó tới đây, còn lỗi thô của pool thì tiếng Anh.
+    DAU_HIEU_NGHEN = (
+        "429", "503", "resource_exhausted", "engineunavailable",
+        "rate limit", "ratelimit", "qua tai", "quá tải",
+        "nha may dang dung", "nhà máy đang dừng", "khong co may xu ly",
+        "không có máy xử lý", "service unavailable", "temporarily unavailable",
+    )
+
+    def _loi_do_nghen(self, error_text: str) -> bool:
+        """Câu lỗi này là NHÀ MÁY NGHẼN chứ không phải prompt hỏng?
+
+        ═══ VÌ SAO PHẢI PHÂN BIỆT ═══
+
+        Viết lại prompt để tránh bộ lọc nội dung là đúng khi prompt thật sự bị
+        chặn. Nhưng khi nhà máy trả `503`/`429`, prompt hoàn toàn vô tội — viết
+        lại chỉ tốn thêm một lượt gửi nữa (cũng `503`), rồi ghi scene là HỎNG.
+
+        Đã dính thật lúc 17:17:02 ngày 15/08/2026, mã TH1-0182:
+
+            me video lo 1 -> ban them 1 job | tran may chu 172
+            Video scene 81: thu last-resort prompt de tranh fail
+            Video scene 81 FAIL (0.0s) [error: retry lt sau]
+            KET QUA: CO LOI - Video: 0/1
+            TH1-0182: lượt trắng 1/3
+
+        Cùng giây đó mã TH1-0097 nhận đúng lỗi ấy nhưng đi qua đường khác và xử
+        lý đúng: "nha may DANG DUNG (503) -> cho 30s roi tham do lai". Một cú
+        nghẹn thoáng qua của nhà máy biến thành một "lượt trắng" tính vào hạn ba
+        lượt — ba lần như thế là mã bị ĐỖ LẠI, dù nó chẳng có gì sai.
+        """
+        err = (error_text or "").lower()
+        return any(d in err for d in self.DAU_HIEU_NGHEN)
 
     def _fail_status_for(self, error_text: str) -> str:
         """Phân loại trạng thái fail 1 scene:
@@ -3472,7 +3521,13 @@ Generator/context error:
                         wb._save_pending_write("scene", scene_id=sid, video_prompt=current_prompt)
                         self.log(f"    Video scene {sid}: Excel bi khoa, luu pending prompt rewrite", "WARN")
                 self.log(f"    Video scene {sid}: da cap nhat prompt moi va retry", "INFO")
-            if not success and not self._stop_flag and self.config.get("video_last_resort_enabled", True):
+            # ⚠ NHÀ MÁY NGHẼN THÌ ĐỪNG VIẾT LẠI PROMPT. Vòng viết lại ở trên đã
+            # kiểm `_is_policy_violation_error`; khối last-resort này thì quên,
+            # nên một cú `503` cũng kéo nó chạy — tốn thêm một lượt gửi nữa
+            # (cũng `503`) rồi ghi scene là hỏng. Xem `_loi_do_nghen`.
+            if (not success and not self._stop_flag
+                    and self.config.get("video_last_resort_enabled", True)
+                    and not self._loi_do_nghen(error_text)):
                 srt_text = " ".join(str(getattr(scene, "srt_text", "") or "").split())
                 simple_idea = srt_text[:260] if srt_text else "the emotional idea of this scene"
                 last_resort_prompt = (
