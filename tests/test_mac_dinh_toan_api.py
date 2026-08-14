@@ -1481,3 +1481,41 @@ def test_che_do_API_KHONG_hoi_pool_Chrome_de_chan_so_ma():
     assert "_so_ma_song_song_shopapi()" in truoc, (
         "che do API phai dung cung mot nguon voi so cho lam ao, khong thi hai "
         "cai chan da nhau")
+
+
+# ── Ô chẩn đoán KHÔNG được kết tội oan ───────────────────────────────────────
+
+
+def test_khong_job_nao_toi_may_chu_phai_LAP_LAI_moi_bao_loi():
+    """"Có mã ở pha này mà 0 job trên máy chủ" là BÌNH THƯỜNG trong ba cảnh.
+
+      * worker vừa bật, chưa kịp gửi lô đầu (vài giây);
+      * vừa xong một lô, đang nhặt kết quả trước khi gửi lô sau;
+      * "mã ở pha này" ĐẾM SAI — con số đó suy từ FILE TRÊN ĐĨA (thiếu ảnh ⇒
+        đang ở pha ảnh), còn worker quyết định pha bằng EXCEL. Hai nguồn lệch
+        nhau khi ta vừa xoá một tấm ảnh hỏng (bản 546 làm đúng việc đó): đĩa
+        thiếu ảnh nhưng worker đã sang pha video.
+
+    Kêu oan còn tệ hơn im lặng — nó gửi người vận hành đi tìm lỗi trong log của
+    một thứ đang chạy đúng.
+    """
+    g = _ve3_gui()
+    assert g.HomePage.KHONG_JOB_TOI_DA >= 2, "bao ngay o luot doc dau tien la keu oan"
+    nguon = VE3_GUI.read_text(encoding="utf-8", errors="replace")
+    than = ast.get_source_segment(nguon, _ham("_so_lieu_api_len_tram")) or ""
+    assert "_khong_job_lien_tiep" in than, "khong dem lien tiep -> bao ngay lan dau"
+    i = than.find("KHONG job nao toi may chu")
+    if i < 0:
+        i = than.find("KHÔNG job nào tới máy chủ")
+    assert i > 0, "khong tim thay cau ket toi"
+    assert "KHONG_JOB_TOI_DA" in than[max(0, i - 900):i], \
+        "cau ket toi khong bi chan boi nguong lap lai"
+
+
+def test_co_job_thi_QUEN_HET_luot_trang_truoc():
+    """Vài lượt rời rạc cộng dồn lại thành một báo động sai."""
+    nguon = VE3_GUI.read_text(encoding="utf-8", errors="replace")
+    than = ast.get_source_segment(nguon, _ham("_so_lieu_api_len_tram")) or ""
+    i = than.find("if chay or cho:")
+    assert i > 0, "khong dat lai bo dem khi co job"
+    assert "_khong_job_lien_tiep" in than[i:i + 400]

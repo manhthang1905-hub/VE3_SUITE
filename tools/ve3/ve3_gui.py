@@ -1155,6 +1155,12 @@ class HomePage(ctk.CTkScrollableFrame):
     #:
     #: Một con số xếp hàng đứng yên không phân biệt được hai cảnh đó — đúng chỗ
     #: đã làm người vận hành đọc "xin 40 / chạy 3" rồi đi chữa nhầm phía.
+    #: Bao nhiêu lượt đọc LIÊN TIẾP thấy "có mã ở pha này mà 0 job trên máy chủ"
+    #: thì mới kết tội tool. Một lượt đọc ~15 giây, nên 3 lượt ≈ 45 giây — đủ dài
+    #: để bỏ qua lúc khởi động và quãng nghỉ giữa hai lô, đủ ngắn để người vận
+    #: hành không phải ngồi đoán.
+    KHONG_JOB_TOI_DA = 3
+
     NHAN_TRAM_API = {
         # HÀNG 1 — TA ĐẨY: mã → xin → máy chủ nhận → xếp hàng
         "img_login": "MÃ Ở PHA NÀY",   "img_run": "TA XIN / ĐƯỢC CẤP",
@@ -1427,8 +1433,33 @@ class HomePage(ctk.CTkScrollableFrame):
                 vals[khoa[-1]] = ("⏳ KHÔNG mã nào đang ở pha này — chưa tới lượt, hoặc hàng "
                                   "chờ đã dừng. Bấm RUN nếu muốn chạy tiếp.", GRAY)
             elif chay == 0 and cho == 0:
-                vals[khoa[-1]] = ("⛔ {0} mã đang chạy mà KHÔNG job nào tới máy chủ — tool "
-                                  "không gửi được. Xem logs/ve3-*.log.".format(ma), RED)
+                # ⚠ ĐỪNG KẾT TỘI Ở LẦN ĐỌC ĐẦU TIÊN. Trạng thái "có mã ở pha này
+                # mà 0 job trên máy chủ" là BÌNH THƯỜNG trong ba cảnh:
+                #
+                #   * worker vừa bật, chưa kịp gửi lô đầu (vài giây);
+                #   * vừa xong một lô, đang nhặt kết quả trước khi gửi lô sau;
+                #   * "mã ở pha này" ĐẾM SAI. Con số đó suy từ FILE TRÊN ĐĨA
+                #     (thiếu ảnh ⇒ đang ở pha ảnh), còn worker quyết định pha
+                #     bằng EXCEL. Hai nguồn lệch nhau khi một cảnh vĩnh viễn
+                #     không dựng được, hoặc khi ta vừa xoá một tấm ảnh hỏng —
+                #     đúng việc bản 546 làm. Lúc đó đĩa thiếu ảnh nhưng worker
+                #     đã sang pha video, và ô này kết tội oan.
+                #
+                # Kêu oan còn tệ hơn im lặng: người vận hành đi tìm lỗi trong
+                # log của một thứ đang chạy đúng. Chỉ báo khi thấy LẶP LẠI.
+                _dem = getattr(self, "_khong_job_lien_tiep", {})
+                _dem[loai] = _dem.get(loai, 0) + 1
+                self._khong_job_lien_tiep = _dem
+                if _dem[loai] >= self.KHONG_JOB_TOI_DA:
+                    vals[khoa[-1]] = ("⛔ {0} mã ở pha này mà KHÔNG job nào tới máy chủ, "
+                                      "suốt {1} lượt đọc — tool không gửi được. Xem "
+                                      "logs/ve3-*.log."
+                                      .format(ma, _dem[loai]), RED)
+                else:
+                    vals[khoa[-1]] = ("⏳ {0} mã ở pha này, chưa job nào tới máy chủ — đang "
+                                      "khởi động hoặc giữa hai lô. Báo lỗi nếu còn vậy sau "
+                                      "{1} lượt đọc nữa."
+                                      .format(ma, self.KHONG_JOB_TOI_DA - _dem[loai]), GRAY)
             elif _dai_ra and cho > max(8, tran * 0.15):
                 # ⚠ ĐÂY KHÔNG PHẢI LỖI CỦA TOOL — và nói nhầm chỗ này là đắt.
                 #
@@ -1473,6 +1504,12 @@ class HomePage(ctk.CTkScrollableFrame):
                 vals[khoa[-1]] = ("✅ {0} mã · {1} chạy / {2} chờ · {3:.1f}/phút · còn {4}"
                                   .format(ma, chay, cho, (gio or 0) / 60.0,
                                           con if con is not None else "?"), GREEN)
+            if chay or cho:
+                # Có job rồi -> quên hết những lượt trắng trước đó. Không reset
+                # thì vài lượt rời rạc cộng dồn lại thành một báo động sai.
+                _d = getattr(self, "_khong_job_lien_tiep", {})
+                _d[loai] = 0
+                self._khong_job_lien_tiep = _d
             status.append("{0}: chạy {1} · chờ {2} · trần {3}".format(loai, chay, cho, tran))
 
         # ═══ DÒNG KHAI THÁC: cái gì đang là trần THẬT, ngay lúc này ═══
