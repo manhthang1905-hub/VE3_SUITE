@@ -1378,3 +1378,106 @@ def test_BAN_SAO_THU_BA_o_AUTO_visual_KHONG_duoc_dem(tmp_path, monkeypatch):
     assert "EDIT_VISUAL_DIR" not in than, (
         "visual/ la BAN SAO cua PROJECTS — dem no la nhan doi san luong")
     assert "PROJECTS_DIR" in than and "ARCHIVE_DIR" in than
+
+
+# ── Ba cái chặn khiến hàng chục mã đứng ngoài ────────────────────────────────
+#
+# Log máy khác 17:00–17:04 ngày 15/08/2026: gần 40 mã bị `skip no_free_pair`
+# trong bốn phút, trong khi 6 mã đang chạy chỉ dùng một phần nhỏ nhà máy.
+
+
+def test_tran_MU_tra_thang_KHONG_bi_chia_lan_hai():
+    """`TRAN_KHOI_DONG_MU` đã là suất CỦA MỘT tiến trình.
+
+    Để nó chảy tiếp xuống nhánh tự điều tiết là chia thêm lần nữa cho số mã
+    đang sống. Bắt được trong log lúc 17:01:40:
+
+        khong hoi duoc GET /v1/me cho 'video' -> tam chay 32 job
+        me video lo 1 -> ban them 4 job | dang bay 4/6 | tran may chu 4
+
+    32 ÷ 7 mã = 4. Một mã có 76 video chờ mà mở đúng 4 chỗ, giữa lúc nhà máy
+    đang cấp 53.
+    """
+    import sys, inspect
+    ENGINE = Path(__file__).resolve().parents[1] / "veo3top_engine"
+    if str(ENGINE) not in sys.path:
+        sys.path.insert(0, str(ENGINE))
+    import shopapi_batch as sb
+    than = inspect.getsource(sb._hoi_tran)
+    i = than.find("tam chay {1} job")
+    assert i > 0, "khong tim thay nhanh mu"
+    sau = than[i:i + 400]
+    assert "return _mo" in sau, (
+        "nhanh mu van gan `tran = _mo` roi roi xuong phep chia -> chia hai lan")
+
+
+def test_so_ma_song_song_TU_SUY_theo_tran_may_chu(monkeypatch):
+    """8 mã cố định khiến mã thứ 9 trở đi đứng ngoài với `no_free_pair`.
+
+    Và đây mới là chỗ đau: trần song song của máy chủ chỉ có ích khi ta CÓ ĐỦ
+    VIỆC để lấp nó. Cùng log đó, mã TH1-0069 vào pha ảnh với đúng 2 cảnh cần
+    làm, gửi 2 job — trong khi máy chủ đang cấp 200 chỗ. 198 chỗ bỏ không,
+    không phải vì tool chậm mà vì mã đó HẾT VIỆC.
+    """
+    g = _ve3_gui()
+    import shopapi_common as sc
+    monkeypatch.setattr(sc, "tran_song_song",
+                        lambda loai, api_key=None, mac_dinh=1, client=None:
+                        {"image": 979, "video": 374}.get(loai, 0))
+
+    class _App:
+        MA_SONG_SONG_TOI_DA = g.VE3App.MA_SONG_SONG_TOI_DA
+        _so_ma_song_song_shopapi = g.VE3App._so_ma_song_song_shopapi
+        config_data = {"veo3top_image_mode": "shopapi", "generation_backend": "shopapi",
+                       "shopapi_ma_song_song": 8}
+
+    n = _App()._so_ma_song_song_shopapi()
+    assert n > 8, "van ghim o con so cau hinh -> hang chuc ma dung ngoai"
+    assert n <= g.VE3App.MA_SONG_SONG_TOI_DA, "moi ma la mot tien trinh that, phai co tran"
+
+
+def test_nguoi_dung_dat_CAO_HON_thi_duoc_ton_trong(monkeypatch):
+    g = _ve3_gui()
+    import shopapi_common as sc
+    monkeypatch.setattr(sc, "tran_song_song",
+                        lambda loai, api_key=None, mac_dinh=1, client=None: 100)
+
+    class _App:
+        MA_SONG_SONG_TOI_DA = g.VE3App.MA_SONG_SONG_TOI_DA
+        _so_ma_song_song_shopapi = g.VE3App._so_ma_song_song_shopapi
+        config_data = {"veo3top_image_mode": "shopapi", "generation_backend": "shopapi",
+                       "shopapi_ma_song_song": 20}
+
+    assert _App()._so_ma_song_song_shopapi() == 20
+
+
+def test_KHONG_di_api_thi_giu_nguyen_con_so_cau_hinh():
+    """Đường Chrome/pool không liên quan tới trần shopapi — đừng đụng vào."""
+    g = _ve3_gui()
+
+    class _App:
+        MA_SONG_SONG_TOI_DA = g.VE3App.MA_SONG_SONG_TOI_DA
+        _so_ma_song_song_shopapi = g.VE3App._so_ma_song_song_shopapi
+        config_data = {"veo3top_image_mode": "pool", "generation_backend": "veo3top_b_pool",
+                       "shopapi_ma_song_song": 8}
+
+    assert _App()._so_ma_song_song_shopapi() == 8
+
+
+def test_che_do_API_KHONG_hoi_pool_Chrome_de_chan_so_ma():
+    """`_compute_pool_capacity` đọc `/health` cổng 8787/8788 — pool Chrome.
+
+    Chạy toàn API thì hai pool đó KHÔNG BẬT, nên nó rơi về một con số dự phòng
+    chẳng liên quan gì tới nhà máy shopapi, rồi chặn hàng chờ bằng đúng con số
+    ấy. Log cũ: `skip max_codes (video 2/2)` — trần 2 mã video trong khi máy chủ
+    đang cấp 374 chỗ.
+    """
+    nguon = VE3_GUI.read_text(encoding="utf-8", errors="replace")
+    i = nguon.find('_maxcodes = _ic if _ic > 0 else')
+    assert i > 0, "khong tim thay cho chan so ma"
+    truoc = nguon[max(0, i - 1200):i]
+    assert "che_do_toan_api(cfg)" in truoc, (
+        "che do API van hoi pool Chrome de chan so ma song song")
+    assert "_so_ma_song_song_shopapi()" in truoc, (
+        "che do API phai dung cung mot nguon voi so cho lam ao, khong thi hai "
+        "cai chan da nhau")

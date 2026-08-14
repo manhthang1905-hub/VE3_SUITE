@@ -6656,13 +6656,61 @@ Get-CimInstance Win32_Process |
                 pass
         return out
 
+    #: Trần an toàn cho số tiến trình mã chạy cùng lúc trên MỘT máy.
+    #: Mỗi mã là một tiến trình Python riêng — nhiều quá thì máy ngộp chứ không
+    #: ra thêm hàng.
+    MA_SONG_SONG_TOI_DA = 24
+
     def _so_ma_song_song_shopapi(self):
-        """Bao nhiêu MÃ chạy cùng lúc khi đi toàn API."""
+        """Bao nhiêu MÃ chạy cùng lúc khi đi toàn API.
+
+        ═══ VÌ SAO KHÔNG ĐỂ CON SỐ CỐ ĐỊNH NỮA ═══
+
+        Đây là số "chỗ làm" ảo, tức là trần CỨNG cho số mã chạy song song. Đặt
+        8 thì mã thứ 9 trở đi đứng ngoài với `skip no_free_pair`. Log máy khác
+        lúc 17:00–17:04 ngày 15/08/2026 có gần 40 mã bị chặn kiểu đó trong bốn
+        phút, trong khi 6 mã đang chạy chỉ dùng hết một phần nhỏ nhà máy.
+
+        Và đây mới là chỗ đau: **trần song song của máy chủ chỉ có ích khi ta CÓ
+        ĐỦ VIỆC để lấp nó**. Cùng log đó, mã TH1-0069 vào pha ảnh với đúng 2
+        cảnh cần làm, gửi 2 job — trong khi máy chủ đang cấp 200 chỗ. 198 chỗ bỏ
+        không, không phải vì tool chậm mà vì mã đó HẾT VIỆC. Chỉ có thêm mã chạy
+        song song mới lấp được.
+
+        Nên số này giờ suy ra từ trần máy chủ: cần bao nhiêu mã để lấp kín chỗ
+        được cấp, giả định mỗi mã góp được vài chục job. Vẫn chặn trên bằng
+        :data:`MA_SONG_SONG_TOI_DA` vì mỗi mã là một tiến trình thật.
+
+        Người dùng đặt tay `shopapi_ma_song_song` thì tôn trọng — nhưng chỉ khi
+        họ đặt CAO HƠN mức tự tính. Con số cũ trong `settings.yaml` của những
+        máy đã chạy từ trước không được phép giữ chúng ở mức 8 mãi mãi.
+        """
         mac_dinh = SHOPAPI_MA_SONG_SONG_MAC_DINH
         try:
-            return max(1, int(self.config_data.get("shopapi_ma_song_song", mac_dinh) or mac_dinh))
+            dat_tay = int(self.config_data.get("shopapi_ma_song_song", mac_dinh) or mac_dinh)
         except (TypeError, ValueError):
-            return mac_dinh
+            dat_tay = mac_dinh
+        dat_tay = max(1, dat_tay)
+        if not cau_hinh_toan_api(self.config_data):
+            return dat_tay
+        try:
+            import sys as _s
+            _e = str(SUITE_ROOT / "veo3top_engine")
+            if _e not in _s.path:
+                _s.path.insert(0, _e)
+            import shopapi_common as _sc
+            # Mỗi mã góp được bao nhiêu job vào nhà máy: lấy trần LOẠI NHỎ HƠN
+            # (video) làm mẫu số, vì đó là loại dễ hết việc trước.
+            tran = max(int(_sc.tran_song_song("image", mac_dinh=0) or 0),
+                       int(_sc.tran_song_song("video", mac_dinh=0) or 0))
+            if tran > 0:
+                # ~40 job mỗi mã là mức một mã cỡ thường (50-130 cảnh) góp nổi.
+                can = int(round(tran / 40.0))
+                tu_tinh = max(mac_dinh, min(self.MA_SONG_SONG_TOI_DA, can))
+                return max(dat_tay, tu_tinh)
+        except Exception:
+            pass
+        return dat_tay
 
     def _pair_ao_shopapi(self):
         """Vài "chỗ làm" ẢO để hàng chờ có cái mà phát việc khi chạy toàn API.
@@ -9753,7 +9801,21 @@ Get-CimInstance Win32_Process |
                             continue
                     # GIỚI HẠN SỐ MÃ SONG SONG — TÁCH theo trạm: trạm ẢNH nhiều (đầy pool 96), trạm VIDEO ít (10 Ultra).
                     # max_concurrent_codes (mode all) = 0 -> không giới hạn. Đếm active THEO ĐÚNG trạm (queue_ve3_stage).
-                    if _stage == "image":
+                    # ⚠ ĐI API THÌ ĐỪNG HỎI POOL CHROME. `_compute_pool_capacity`
+                    # đọc `/health` của hai pool ở cổng 8787/8788 để đếm "nhân
+                    # sự" — số tài khoản Chrome đang login. Chạy toàn API thì hai
+                    # pool đó KHÔNG BẬT, nên nó rơi về một con số dự phòng chẳng
+                    # liên quan gì tới nhà máy shopapi, rồi chặn hàng chờ bằng
+                    # đúng con số ấy (log cũ: `skip max_codes (video 2/2)` —
+                    # trần 2 mã video trong khi máy chủ đang cấp 374 chỗ).
+                    #
+                    # Ở chế độ API, số mã song song chỉ có MỘT nguồn:
+                    # `_so_ma_song_song_shopapi()`, và nó đã tự suy theo trần máy
+                    # chủ rồi. Cùng một con số với số chỗ làm ảo, nên hai cái
+                    # chặn không đá nhau.
+                    if che_do_toan_api(cfg):
+                        _maxcodes = self._so_ma_song_song_shopapi()
+                    elif _stage == "image":
                         _ic = int(cfg.get("max_concurrent_image_codes", 0) or 0)
                         _maxcodes = _ic if _ic > 0 else self._compute_pool_capacity()["img_codes"]   # 0 = TỰ TÍNH theo nhân sự
                     elif _stage == "video":

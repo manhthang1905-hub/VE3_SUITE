@@ -640,6 +640,18 @@ def _hoi_tran(loai, tran_tool=None, client=None, api_key=None, log=print,
         # vừa phải rồi để `429`/`503` nói — chúng đến từ lượt gửi THẬT nên đáng
         # tin hơn hẳn một lời hỏi trạng thái không tới nơi. Và nếu nhà máy hẹp
         # thật thì AIMD chia đôi, mất đúng một lô.
+        # ⚠ TRẢ THẲNG, ĐỪNG ĐỂ RƠI XUỐNG PHÉP CHIA BÊN DƯỚI.
+        #
+        # `TRAN_KHOI_DONG_MU` đã là suất CỦA MỘT TIẾN TRÌNH. Để nó chảy tiếp
+        # xuống nhánh tự điều tiết là chia thêm lần nữa cho số mã đang sống —
+        # bắt được trong log máy khác lúc 17:01:40 ngày 15/08/2026:
+        #
+        #     khong hoi duoc GET /v1/me cho 'video' -> tam chay 32 job
+        #     me video lo 1 -> ban them 4 job | dang bay 4/6 | tran may chu 4
+        #
+        # 32 ÷ 7 mã đang chạy = 4. Một mã có 76 video chờ mà mở đúng 4 chỗ, giữa
+        # lúc nhà máy đang cấp 53. Nhánh "giữ trần cũ" ngay bên trên đã trả
+        # thẳng (`return`) vì đúng lý do này; nhánh mù thì quên.
         try:
             _mo = max(1, min(TRAN_KHOI_DONG_MU, int(_sc.phan_luong_cua_toi())))
         except Exception:
@@ -647,7 +659,7 @@ def _hoi_tran(loai, tran_tool=None, client=None, api_key=None, log=print,
         log("API shopapi: khong hoi duoc GET /v1/me cho '{0}' -> tam chay {1} job "
             "(chua tung doc duoc lan nao; lui ve 1 la tu bop minh ca me)"
             .format(loai, _mo), "WARN")
-        tran = _mo
+        return _mo
     if tran == 0:
         return 0
 
