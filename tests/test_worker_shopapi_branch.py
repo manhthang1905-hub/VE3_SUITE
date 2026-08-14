@@ -679,3 +679,76 @@ def test_pha_ANH_khong_danh_dau_DONE_cho_file_khong_phai_anh():
     assert "_la_anh_that" in quanh, (
         "van danh dau 'done' chi vi file ton tai -> ghi de dau 'error' cua pha video")
     assert ".unlink()" in quanh, "phat hien file hong ma khong xoa -> luot sau lai qua cua"
+
+
+# ── Excel nói "done" mà đĩa không có ảnh ─────────────────────────────────────
+
+
+def _w_dia(tmp_path):
+    import ve3_worker
+
+    class _W:
+        img_dir = tmp_path / "img"
+        project_dir = tmp_path
+        _la_anh_that = staticmethod(ve3_worker.VE3Worker._la_anh_that)
+        _anh_scene_con_dung_duoc = ve3_worker.VE3Worker._anh_scene_con_dung_duoc
+
+    (tmp_path / "img").mkdir(exist_ok=True)
+    (tmp_path / "img_backup").mkdir(exist_ok=True)
+    return _W()
+
+
+PNG = b"\x89PNG\r\n\x1a\n" + b"\x00" * 30
+
+
+def test_video_da_dung_xong_thi_KHONG_coi_la_thieu_anh(tmp_path):
+    """`_finalize_img` xoá png gốc khỏi `img/` sau khi ghép video.
+
+    Bỏ sót nhánh này là dựng lại hàng trăm tấm ảnh ĐÃ CÓ VIDEO — vừa tốn tiền
+    vừa phá việc đã xong. Đây là lý do nhánh "done" tồn tại ngay từ đầu.
+    """
+    w = _w_dia(tmp_path)
+    (tmp_path / "img" / "7.mp4").write_bytes(b"\x00\x00\x00 ftypisom")
+    assert w._anh_scene_con_dung_duoc(7) is True
+
+
+def test_chi_con_ban_luu_trong_img_backup_van_tinh(tmp_path):
+    w = _w_dia(tmp_path)
+    (tmp_path / "img_backup" / "8.png").write_bytes(PNG)
+    assert w._anh_scene_con_dung_duoc(8) is True
+
+
+def test_khong_co_gi_o_ca_BA_noi_moi_la_thieu(tmp_path):
+    w = _w_dia(tmp_path)
+    assert w._anh_scene_con_dung_duoc(9) is False
+
+
+def test_file_rac_khong_tinh_la_co_anh(tmp_path):
+    w = _w_dia(tmp_path)
+    (tmp_path / "img" / "10.png").write_bytes(b"<html>loi 500</html>")
+    assert w._anh_scene_con_dung_duoc(10) is False
+
+
+def test_nhanh_DONE_phai_duoc_DIA_xac_nhan():
+    """Hai pha nhìn hai nguồn khác nhau thì cảnh đó chết vĩnh viễn.
+
+    Bắt được nguyên văn ở TH1-0104 lúc 01:38:23 ngày 15/08/2026:
+
+        PHASE 3 (nhìn Excel):  Scenes can tao: 0/131
+        PHASE 4 (nhìn đĩa)  :  Skip scene 111: chua co anh hoac media_id
+
+    Pha ảnh bảo không thiếu gì, pha video bảo thiếu ảnh, và không ai dựng lại.
+    Phép kiểm magic-bytes thêm trước đó nằm BÊN DƯỚI nhánh `done` nên không bao
+    giờ tới lượt.
+    """
+    import inspect
+    import ve3_worker
+    nguon = inspect.getsource(ve3_worker._generate_scenes) \
+        if hasattr(ve3_worker, "_generate_scenes") \
+        else inspect.getsource(ve3_worker.VE3Worker._generate_scenes)
+    i = nguon.find('status_img.lower() == "done"')
+    assert i > 0, "khong tim thay nhanh done"
+    sau = nguon[i:i + 500]
+    assert "_anh_scene_con_dung_duoc" in sau, (
+        "nhanh 'done' van tin Excel tuyet doi -> canh mat anh chet vinh vien")
+    assert "pending.append(scene)" in sau, "phat hien thieu anh ma khong dua vao hang dung lai"

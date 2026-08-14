@@ -2014,6 +2014,33 @@ Generator/context error:
                 or dau.startswith(b"\xff\xd8\xff")                   # JPEG
                 or (dau[:4] == b"RIFF" and dau[8:12] == b"WEBP"))    # WebP
 
+    def _anh_scene_con_dung_duoc(self, sid):
+        """Ảnh của cảnh này còn dùng được không — NHÌN ĐĨA, không tin Excel.
+
+        Phải soi ba nơi, vì một tấm ảnh "xong" nằm ở đâu là tuỳ mã đã chạy tới
+        bước nào:
+
+          * `img/{sid}.mp4` — video đã dựng xong. `_finalize_img` xoá png gốc
+            khỏi `img/` sau khi ghép, nên KHÔNG thấy png ở đây là chuyện bình
+            thường chứ không phải thiếu ảnh. Bỏ sót nhánh này là dựng lại hàng
+            trăm tấm ảnh đã có video — vừa tốn tiền vừa phá việc đã xong.
+          * `img/{sid}.png` — ảnh vừa dựng, chưa tới bước video.
+          * `img_backup/{sid}.png` — bản gốc finalize giữ lại.
+
+        Thiếu cả ba mới là thiếu thật.
+        """
+        try:
+            if (self.img_dir / "{0}.mp4".format(sid)).exists():
+                return True
+            for thu in (self.img_dir, self.project_dir / "img_backup"):
+                for duoi in (".png", ".jpg", ".jpeg"):
+                    f = thu / "{0}{1}".format(sid, duoi)
+                    if f.exists() and self._la_anh_that(f):
+                        return True
+        except Exception:
+            return True     # đọc đĩa hỏng -> đừng dựng lại bừa
+        return False
+
     def _anh_nguon_hong(self, error_text):
         """Lỗi này là do ẢNH NGUỒN, không phải do prompt hay do nhà máy?
 
@@ -2757,9 +2784,27 @@ Generator/context error:
             if scene.status_img and scene.status_img.lower() == "skip":
                 continue
 
-            # v1.1: Skip náº¿u Excel Ä‘Ã£ Ä‘Ã¡nh dáº¥u done (Æ°u tiÃªn cao nháº¥t)
-            # Handles resume sau khi restart â€” khÃ´ng phá»¥ thuá»™c vÃ o filename format
+            # ⚠ "DONE" TRONG EXCEL PHẢI ĐƯỢC ĐĨA XÁC NHẬN.
+            #
+            # Nhánh này từng `continue` thẳng, tin Excel tuyệt đối. Excel ghi
+            # done mà file đã mất thì cảnh đó CHẾT VĨNH VIỄN, vì hai pha nhìn
+            # hai nguồn khác nhau:
+            #
+            #     PHASE 3 (nhìn Excel):  Scenes can tao: 0/131
+            #     PHASE 4 (nhìn đĩa)  :  Skip scene 111: chua co anh hoac media_id
+            #
+            # Bắt được nguyên văn hai dòng đó ở TH1-0104 lúc 01:38:23 ngày
+            # 15/08/2026. Pha ảnh bảo không thiếu gì, pha video bảo thiếu ảnh —
+            # và không ai dựng lại. Cảnh đó nằm đó qua MỌI lượt chạy.
+            #
+            # Phép kiểm magic-bytes thêm hôm trước nằm BÊN DƯỚI dòng này nên
+            # không bao giờ tới lượt. Vá đúng chỗ là ở đây.
             if scene.status_img and scene.status_img.lower() == "done":
+                if self._anh_scene_con_dung_duoc(scene.scene_id):
+                    continue
+                self.log("  Scene {0}: Excel ghi 'done' nhung DIA khong co anh "
+                         "-> dung lai".format(scene.scene_id), "WARN")
+                pending.append(scene)
                 continue
 
             img_path = self.img_dir / f"{scene.scene_id}.png"
