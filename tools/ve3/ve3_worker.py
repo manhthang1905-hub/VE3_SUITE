@@ -3634,15 +3634,22 @@ Generator/context error:
                     # ẢNH bỏ qua cảnh nào ĐÃ CÓ FILE, nên một file .png rỗng
                     # hoặc sai định dạng vẫn khiến nó nghĩ việc đã xong. File
                     # còn đó thì vòng lặp hỏng vẫn kín y như cũ.
-                    try:
-                        _xau = self.img_dir / "{0}.png".format(sid)
-                        if _xau.exists():
-                            _xau.unlink()
-                            self.log("    Video scene {0}: da xoa anh nguon hong {1}"
-                                     .format(sid, _xau.name), "WARN")
-                    except Exception as _e:
-                        self.log("    Video scene {0}: khong xoa duoc anh hong ({1})"
-                                 .format(sid, _e), "WARN")
+                    # ⚠ XOÁ Ở CẢ HAI CHỖ. Xoá mỗi `img/` là vô ích: `_finalize_img`
+                    # chạy ngay cuối lượt đó và CHÉP BẢN HỎNG TỪ `img_backup/`
+                    # trở lại. Bắt được trong log 18:02:24 ngày 15/08/2026 —
+                    # xoá xong thì hai giây sau `Finalize: 0 mp4 + 1 png img/`,
+                    # tức là tấm ảnh hỏng đã về chỗ cũ và lượt sau lặp lại y hệt.
+                    for _thu in (self.img_dir, self.project_dir / "img_backup"):
+                        for _duoi in (".png", ".jpg", ".jpeg"):
+                            try:
+                                _xau = _thu / "{0}{1}".format(sid, _duoi)
+                                if _xau.exists():
+                                    _xau.unlink()
+                                    self.log("    Video scene {0}: da xoa anh nguon hong {1}/{2}"
+                                             .format(sid, _thu.name, _xau.name), "WARN")
+                            except Exception as _e:
+                                self.log("    Video scene {0}: khong xoa duoc {1}/{2}{3} ({4})"
+                                         .format(sid, _thu.name, sid, _duoi, _e), "WARN")
                 with self._excel_lock:
                     if _thieu_anh:
                         wb.update_scene(sid, status_img="error", status_vid="")

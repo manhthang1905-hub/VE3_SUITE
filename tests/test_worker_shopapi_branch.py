@@ -591,7 +591,7 @@ def test_THIEU_ANH_NGUON_thi_danh_dau_dung_lai_ANH():
     nguon = inspect.getsource(ve3_worker)
     i = nguon.find("_thieu_anh = self._anh_nguon_hong(error_text)")
     assert i > 0, "khong nhan ra truong hop anh nguon hong"
-    quanh = nguon[i:i + 1400]
+    quanh = nguon[i:i + 2600]
     assert 'status_img="error"' in quanh, (
         "anh hong ma khong danh dau dung lai ANH -> ma se hong lai y het luot sau")
     assert 'status_vid=""' in quanh, (
@@ -616,3 +616,23 @@ def test_nhan_ra_CA_HAI_kieu_anh_nguon_hong(tmp_path, nhat_ky, co_khoa):
     assert not w._anh_nguon_hong("content_rejected: prompt vi pham chinh sach")
     assert not w._anh_nguon_hong("may chu bao qua tai (429 / resource_exhausted)")
     assert not w._anh_nguon_hong("")
+
+
+def test_xoa_anh_hong_o_CA_img_backup():
+    """Xoá mỗi `img/` là vô ích — finalize chép bản hỏng từ `img_backup/` trở lại.
+
+    Log 18:02:24 ngày 15/08/2026, hai giây sau khi xoá:
+
+        Video scene 81: da xoa anh nguon hong 81.png
+        Finalize: 0 mp4 + 1 png img/ (tong 148 files)
+
+    Tấm ảnh hỏng đã về chỗ cũ, và lượt sau lặp lại y hệt.
+    """
+    import inspect
+    import ve3_worker
+    nguon = inspect.getsource(ve3_worker)
+    i = nguon.find("_thieu_anh = self._anh_nguon_hong(error_text)")
+    assert i > 0
+    quanh = nguon[i:i + 1600]
+    assert "img_backup" in quanh, (
+        "chi xoa o img/ -> finalize chep ban hong tro lai, vong lap van kin")
