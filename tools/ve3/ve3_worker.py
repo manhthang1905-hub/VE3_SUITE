@@ -1982,6 +1982,35 @@ Generator/context error:
         except Exception as e:
             self.log(f"[QUEUE] Failed to write retry-wait marker: {e}", "ERROR")
 
+    #: Câu lỗi nói ẢNH NGUỒN KHÔNG DÙNG ĐƯỢC — thiếu file, hoặc file không phải ảnh.
+    #:
+    #: Cả hai đều có chung một cách chữa: bảo pha ẢNH dựng lại cảnh đó. Thử lại
+    #: VIDEO thì lần nào cũng hỏng y hệt, vì nguồn vào vẫn hỏng.
+    DAU_HIEU_ANH_HONG = (
+        "khong thay anh scene",
+        "khong phai png, jpeg hay webp",     # máy chủ nhận dạng bằng magic bytes
+        "không phải png, jpeg hay webp",
+        "upload anh scene that bai",
+    )
+
+    def _anh_nguon_hong(self, error_text):
+        """Lỗi này là do ẢNH NGUỒN, không phải do prompt hay do nhà máy?
+
+        Hai kiểu đã gặp thật, cùng một mã TH1-0182 cảnh 81:
+
+          * `khong thay anh scene <đường dẫn>` — Excel ghi ảnh "done" mà file
+            trên đĩa đã mất;
+          * `InvalidRequestError: đuôi file là ".png" nhưng nội dung bên trong
+            không phải PNG, JPEG hay WebP` — file còn đó nhưng RUỘT KHÔNG PHẢI
+            ẢNH (tải hụt, hoặc lưu nhầm trang lỗi thành .png).
+
+        Cả hai đều bất biến qua các lượt chạy: cảnh 81 hỏng y hệt ở 17:17:02,
+        17:30:51 và 17:43:39 ngày 15/08/2026. Mỗi lượt ăn một "lượt trắng", ba
+        lượt là mã bị ĐỖ LẠI — trong khi chỉ cần dựng lại một tấm ảnh.
+        """
+        err = (error_text or "").lower()
+        return any(d in err for d in self.DAU_HIEU_ANH_HONG)
+
     #: Dấu hiệu NHÀ MÁY NGHẼN trong câu lỗi — không phải lỗi của prompt.
     #:
     #: Giữ cả tiếng Việt lẫn tiếng Anh: `shopapi_common.mo_ta_loi` dịch lỗi SDK
@@ -3599,7 +3628,21 @@ Generator/context error:
                 # 17:17:02 và 17:30:51 ngày 15/08/2026, mỗi lượt `FAIL (0.0s)`
                 # rồi ăn một "lượt trắng". Ba lượt là mã bị ĐỖ LẠI vĩnh viễn —
                 # trong khi chỉ cần dựng lại một tấm ảnh.
-                _thieu_anh = "khong thay anh scene" in (error_text or "").lower()
+                _thieu_anh = self._anh_nguon_hong(error_text)
+                if _thieu_anh:
+                    # ⚠ XOÁ LUÔN FILE HỎNG. Đánh dấu Excel thôi là chưa đủ: pha
+                    # ẢNH bỏ qua cảnh nào ĐÃ CÓ FILE, nên một file .png rỗng
+                    # hoặc sai định dạng vẫn khiến nó nghĩ việc đã xong. File
+                    # còn đó thì vòng lặp hỏng vẫn kín y như cũ.
+                    try:
+                        _xau = self.img_dir / "{0}.png".format(sid)
+                        if _xau.exists():
+                            _xau.unlink()
+                            self.log("    Video scene {0}: da xoa anh nguon hong {1}"
+                                     .format(sid, _xau.name), "WARN")
+                    except Exception as _e:
+                        self.log("    Video scene {0}: khong xoa duoc anh hong ({1})"
+                                 .format(sid, _e), "WARN")
                 with self._excel_lock:
                     if _thieu_anh:
                         wb.update_scene(sid, status_img="error", status_vid="")
@@ -3608,7 +3651,7 @@ Generator/context error:
                     wb.safe_save()
                 _tag = "TERMINAL policy" if fs == "failed" else "retry lượt sau"
                 if _thieu_anh:
-                    _tag = "THIEU ANH NGUON -> danh dau dung lai anh o luot sau"
+                    _tag = "ANH NGUON HONG -> da xoa + danh dau dung lai anh o luot sau"
                 # ⚠ IN CẢ LÝ DO. Bản trước chỉ in `[error: retry lượt sau]`, nên
                 # người đọc log thấy một cảnh hỏng trong 0,0 giây mà không có
                 # cách nào biết vì sao. Câu lỗi đã nằm sẵn trong `error_text` —

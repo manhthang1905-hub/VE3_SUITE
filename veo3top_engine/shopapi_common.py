@@ -53,6 +53,7 @@ __all__ = [
     "kiem_khoa",
     "tran_song_song",
     "tran_cung",
+    "doc_v1_me_chung",
     "ThuHoachChung",
     "thu_hoach_cua",
     "dung_thu_hoach_chung",
@@ -1246,7 +1247,7 @@ def tran_cung_may_chu(loai, api_key=None, client=None, bay_gio=None):
         cu = _tran_cung_nho.get(loai)
         if cu and (gio - cu[1]) < _TRAN_CUNG_TTL:
             return cu[0]
-    me = doc_v1_me(api_key=api_key, client=client, timeout=30.0)
+    me = doc_v1_me_chung(api_key=api_key, client=client, timeout=30.0)
     v = _so(_lay(_lay(_lay(_lay(me, "limits"), "concurrent_jobs_detail"), loai),
                  "hard_cap"), 0)
     if v <= 0:
@@ -1515,6 +1516,127 @@ def don_nhip_song_cu(thu_muc=None, han=None):
         pass
 
 
+#: `/v1/me` đọc được thì dùng chung cho MỌI tiến trình mã trên máy này, trong
+#: ngần này giây. Trần máy chủ đổi chậm (theo sức chứa nhà máy), nên vài giây
+#: cũ không hại gì — mà lợi thì lớn.
+ME_CHUNG_TTL = 8.0
+
+_TEN_FILE_ME = "v1-me.json"
+
+
+def doc_v1_me_chung(api_key=None, client=None, timeout=20.0, thu_muc=None, bay_gio=None):
+    """`/v1/me` dùng CHUNG cho mọi tiến trình mã trên máy này.
+
+    ═══ VÌ SAO CẦN, VÀ NÓ ĐANG LÀM HỎNG CÁI GÌ ═══
+
+    Mỗi mã là một tiến trình riêng, và mỗi tiến trình tự hỏi `/v1/me` để biết
+    trần. Hai mươi tư mã cùng hỏi, cộng với chính tải job đang gửi, là đủ để
+    hạn mức 1.000 request/phút nuốt hết những lời hỏi trạng thái đó.
+
+    Hậu quả nhìn thấy trong log 17:43–17:44 ngày 15/08/2026: gần như MỌI mã đều
+    ghi `khong hoi duoc GET /v1/me`, rồi rơi về trần mù 32. Mười mã × 32 = 320
+    chỗ xin, trong khi máy chủ chỉ cấp 345 và đang chia cho từng ấy tiến trình
+    — nên `429` liên tục, AIMD chia đôi mãi (`nhip 4.5 cho phep 4`), và cả dây
+    chuyền bò.
+
+    Nghịch lý: tool hỏi trạng thái nhiều tới mức không còn đọc nổi trạng thái.
+
+    Một lời hỏi, dùng chung qua file, xoá hẳn nghịch lý đó: 24 tiến trình tốn
+    một lời gọi mỗi 8 giây thay vì 24 lời gọi.
+
+    Ghi bằng file tạm rồi đổi tên: tiến trình khác đọc giữa chừng không thấy
+    file vỡ đôi.
+    """
+    thu_muc = thu_muc or thu_muc_nhip_song()
+    d = os.path.join(thu_muc, _TEN_FILE_ME)
+    gio = float(time.time() if bay_gio is None else bay_gio)
+    try:
+        if (gio - os.path.getmtime(d)) <= ME_CHUNG_TTL:
+            import json as _json
+            with open(d, "r", encoding="utf-8") as f:
+                me = _json.load(f)
+            if isinstance(me, dict) and me:
+                return me
+    except (OSError, ValueError):
+        pass
+
+    # ⚠ CHỐT ĐI HỎI — nếu không thì lúc khởi động cả đàn cùng trượt và cùng gọi.
+    #
+    # Đo thật: 24 tiến trình hỏi CÙNG LÚC trên bộ đệm rỗng vẫn tốn đủ 24 lời
+    # gọi, vì chưa đứa nào kịp ghi. Đúng cảnh 17:43 ngày 15/08/2026 — 24 mã bật
+    # lên trong mươi giây và cùng đâm vào `/v1/me`.
+    #
+    # Chốt bằng `O_EXCL`: đứa tạo được file chốt thì đi hỏi, những đứa còn lại
+    # chờ một nhịp ngắn rồi đọc lại bộ đệm. Chốt cũng có hạn dùng, để một tiến
+    # trình chết giữa chừng không khoá cả nhà.
+    _chot = d + ".chot"
+    _cua_toi = False
+    try:
+        if (gio - os.path.getmtime(_chot)) > max(30.0, ME_CHUNG_TTL * 3):
+            os.remove(_chot)            # chốt nguội = chủ nó đã chết
+    except OSError:
+        pass
+    try:
+        os.close(os.open(_chot, os.O_CREAT | os.O_EXCL | os.O_WRONLY))
+        _cua_toi = True
+    except OSError:
+        # Đứa khác đang hỏi: chờ ngắn rồi đọc lại. Chờ hụt cũng không sao —
+        # rơi xuống dưới và tự hỏi, cùng lắm thừa một lời gọi.
+        for _ in range(20):
+            time.sleep(0.25)
+            try:
+                if (time.time() - os.path.getmtime(d)) <= ME_CHUNG_TTL:
+                    import json as _json
+                    with open(d, "r", encoding="utf-8") as f:
+                        me = _json.load(f)
+                    if isinstance(me, dict) and me:
+                        return me
+            except (OSError, ValueError):
+                pass
+
+    try:
+        me = doc_v1_me(api_key=api_key, client=client, timeout=timeout)
+    finally:
+        if _cua_toi:
+            try:
+                os.remove(_chot)
+            except OSError:
+                pass
+    if not me:
+        # Hỏi hụt: thà dùng bản cũ QUÁ HẠN còn hơn không có gì. Trần cũ vài chục
+        # giây vẫn sát hơn hẳn con số mù.
+        try:
+            import json as _json
+            with open(d, "r", encoding="utf-8") as f:
+                cu_roi = _json.load(f)
+            if isinstance(cu_roi, dict) and cu_roi:
+                return cu_roi
+        except (OSError, ValueError):
+            pass
+        return {}
+    try:
+        import json as _json
+        tam = d + ".{0}.tmp".format(os.getpid())
+        with open(tam, "w", encoding="utf-8") as f:
+            _json.dump(_thuan_json(me), f)
+        os.replace(tam, d)
+    except (OSError, ValueError, TypeError):
+        pass
+    return me
+
+
+def _thuan_json(o):
+    """Đổi `Model` của SDK thành dict/list thuần để `json.dump` nuốt được."""
+    if isinstance(o, dict):
+        return {k: _thuan_json(v) for k, v in o.items()}
+    if isinstance(o, (list, tuple)):
+        return [_thuan_json(v) for v in o]
+    d = getattr(o, "_data", None)
+    if isinstance(d, dict):
+        return {k: _thuan_json(v) for k, v in d.items()}
+    return o
+
+
 def tran_song_song(loai, api_key=None, mac_dinh=1, client=None):
     """`GET /v1/me` → số job loại `loai` (`image`/`video`) được chạy song song.
 
@@ -1531,9 +1653,13 @@ def tran_song_song(loai, api_key=None, mac_dinh=1, client=None):
     hơn vẻ ngoài: mỗi `ShopAPI` mang MỘT vòng tự dò nhịp riêng, nên dựng client
     mới cho từng lời gọi là mỗi job dò lại từ đầu và không ai biết vừa có 429.
     """
+    # ĐI QUA BẢN DÙNG CHUNG. Gọi thẳng `client.tran_song_song` là mỗi tiến
+    # trình một lời hỏi — 24 mã thì 24 lời hỏi, và chúng tự bóp nghẹt nhau.
     try:
-        if client is None:
-            client = tao_client(api_key=api_key, timeout=30.0, max_retries=1)
-        return int(client.tran_song_song(loai))
+        me = doc_v1_me_chung(api_key=api_key, client=client, timeout=30.0)
+        v = _lay(_lay(_lay(me, "limits"), "concurrent_jobs"), loai)
+        if v is not None:
+            return int(v)
     except Exception:
-        return mac_dinh
+        pass
+    return mac_dinh

@@ -589,10 +589,30 @@ def test_THIEU_ANH_NGUON_thi_danh_dau_dung_lai_ANH():
     import inspect
     import ve3_worker
     nguon = inspect.getsource(ve3_worker)
-    i = nguon.find('"khong thay anh scene" in')
-    assert i > 0, "khong nhan ra truong hop thieu anh nguon"
-    quanh = nguon[i:i + 500]
+    i = nguon.find("_thieu_anh = self._anh_nguon_hong(error_text)")
+    assert i > 0, "khong nhan ra truong hop anh nguon hong"
+    quanh = nguon[i:i + 1400]
     assert 'status_img="error"' in quanh, (
-        "thieu anh ma khong danh dau dung lai ANH -> ma se hong lai y het luot sau")
+        "anh hong ma khong danh dau dung lai ANH -> ma se hong lai y het luot sau")
     assert 'status_vid=""' in quanh, (
         "van ghi video la hong -> luot sau bo qua canh nay thay vi lam lai")
+    assert ".unlink()" in quanh, (
+        "khong xoa file hong -> pha ANH thay file con do va bo qua, vong lap van kin")
+
+
+def test_nhan_ra_CA_HAI_kieu_anh_nguon_hong(tmp_path, nhat_ky, co_khoa):
+    """Hai kiểu đã gặp thật, cùng một mã TH1-0182 cảnh 81.
+
+    Thiếu hẳn file, và file còn đó nhưng RUỘT KHÔNG PHẢI ẢNH. Cả hai đều bất
+    biến qua các lượt chạy — cảnh 81 hỏng y hệt ở 17:17:02, 17:30:51 và
+    17:43:39 ngày 15/08/2026 — nên thử lại VIDEO là vô ích, phải dựng lại ẢNH.
+    """
+    w = _worker(tmp_path, nhat_ky, {})
+    assert w._anh_nguon_hong("shopapi-vid: khong thay anh scene D:/x/img/81.png")
+    assert w._anh_nguon_hong(
+        "shopapi-vid: upload anh scene that bai: InvalidRequestError: duoi file la "
+        '".png" nhung noi dung ben trong khong phai PNG, JPEG hay WebP.')
+    # KHÔNG được nuốt hai loại lỗi khác — chúng có cách chữa hoàn toàn khác.
+    assert not w._anh_nguon_hong("content_rejected: prompt vi pham chinh sach")
+    assert not w._anh_nguon_hong("may chu bao qua tai (429 / resource_exhausted)")
+    assert not w._anh_nguon_hong("")

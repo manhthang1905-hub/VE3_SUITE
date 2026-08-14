@@ -454,3 +454,106 @@ def test_nhip_song_NGUOI_DA_CHET_khong_con_tinh(sc, tmp_path, monkeypatch):
     assert sc.dem_ban_dang_chay("image", thu_muc=str(tmp_path)) == 1, \
         "file nguoi da chet van bi tinh -> chia tran cho ca ma khong con chay"
     n2.dong()
+
+
+# ── `/v1/me` dùng CHUNG: 24 mã, một lời hỏi ──────────────────────────────────
+#
+# Mỗi mã là một tiến trình riêng và mỗi tiến trình tự hỏi `/v1/me`. Hai mươi
+# tư mã cùng hỏi, cộng với chính tải job đang gửi, là đủ để hạn mức 1.000
+# request/phút nuốt hết những lời hỏi trạng thái đó.
+#
+# Log 17:43–17:44 ngày 15/08/2026: gần như MỌI mã đều ghi `khong hoi duoc GET
+# /v1/me` rồi rơi về trần mù 32. Mười mã × 32 = 320 chỗ xin trong khi máy chủ
+# cấp 345 và đang chia cho từng ấy tiến trình — nên `429` liên tục, AIMD chia
+# đôi mãi (`nhip 4.5 cho phep 4`), cả dây chuyền bò.
+#
+# Nghịch lý: tool hỏi trạng thái nhiều tới mức không còn đọc nổi trạng thái.
+
+
+class _MeGia:
+    def __init__(self, tran=100):
+        self.so_lan = 0
+        self._tran = tran
+
+    def __call__(self, api_key=None, client=None, timeout=20.0):
+        self.so_lan += 1
+        return {"limits": {"concurrent_jobs": {"image": self._tran, "video": self._tran},
+                           "concurrent_jobs_detail": {
+                               "image": {"limit": self._tran, "hard_cap": 1536},
+                               "video": {"limit": self._tran, "hard_cap": 832}}}}
+
+
+def test_doc_v1_me_chung_chi_hoi_MOT_LAN_trong_TTL(sc, tmp_path, monkeypatch):
+    monkeypatch.setenv("SHOPAPI_NHIP_DIR", str(tmp_path))
+    gia = _MeGia()
+    monkeypatch.setattr(sc, "doc_v1_me", gia)
+    for _ in range(24):
+        me = sc.doc_v1_me_chung(thu_muc=str(tmp_path))
+        assert me["limits"]["concurrent_jobs"]["video"] == 100
+    assert gia.so_lan == 1, "hoi {0} lan thay vi 1".format(gia.so_lan)
+
+
+def test_het_TTL_thi_hoi_lai(sc, tmp_path, monkeypatch):
+    import os
+    monkeypatch.setenv("SHOPAPI_NHIP_DIR", str(tmp_path))
+    gia = _MeGia()
+    monkeypatch.setattr(sc, "doc_v1_me", gia)
+    sc.doc_v1_me_chung(thu_muc=str(tmp_path))
+    f = os.path.join(str(tmp_path), "v1-me.json")
+    cu = os.path.getmtime(f) - sc.ME_CHUNG_TTL - 5
+    os.utime(f, (cu, cu))
+    sc.doc_v1_me_chung(thu_muc=str(tmp_path))
+    assert gia.so_lan == 2
+
+
+def test_24_TIEN_TRINH_hoi_CUNG_LUC_van_chi_MOT_loi_goi(sc, tmp_path, monkeypatch):
+    """Lúc khởi động cả đàn cùng trượt bộ đệm — đó mới là cảnh thật.
+
+    Đo trước khi có chốt: 24 luồng hỏi cùng lúc trên bộ đệm rỗng vẫn tốn đủ 24
+    lời gọi, vì chưa đứa nào kịp ghi. Đúng cảnh 24 mã bật lên trong mươi giây.
+    """
+    import threading
+    monkeypatch.setenv("SHOPAPI_NHIP_DIR", str(tmp_path))
+    gia = _MeGia()
+
+    def _cham(api_key=None, client=None, timeout=20.0):
+        import time as _t
+        _t.sleep(0.4)          # một lời hỏi thật mất vài trăm mili-giây
+        return gia(api_key=api_key, client=client, timeout=timeout)
+
+    monkeypatch.setattr(sc, "doc_v1_me", _cham)
+    ra = []
+    ts = [threading.Thread(target=lambda: ra.append(sc.doc_v1_me_chung(thu_muc=str(tmp_path))))
+          for _ in range(24)]
+    for t in ts:
+        t.start()
+    for t in ts:
+        t.join()
+    assert gia.so_lan == 1, "hoi {0} lan — chot di hoi khong an".format(gia.so_lan)
+    assert all(m and m["limits"]["concurrent_jobs"]["video"] == 100 for m in ra), \
+        "co tien trinh khong doc duoc tran sau khi cho"
+
+
+def test_hoi_hut_thi_DUNG_BAN_CU_qua_han_chu_khong_tra_rong(sc, tmp_path, monkeypatch):
+    """Trần cũ vài chục giây vẫn sát hơn hẳn con số mù."""
+    import os
+    monkeypatch.setenv("SHOPAPI_NHIP_DIR", str(tmp_path))
+    monkeypatch.setattr(sc, "doc_v1_me", _MeGia(tran=77))
+    sc.doc_v1_me_chung(thu_muc=str(tmp_path))
+    f = os.path.join(str(tmp_path), "v1-me.json")
+    cu = os.path.getmtime(f) - sc.ME_CHUNG_TTL - 60
+    os.utime(f, (cu, cu))
+    monkeypatch.setattr(sc, "doc_v1_me", lambda **k: {})     # mạng hỏng
+    me = sc.doc_v1_me_chung(thu_muc=str(tmp_path))
+    assert me and me["limits"]["concurrent_jobs"]["video"] == 77
+
+
+def test_tran_song_song_DI_QUA_ban_dung_chung(sc, tmp_path, monkeypatch):
+    """Gọi thẳng `client.tran_song_song` là mỗi tiến trình một lời hỏi."""
+    monkeypatch.setenv("SHOPAPI_NHIP_DIR", str(tmp_path))
+    gia = _MeGia(tran=55)
+    monkeypatch.setattr(sc, "doc_v1_me", gia)
+    for _ in range(10):
+        assert sc.tran_song_song("video") == 55
+        assert sc.tran_song_song("image") == 55
+    assert gia.so_lan == 1, "20 luot hoi tran ton {0} loi goi".format(gia.so_lan)
