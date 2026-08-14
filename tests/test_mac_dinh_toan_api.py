@@ -606,10 +606,30 @@ def test_o_XIN_tinh_theo_MA_DANG_O_PHA_khong_theo_cau_hinh():
     tới pha này.
     """
     nguon = VE3_GUI.read_text(encoding="utf-8", errors="replace")
-    moc = nguon.find("def _so_lieu_api_len_tram")
-    than = nguon[moc:moc + 5000]
-    assert "xin = (ma or 0) * tran_ma[loai]" in than, \
+    than = ast.get_source_segment(nguon, _ham("_so_lieu_api_len_tram")) or ""
+    assert "xin = (ma or 0) * (tran_ma[loai] or 0)" in than, \
         "van tinh 'xin' theo so ma CAU HINH thay vi so ma DANG O PHA NAY"
+
+
+def test_o_XIN_hoi_DUNG_HAM_ma_dong_co_dung():
+    """Bảng phải hỏi đúng hàm động cơ gọi, nếu không nó vẽ một trần không ai áp.
+
+    Từ khi bật tự điều tiết (15/08/2026), `max_concurrent` và
+    `shopapi_video_concurrency` KHÔNG còn là trần — trần đến từ máy chủ chia cho
+    số tiến trình mã đang sống, rồi cắt bằng suất luồng và nhịp gửi. Bảng vẫn
+    đọc cấu hình, nên máy khác báo "XIN 40" (đúng bằng con số trong
+    `settings.yaml`) trong khi động cơ đang xin một số hoàn toàn khác.
+
+    Người vận hành so "xin 40 / chạy 3" rồi kết luận tool nghẽn — mà hai con số
+    đó đến từ hai nguồn không liên quan gì nhau. Bảng nói dối còn tệ hơn bảng
+    trống: nó gửi người ta đi chữa đúng chỗ không hỏng.
+    """
+    nguon = VE3_GUI.read_text(encoding="utf-8", errors="replace")
+    than = ast.get_source_segment(nguon, _ham("_so_lieu_api_len_tram")) or ""
+    assert "_hoi_tran(" in than, (
+        "bang van tu tinh tran thay vi hoi `shopapi_batch._hoi_tran` — dung ham "
+        "ma dong co goi moi lo")
+    assert "tu_dieu_tiet=" in than, "khong truyen che do -> hoi sai nhanh"
 
 
 def test_co_o_TI_LE_HONG():

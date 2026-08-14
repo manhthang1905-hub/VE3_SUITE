@@ -1250,18 +1250,38 @@ class HomePage(ctk.CTkScrollableFrame):
 
         cfg = getattr(self.app, "config_data", {}) or {}
         def _n(khoa, loai):
-            """Trần của TOOL cho một loại job. `0`/thiếu = không ghim.
+            """Trần THẬT của một mã cho loại job này, ngay lúc này.
 
-            Không ghim thì trần thật là trần ĐỘNG của máy chủ (`/v1/me`), nên
-            bảng phải hiện đúng con số ấy. Bản trước ép `max(1, ...)` rồi rơi
-            về mặc định 24/16, tức là bảng nói dối: tool đang theo máy chủ mà
-            bảng vẽ ra một cái trần không ai áp.
+            ⚠ PHẢI HỎI ĐÚNG CÁI HÀM MÀ ĐỘNG CƠ ĐANG DÙNG. Bản trước đọc
+            `max_concurrent` / `shopapi_video_concurrency` từ cấu hình, và từ
+            khi bật tự điều tiết (15/08/2026) hai số đó KHÔNG CÒN LÀ TRẦN nữa —
+            trần đến từ máy chủ chia cho số tiến trình mã đang sống, rồi cắt
+            bằng suất luồng và nhịp gửi.
+
+            Hệ quả là bảng nói dối theo kiểu khó chịu nhất: máy khác báo "XIN
+            40" (đúng bằng `max_concurrent` trong file cấu hình) trong khi động
+            cơ đang xin một con số hoàn toàn khác. Người vận hành so "xin 40 /
+            chạy 3" rồi kết luận tool nghẽn, mà thật ra hai con số đó đến từ hai
+            nguồn không liên quan gì nhau.
+
+            Giờ hỏi thẳng `shopapi_batch._hoi_tran` — đúng hàm động cơ gọi mỗi
+            lô. Nó tự đọc `/v1/me` (có nhớ tạm), tự chia theo số mã đang sống.
             """
             try:
                 v = int(cfg.get(khoa) or 0)
             except (TypeError, ValueError):
                 v = 0
-            if v > 0:
+            tu_dieu = bool(cfg.get("shopapi_tu_dieu_tiet", True))
+            try:
+                import shopapi_batch as _sb
+                n = int(_sb._hoi_tran(loai, tran_tool=(v or None),
+                                      log=lambda *a, **k: None,
+                                      tu_dieu_tiet=tu_dieu))
+                if n > 0:
+                    return n
+            except Exception:
+                pass
+            if not tu_dieu and v > 0:
                 return v
             try:
                 return int((det.get(loai) or {}).get("limit") or 0) or None
@@ -1323,7 +1343,9 @@ class HomePage(ctk.CTkScrollableFrame):
             # trong khi chỉ 1 mã ở pha ảnh — tức là xin thật 40. Con số phóng đại
             # đó còn kéo theo dòng chẩn đoán sai: "xin 320 mà 0 job chạy" nghe
             # như tool gãy, thật ra là chưa mã nào tới pha này.
-            xin = (ma or 0) * tran_ma[loai]
+            # Trần mỗi mã có thể là `None` khi chưa đọc được `/v1/me` — nhân
+            # `None` là nổ, và hiện 0 thì lại nói dối theo hướng ngược lại.
+            xin = (ma or 0) * (tran_ma[loai] or 0)
 
             vals[khoa[0]] = "-" if ma is None else str(ma)
             vals[khoa[1]] = "{0}/{1}".format(xin, tran) if d else "-"
