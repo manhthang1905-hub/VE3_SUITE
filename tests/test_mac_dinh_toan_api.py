@@ -1519,3 +1519,33 @@ def test_co_job_thi_QUEN_HET_luot_trang_truoc():
     i = than.find("if chay or cho:")
     assert i > 0, "khong dat lai bo dem khi co job"
     assert "_khong_job_lien_tiep" in than[i:i + 400]
+
+
+def test_TA_XIN_khong_duoc_vuot_so_viec_CON_LAI():
+    """`mã × trần` là mức TỐI ĐA có thể xin, không phải mức ĐANG xin.
+
+    Một mã còn đúng 2 cảnh thì nó xin 2, dù trần cho phép 489. Lẫn hai thứ đó
+    làm ô này nói dối và kéo theo cả dòng chẩn đoán: *"xin 489 mà chỉ 2 job
+    chạy — NGHẼN Ở PHÍA TOOL"*, trong khi tool đang làm đúng trọn phần việc còn
+    lại. Đúng cảnh người vận hành báo ngày 15/08/2026 ("xin 40 mà chỉ 3 job") —
+    mã đó chỉ còn 3 cảnh.
+    """
+    nguon = VE3_GUI.read_text(encoding="utf-8", errors="replace")
+    than = ast.get_source_segment(nguon, _ham("_so_lieu_api_len_tram")) or ""
+    i = than.find("xin = (ma or 0) * (tran_ma[loai] or 0)")
+    assert i > 0, "khong tim thay cho tinh 'xin'"
+    assert "xin = min(xin, max(0, int(con)))" in than[i:i + 1400], (
+        "'TA XIN' van la TRAN chu khong phai so viec that su xin")
+
+
+def test_dong_KHAI_THAC_in_GIA_THAT_cua_duong_dang_dung():
+    """`REQ_MOI_JOB` là hằng số cũ (giá đường SSE) — dùng nó là tự mâu thuẫn.
+
+    Dòng sẽ khai "gộp lời hỏi (~3,0 lời gọi/ảnh)" trong khi đường gộp chỉ tốn
+    ~1,3 — sai ngay trong một câu, và sai theo hướng làm người đọc tưởng trần
+    thông lượng thấp hơn thực tế 2,4 lần.
+    """
+    nguon = VE3_GUI.read_text(encoding="utf-8", errors="replace")
+    than = ast.get_source_segment(nguon, _ham("_so_lieu_api_len_tram")) or ""
+    assert "_sb.req_moi_job()" in than, "van doc hang so cu REQ_MOI_JOB"
+    assert "_gia = _sb.REQ_MOI_JOB" not in than

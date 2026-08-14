@@ -1370,6 +1370,17 @@ class HomePage(ctk.CTkScrollableFrame):
             # Trần mỗi mã có thể là `None` khi chưa đọc được `/v1/me` — nhân
             # `None` là nổ, và hiện 0 thì lại nói dối theo hướng ngược lại.
             xin = (ma or 0) * (tran_ma[loai] or 0)
+            # ⚠ KHÔNG XIN ĐƯỢC NHIỀU HƠN SỐ VIỆC CÒN LẠI.
+            #
+            # `mã × trần` là mức TỐI ĐA có thể xin, không phải mức đang xin. Một
+            # mã còn đúng 2 cảnh thì nó xin 2, dù trần cho phép 489.
+            #
+            # Lẫn hai thứ đó làm ô này nói dối và kéo theo cả dòng chẩn đoán:
+            # "xin 489 mà chỉ 2 job chạy — NGHẼN Ở PHÍA TOOL", trong khi tool
+            # đang làm đúng trọn phần việc còn lại. Đúng cảnh người vận hành báo
+            # ngày 15/08/2026 ("xin 40 mà chỉ 3 job") — mã đó chỉ còn 3 cảnh.
+            if con is not None:
+                xin = min(xin, max(0, int(con)))
 
             vals[khoa[0]] = "-" if ma is None else str(ma)
             vals[khoa[1]] = "{0}/{1}".format(xin, tran) if d else "-"
@@ -1527,7 +1538,11 @@ class HomePage(ctk.CTkScrollableFrame):
             _th = _sb.ThungGui()
             _ban = _sc.dem_ban_dang_chay("")
             _job_phut = _th.toc_do() * 60.0
-            _gia = _sb.REQ_MOI_JOB
+            # ⚠ `REQ_MOI_JOB` là HẰNG SỐ CŨ (giá của đường SSE), giữ lại chỉ cho
+            # chỗ nào còn đọc thẳng. Giá THẬT đi theo đường chờ đang bật —
+            # `req_moi_job()`. Dùng nhầm thì dòng KHAI THÁC khai "gộp lời hỏi
+            # (~3,0 lời gọi/ảnh)", tức là tự mâu thuẫn ngay trong một câu.
+            _gia = _sb.req_moi_job()
             _duong = ("gộp lời hỏi" if _sc.dung_thu_hoach_chung()
                       else ("SSE" if _sc.dung_sse() else "hỏi từng job"))
             status.append(
