@@ -553,3 +553,46 @@ def test_di_TOAN_API_thi_khong_bao_ERROR_thieu_server(tmp_path, nhat_ky, co_khoa
     truoc = nguon[max(0, i - 1500):i]
     assert "use_shopapi_for_image and self.use_shopapi_for_video" in truoc, (
         "che do toan API van roi vao nhanh ERROR 'Khong co server URL!'")
+
+
+# ── Cảnh hỏng phải TỰ NÓI VÌ SAO ─────────────────────────────────────────────
+
+
+def test_dong_FAIL_phai_IN_CA_LY_DO():
+    """Một cảnh hỏng trong 0,0 giây mà log không nói vì sao là ngõ cụt chẩn đoán.
+
+    Log 17:17:02 và 17:30:51 ngày 15/08/2026, mã TH1-0182:
+
+        Video scene 81 FAIL (0.0s) [error: retry lt sau]
+
+    Câu lỗi đã nằm sẵn trong `error_text` — chỉ là không ai đưa nó ra. Mất hai
+    lượt chạy và một vòng đọc mã nguồn mới biết đó là "khong thay anh scene".
+    """
+    import inspect
+    import ve3_worker
+    nguon = inspect.getsource(ve3_worker)
+    for cho in ("Video scene {0} -> FAIL", "Scene {0} -> FAIL"):
+        i = nguon.find(cho)
+        assert i > 0, "khong tim thay dong FAIL: {0}".format(cho)
+        assert "error_text" in nguon[i:i + 400], (
+            "dong FAIL khong in ly do: {0}".format(cho))
+
+
+def test_THIEU_ANH_NGUON_thi_danh_dau_dung_lai_ANH():
+    """Thiếu file ảnh nguồn thì phải dựng lại ẢNH, không phải thử lại VIDEO mãi.
+
+    Excel ghi ảnh "done" nhưng file trên đĩa đã mất, nên bước video đọc
+    `img_path` không thấy và trả về ngay trong 0,0 giây. Lượt sau lặp lại y hệt
+    vì không ai bảo pha ảnh làm lại cảnh đó — ba lượt là mã bị ĐỖ LẠI vĩnh
+    viễn, trong khi chỉ cần dựng lại một tấm ảnh.
+    """
+    import inspect
+    import ve3_worker
+    nguon = inspect.getsource(ve3_worker)
+    i = nguon.find('"khong thay anh scene" in')
+    assert i > 0, "khong nhan ra truong hop thieu anh nguon"
+    quanh = nguon[i:i + 500]
+    assert 'status_img="error"' in quanh, (
+        "thieu anh ma khong danh dau dung lai ANH -> ma se hong lai y het luot sau")
+    assert 'status_vid=""' in quanh, (
+        "van ghi video la hong -> luot sau bo qua canh nay thay vi lam lai")

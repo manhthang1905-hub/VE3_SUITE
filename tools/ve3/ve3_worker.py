@@ -2855,7 +2855,10 @@ Generator/context error:
                     wb.update_scene(scene_id, status_img=fs)
                     wb.safe_save()
                 _tag = "TERMINAL policy" if fs == "failed" else "retry lượt sau"
-                self.log(f"    Scene {scene_id} â†’ FAIL ({elapsed}s) [{fs}: {_tag}]", "WARN")
+                # In cả lý do — xem khối tương ứng ở pha video.
+                self.log("    Scene {0} -> FAIL ({1}s) [{2}: {3}] {4}".format(
+                    scene_id, elapsed, fs, _tag,
+                    (error_text or "(khong co mo ta loi)")[:200]), "WARN")
                 self.on_item_status("scene", scene_id, "error", None,
                                     {"elapsed": elapsed, **server_info})
                 return False
@@ -3586,11 +3589,33 @@ Generator/context error:
                         round_index=rewrite_round, mode="video"
                     )
                 fs = self._fail_status_for(error_text)
+                # ⚠ THIẾU FILE ẢNH NGUỒN THÌ PHẢI DỰNG LẠI ẢNH, không phải thử
+                # lại video mãi. Excel ghi ảnh "done" nhưng file trên đĩa đã mất
+                # (finalize dọn nhầm, hoặc tải hụt) — bước video đọc `img_path`
+                # không thấy nên trả về NGAY trong 0,0 giây. Lượt sau lặp lại y
+                # hệt, vì không ai bảo pha ẢNH làm lại cảnh đó.
+                #
+                # Đã dính thật: TH1-0182 cảnh 81, hai lượt liên tiếp lúc
+                # 17:17:02 và 17:30:51 ngày 15/08/2026, mỗi lượt `FAIL (0.0s)`
+                # rồi ăn một "lượt trắng". Ba lượt là mã bị ĐỖ LẠI vĩnh viễn —
+                # trong khi chỉ cần dựng lại một tấm ảnh.
+                _thieu_anh = "khong thay anh scene" in (error_text or "").lower()
                 with self._excel_lock:
-                    wb.update_scene(sid, status_vid=fs)
+                    if _thieu_anh:
+                        wb.update_scene(sid, status_img="error", status_vid="")
+                    else:
+                        wb.update_scene(sid, status_vid=fs)
                     wb.safe_save()
                 _tag = "TERMINAL policy" if fs == "failed" else "retry lượt sau"
-                self.log(f"    Video scene {sid} â†’ FAIL ({elapsed}s) [{fs}: {_tag}]", "WARN")
+                if _thieu_anh:
+                    _tag = "THIEU ANH NGUON -> danh dau dung lai anh o luot sau"
+                # ⚠ IN CẢ LÝ DO. Bản trước chỉ in `[error: retry lượt sau]`, nên
+                # người đọc log thấy một cảnh hỏng trong 0,0 giây mà không có
+                # cách nào biết vì sao. Câu lỗi đã nằm sẵn trong `error_text` —
+                # chỉ là không ai đưa nó ra.
+                self.log("    Video scene {0} -> FAIL ({1}s) [{2}: {3}] {4}".format(
+                    sid, elapsed, fs, _tag,
+                    (error_text or "(khong co mo ta loi)")[:200]), "WARN")
                 self.on_item_status("scene", sid, "error", None,
                                     {"elapsed": elapsed, "phase": "video", **server_info})
                 return False
