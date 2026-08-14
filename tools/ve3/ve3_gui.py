@@ -1137,17 +1137,35 @@ class HomePage(ctk.CTkScrollableFrame):
     #: nhiều mà chạy ít và không xếp hàng thì tool không gửi được; xếp hàng dài
     #: thì nhà máy ngộp. Ba nguyên nhân khác hẳn nhau, trước đây nhìn từ ngoài
     #: giống hệt nhau.
+    #: Tám ô cho mỗi loại job, đọc trái→phải, trên→dưới là ra câu chuyện.
+    #:
+    #: HÀNG 1 kể việc đi từ ta sang nhà máy:
+    #:     mấy mã đang ở pha này  →  ta xin bao nhiêu / được cấp bao nhiêu
+    #:     →  máy chủ đang chạy bao nhiêu  →  còn mấy cái nằm xếp hàng
+    #:
+    #: HÀNG 2 kể hàng ra: nhanh chậm, hỏng bao nhiêu, còn bao nhiêu, bao giờ xong.
+    #:
+    #: ⚠ Ô "XẾP HÀNG" mang thêm MŨI TÊN XU HƯỚNG, và đó là ô quan trọng nhất
+    #: bảng này. Nó trả lời câu duy nhất đáng hỏi khi thấy chậm: **nghẽn ở ta
+    #: hay ở nhà máy?**
+    #:
+    #:     xếp hàng DÀI RA (↑)  = ta đẩy nhanh hơn nhà máy nhai. Trần đang là
+    #:                            của NHÀ MÁY. Đẩy thêm chỉ làm hàng dài hơn.
+    #:     xếp hàng ~0 mà chạy ít = nhà máy rảnh mà ta không gửi tới. Nghẽn ở TA.
+    #:
+    #: Một con số xếp hàng đứng yên không phân biệt được hai cảnh đó — đúng chỗ
+    #: đã làm người vận hành đọc "xin 40 / chạy 3" rồi đi chữa nhầm phía.
     NHAN_TRAM_API = {
-        # HÀNG 1 — CHUỖI CUNG, đọc trái sang phải là ra thủ phạm.
-        "img_login": "MÃ Ở PHA NÀY",  "img_run": "XIN / TRẦN",
-        "img_q429": "JOB ĐANG CHẠY",  "img_nghi": "JOB XẾP HÀNG",
-        # HÀNG 2 — KẾT QUẢ: đang ra bao nhiêu, hỏng bao nhiêu, còn bao nhiêu, bao giờ xong.
-        "img_dead": "ẢNH / PHÚT",     "img_rate": "HỎNG (100 JOB)",
-        "img_done": "CÒN LẠI",        "img_codes": "XONG SAU",
-        "vid_acc": "MÃ Ở PHA NÀY",    "vid_rest": "XIN / TRẦN",
-        "vid_heal": "JOB ĐANG CHẠY",  "vid_queue": "JOB XẾP HÀNG",
-        "vid_submit": "VIDEO / PHÚT", "vid_rate": "HỎNG (100 JOB)",
-        "vid_done": "CÒN LẠI",        "vid_codes": "XONG SAU",
+        # HÀNG 1 — TA ĐẨY: mã → xin → máy chủ nhận → xếp hàng
+        "img_login": "MÃ Ở PHA NÀY",   "img_run": "TA XIN / ĐƯỢC CẤP",
+        "img_q429": "ĐANG CHẠY",       "img_nghi": "XẾP HÀNG",
+        # HÀNG 2 — RA HÀNG: nhanh chậm, hỏng, còn lại, bao giờ xong
+        "img_dead": "ẢNH / PHÚT",      "img_rate": "HỎNG (100 JOB)",
+        "img_done": "CÒN LẠI",         "img_codes": "XONG SAU",
+        "vid_acc": "MÃ Ở PHA NÀY",     "vid_rest": "TA XIN / ĐƯỢC CẤP",
+        "vid_heal": "ĐANG CHẠY",       "vid_queue": "XẾP HÀNG",
+        "vid_submit": "VIDEO / PHÚT",  "vid_rate": "HỎNG (100 JOB)",
+        "vid_done": "CÒN LẠI",         "vid_codes": "XONG SAU",
     }
 
     #: Nhãn gốc (đường Chrome/pool) — để quay về khi đổi chế độ.
@@ -1350,7 +1368,22 @@ class HomePage(ctk.CTkScrollableFrame):
             vals[khoa[0]] = "-" if ma is None else str(ma)
             vals[khoa[1]] = "{0}/{1}".format(xin, tran) if d else "-"
             vals[khoa[2]] = str(chay) if d else "-"
-            vals[khoa[3]] = str(cho) if d else "-"
+            # Xu hướng hàng chờ: so với lượt đọc trước. Đây là thứ phân biệt
+            # "nhà máy đang là trần" với "ta không gửi tới nơi".
+            _truoc = getattr(self, "_cho_truoc", {})
+            _cu = _truoc.get(loai)
+            _truoc[loai] = cho
+            self._cho_truoc = _truoc
+            if _cu is None or not d:
+                _xu_huong = ""
+            elif cho > _cu + max(3, _cu * 0.05):
+                _xu_huong = " ↑"
+            elif cho < _cu - max(3, _cu * 0.05):
+                _xu_huong = " ↓"
+            else:
+                _xu_huong = " ="
+            vals[khoa[3]] = "{0}{1}".format(cho, _xu_huong) if d else "-"
+            _dai_ra = _xu_huong == " ↑"
             vals[khoa[4]] = "-" if gio is None else "{0:.1f}".format(gio / 60.0)
             _h = hong.get(loai)
             vals[khoa[5]] = ("-" if not _h or not _h[1]
@@ -1371,8 +1404,15 @@ class HomePage(ctk.CTkScrollableFrame):
             if not d:
                 vals[khoa[-1]] = ("⏸ Chưa đọc được số của máy chủ cho loại này", GRAY)
             elif tran <= 0:
-                vals[khoa[-1]] = ("⛔ Nhà máy {0} ĐANG DỪNG (trần 0) — gửi lúc này chắc chắn "
-                                  "503, KHÔNG bị trừ tiền. Chờ máy chủ mở lại.".format(loai), RED)
+                # Đã dính thật hai lần trong ngày 15/08/2026: nhà máy về 0 máy
+                # xử lý trong khi kho tài khoản còn nguyên 95 cái. Mọi phép đo
+                # sản lượng lúc đó đều ra 0, và rất dễ bị quy oan cho tool.
+                vals[khoa[-1]] = ("⛔ NHÀ MÁY {0} ĐANG DỪNG — máy chủ cấp trần 0, tức là bên đó "
+                                  "không có máy xử lý nào online. Gửi lúc này chắc chắn 503 và "
+                                  "KHÔNG bị trừ tiền. KHÔNG phải lỗi tool, chờ bên shopapi mở "
+                                  "lại.{1}".format(loai.upper(),
+                                                   " Đang có {0} job nằm chờ.".format(cho) if cho else ""),
+                                  RED)
             elif con is not None and con <= 0:
                 vals[khoa[-1]] = ("✅ Hết việc loại này — không còn gì để làm", GREEN)
             elif not ma and (chay or cho):
@@ -1389,23 +1429,46 @@ class HomePage(ctk.CTkScrollableFrame):
             elif chay == 0 and cho == 0:
                 vals[khoa[-1]] = ("⛔ {0} mã đang chạy mà KHÔNG job nào tới máy chủ — tool "
                                   "không gửi được. Xem logs/ve3-*.log.".format(ma), RED)
-            elif cho > max(4, tran * 0.25):
-                vals[khoa[-1]] = ("⚠️ {0} job xếp hàng trên trần {1} — nhà máy đang ngộp, gửi "
-                                  "thêm chỉ nằm chờ chứ không nhanh hơn".format(cho, tran), ORANGE)
+            elif _dai_ra and cho > max(8, tran * 0.15):
+                # ⚠ ĐÂY KHÔNG PHẢI LỖI CỦA TOOL — và nói nhầm chỗ này là đắt.
+                #
+                # Hàng chờ DÀI RA nghĩa là ta đang đẩy nhanh hơn nhà máy nhai,
+                # tức là ta đã bơm đầy nó. Trần lúc này là trần của NHÀ MÁY.
+                # Đo 15/08/2026: tool đẩy 489 job cùng lúc, máy chủ chạy 361, mà
+                # nhà máy chỉ có 1 máy xử lý nên hàng chờ leo 51 → 454. Sản
+                # lượng đứng ở 88 ảnh/phút dù có đẩy thêm bao nhiêu.
+                #
+                # Bảo "nhà máy đang ngộp, tool cứ đẩy thêm" thì người vận hành
+                # sẽ đi vặn núm cho to hơn — đúng thứ KHÔNG giúp được gì.
+                vals[khoa[-1]] = ("🏭 ĐÃ BƠM ĐẦY NHÀ MÁY — {0} job xếp hàng và đang DÀI RA, "
+                                  "{1} đang chạy, ta ra {2:.0f}/phút. Trần lúc này là của "
+                                  "NHÀ MÁY, không phải của tool: đẩy thêm chỉ làm hàng dài "
+                                  "hơn chứ không ra thêm hàng."
+                                  .format(cho, chay, (gio or 0) / 60.0), ORANGE)
+            elif cho > max(8, tran * 0.25):
+                vals[khoa[-1]] = ("🏭 {0} job xếp hàng (không dài thêm) trên trần {1} — nhà máy "
+                                  "đang chạy hết sức, ta ra {2:.0f}/phút. Đây là nhịp tối đa "
+                                  "nhà máy nuốt được."
+                                  .format(cho, tran, (gio or 0) / 60.0), GRAY)
             elif _h and _h[1] >= 10 and _h[0] / _h[1] >= 0.3:
                 # Hỏng nhiều là thứ dễ bị bỏ qua nhất: bảng vẫn "đang chạy",
                 # job vẫn nhúc nhích, mà quá nửa công sức rơi xuống đất.
                 vals[khoa[-1]] = ("⚠️ HỎNG {0}/{1} job gần đây ({2:.0%}) — đang đốt thời gian. "
                                   "Xem 'VÌ SAO HỎNG' bằng: python -m tools.do_san_luong"
                                   .format(_h[0], _h[1], _h[0] / _h[1]), ORANGE)
-            elif chay < xin * 0.5:
-                vals[khoa[-1]] = ("⚠️ Xin {0} mà chỉ {1} job chạy (hàng chờ {2}) — nghẽn ở PHÍA "
-                                  "TOOL, không phải ở máy chủ. Xem logs/ve3-*.log."
-                                  .format(xin, chay, cho), ORANGE)
-            elif xin < tran * 0.5:
-                vals[khoa[-1]] = ("⚠️ Còn dư chỗ: {0} mã × {1} = xin {2} trên {3} được cấp "
-                                  "({4:.0%}) — nâng 'Mã song song' hoặc 'Ảnh/mã' trong Cài đặt."
-                                  .format(ma, tran_ma[loai], xin, tran, xin / max(tran, 1)), ORANGE)
+            elif chay < xin * 0.5 and cho <= max(4, tran * 0.05):
+                # Nhà máy RẢNH (hàng chờ trống) mà ta xin nhiều hơn hẳn số đang
+                # chạy -> job không tới nơi. Đây mới đúng là nghẽn phía tool.
+                # Phải kèm điều kiện hàng chờ trống: hàng chờ dài thì job CÓ tới
+                # nơi, chỉ là đang đợi — hai cảnh khác hẳn nhau mà bản trước gộp
+                # làm một, nên nó đổ lỗi cho tool ngay cả lúc tool đang bơm đầy.
+                vals[khoa[-1]] = ("⛔ NGHẼN Ở PHÍA TOOL — nhà máy rảnh (hàng chờ {0}) mà ta xin "
+                                  "{1} chỉ có {2} job tới nơi. Xem logs/ve3-*.log."
+                                  .format(cho, xin, chay), RED)
+            elif xin < tran * 0.5 and cho <= max(4, tran * 0.05):
+                vals[khoa[-1]] = ("💤 CÒN DƯ CHỖ — {0} mã đang xin {1} trên {2} được cấp "
+                                  "({3:.0%}), nhà máy rảnh. Thêm mã chạy song song để lấp."
+                                  .format(ma, xin, tran, xin / max(tran, 1)), ORANGE)
             else:
                 vals[khoa[-1]] = ("✅ {0} mã · {1} chạy / {2} chờ · {3:.1f}/phút · còn {4}"
                                   .format(ma, chay, cho, (gio or 0) / 60.0,

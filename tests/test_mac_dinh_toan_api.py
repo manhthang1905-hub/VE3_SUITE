@@ -589,12 +589,50 @@ def test_hai_bang_tram_co_bo_nhan_RIENG_cho_API():
     # Nhãn của đường Chrome KHÔNG được sót lại trong bộ API.
     for chet in ("ĐÃ LOGIN", "CÁCH LY 429", "ĐANG CHỮA", "SUBMIT/ACC"):
         assert chet not in api.values(), "{0} khong co nghia o che do API".format(chet)
-    # HÀNG 1 — chuỗi cung, đọc trái sang phải là ra thủ phạm.
-    for can in ("MÃ Ở PHA NÀY", "XIN / TRẦN", "JOB ĐANG CHẠY", "JOB XẾP HÀNG"):
+    # HÀNG 1 — việc đi từ ta sang nhà máy, đọc trái sang phải là ra thủ phạm.
+    for can in ("MÃ Ở PHA NÀY", "TA XIN / ĐƯỢC CẤP", "ĐANG CHẠY", "XẾP HÀNG"):
         assert can in api.values(), "thieu o {0}".format(can)
-    # HÀNG 2 — kết quả: đang ra bao nhiêu, hỏng bao nhiêu, còn bao nhiêu, bao giờ xong.
+    # HÀNG 2 — hàng ra: nhanh chậm, hỏng, còn lại, bao giờ xong.
     for can in ("HỎNG (100 JOB)", "CÒN LẠI", "XONG SAU"):
         assert can in api.values(), "thieu o {0}".format(can)
+
+
+def test_o_XEP_HANG_mang_MUI_TEN_XU_HUONG():
+    """Một con số xếp hàng đứng yên không phân biệt được hai cảnh trái ngược.
+
+        xếp hàng DÀI RA          = ta đẩy nhanh hơn nhà máy nhai -> trần là của
+                                   NHÀ MÁY, đẩy thêm chỉ làm hàng dài hơn;
+        xếp hàng ~0 mà chạy ít   = nhà máy rảnh mà job không tới -> nghẽn ở TA.
+
+    Đo 15/08/2026 cảnh thứ nhất: tool đẩy 489 job cùng lúc, máy chủ chạy 361,
+    hàng chờ leo 51 -> 454, sản lượng đứng ở 88 ảnh/phút. Không có mũi tên thì
+    người vận hành nhìn "chạy 361 / chờ 454" và không biết nên vặn to hay nhỏ.
+    """
+    nguon = VE3_GUI.read_text(encoding="utf-8", errors="replace")
+    than = ast.get_source_segment(nguon, _ham("_so_lieu_api_len_tram")) or ""
+    assert "_cho_truoc" in than, "khong nho hang cho luot truoc -> khong tinh duoc xu huong"
+    assert "↑" in than and "↓" in than, "o XEP HANG khong co mui ten xu huong"
+    assert "_dai_ra" in than, "tinh xu huong ma khong dung no de chan doan"
+
+
+def test_chan_doan_PHAN_BIET_nghen_o_TOOL_voi_nha_may_DA_DAY():
+    """Đổ lỗi nhầm phía là thứ đắt nhất mà một dòng chẩn đoán có thể làm.
+
+    Bản trước hễ thấy `chay < xin/2` là kết luận "nghẽn ở PHÍA TOOL" — kể cả
+    lúc hàng chờ đang dài 454, tức là job CÓ tới nơi và đang đợi. Hai cảnh khác
+    hẳn nhau: một cái bảo đi sửa tool, một cái bảo nhà máy đã hết sức.
+    """
+    nguon = VE3_GUI.read_text(encoding="utf-8", errors="replace")
+    than = ast.get_source_segment(nguon, _ham("_so_lieu_api_len_tram")) or ""
+    assert "ĐÃ BƠM ĐẦY NHÀ MÁY" in than,         "khong noi duoc canh nha may la tran"
+    assert "NGHẼN Ở PHÍA TOOL" in than, "khong noi duoc canh nghen that o tool"
+    # Soi ĐÚNG dòng điều kiện, đừng cắt cửa sổ ký tự quanh câu chữ: khối chú
+    # thích ở giữa đẩy điều kiện ra ngoài cửa sổ và bài kiểm đỏ oan.
+    dieu_kien = [d for d in than.splitlines() if "chay < xin * 0.5" in d]
+    assert dieu_kien, "khong tim thay nhanh chan doan 'nghen o tool'"
+    assert "cho <= max(" in dieu_kien[0], (
+        "ket luan 'nghen o tool' ma khong doi hoi hang cho phai TRONG — hang cho "
+        "dai nghia la job CO toi noi, chi la dang doi: " + dieu_kien[0].strip())
 
 
 def test_o_XIN_tinh_theo_MA_DANG_O_PHA_khong_theo_cau_hinh():
