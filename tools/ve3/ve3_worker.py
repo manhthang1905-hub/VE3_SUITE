@@ -1993,6 +1993,27 @@ Generator/context error:
         "upload anh scene that bai",
     )
 
+    @staticmethod
+    def _la_anh_that(duong_dan):
+        """File này có THẬT SỰ là ảnh không? Đọc magic bytes, không nhìn đuôi tên.
+
+        Máy chủ shopapi nhận dạng ảnh đúng bằng cách này — nó nói thẳng trong
+        câu lỗi: *"Máy chủ nhận dạng ảnh bằng magic bytes chứ không nhìn tên
+        file"*. Nên ta phải kiểm bằng CÙNG MỘT THƯỚC; nếu không thì tool nghĩ
+        ảnh xong, máy chủ nghĩ ảnh hỏng, và không bên nào sai theo cách của
+        mình.
+        """
+        try:
+            with open(str(duong_dan), "rb") as f:
+                dau = f.read(12)
+        except OSError:
+            return False
+        if len(dau) < 12:
+            return False
+        return (dau.startswith(b"\x89PNG\r\n\x1a\n")                 # PNG
+                or dau.startswith(b"\xff\xd8\xff")                   # JPEG
+                or (dau[:4] == b"RIFF" and dau[8:12] == b"WEBP"))    # WebP
+
     def _anh_nguon_hong(self, error_text):
         """Lỗi này là do ẢNH NGUỒN, không phải do prompt hay do nhà máy?
 
@@ -2745,7 +2766,31 @@ Generator/context error:
             media_id = getattr(scene, 'media_id', '') or ''
 
             # ÄÃ£ cÃ³ áº£nh + media_id â†’ skip vÃ  Ä‘Ã¡nh dáº¥u
+            # ⚠ FILE TỒN TẠI CHƯA CÓ NGHĨA LÀ ẢNH DÙNG ĐƯỢC.
+            #
+            # Nhánh này từng chỉ hỏi `img_path.exists()` rồi đánh dấu `done`.
+            # Một file `.png` mà ruột không phải ảnh (tải hụt, hoặc lưu nhầm
+            # trang lỗi) vẫn qua cửa — và tệ hơn, nó GHI ĐÈ dấu `error` mà pha
+            # video vừa đặt để yêu cầu dựng lại. Vòng lặp kín:
+            #
+            #     pha ảnh : có file          -> đánh dấu "done"
+            #     pha video: máy chủ từ chối -> FAIL, đánh dấu "error"
+            #     lượt sau : y hệt
+            #
+            # Đo thật TH1-0182 cảnh 81: hỏng BỐN lượt liên tiếp lúc 17:17,
+            # 17:30, 17:43 và 18:02 ngày 15/08/2026, mỗi lượt ăn một "lượt
+            # trắng". Kiểm bằng CHÍNH THƯỚC MÁY CHỦ DÙNG (magic bytes) thì vòng
+            # lặp đứt ngay trong lượt này, không phải chờ pha video phát hiện.
             if img_path.exists() and media_id:
+                if not self._la_anh_that(img_path):
+                    self.log("  Scene {0}: file anh co nhung KHONG PHAI ANH "
+                             "(magic bytes sai) - dung lai".format(scene.scene_id), "WARN")
+                    try:
+                        img_path.unlink()
+                    except OSError:
+                        pass
+                    pending.append(scene)
+                    continue
                 with self._excel_lock:
                     wb.update_scene(scene.scene_id, status_img="done")
                     wb.safe_save()

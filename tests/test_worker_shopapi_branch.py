@@ -636,3 +636,46 @@ def test_xoa_anh_hong_o_CA_img_backup():
     quanh = nguon[i:i + 1600]
     assert "img_backup" in quanh, (
         "chi xoa o img/ -> finalize chep ban hong tro lai, vong lap van kin")
+
+
+def test_la_anh_that_doc_MAGIC_BYTES_khong_nhin_duoi_ten(tmp_path):
+    """Máy chủ nhận dạng ảnh bằng magic bytes — ta phải kiểm bằng CÙNG MỘT THƯỚC.
+
+    Không thì tool nghĩ ảnh xong, máy chủ nghĩ ảnh hỏng, và không bên nào sai
+    theo cách của mình.
+    """
+    import ve3_worker
+    f = ve3_worker.VE3Worker._la_anh_that
+    (tmp_path / "a.png").write_bytes(b"\x89PNG\r\n\x1a\n" + b"\x00" * 20)
+    (tmp_path / "b.png").write_bytes(b"\xff\xd8\xff" + b"\x00" * 20)          # JPEG
+    (tmp_path / "c.png").write_bytes(b"RIFF" + b"\x00" * 4 + b"WEBP" + b"\x00" * 10)
+    assert f(tmp_path / "a.png") and f(tmp_path / "b.png") and f(tmp_path / "c.png")
+    # Ba kiểu "file .png mà không phải ảnh" đã gặp hoặc dễ gặp.
+    (tmp_path / "x.png").write_bytes(b"<html>loi 500</html>")
+    (tmp_path / "y.png").write_bytes(b"")
+    (tmp_path / "z.png").write_bytes(b"\x00\x00\x00\x18ftypmp42" + b"\x00" * 10)
+    assert not f(tmp_path / "x.png"), "trang loi HTML luu thanh .png ma van qua cua"
+    assert not f(tmp_path / "y.png"), "file rong ma van qua cua"
+    assert not f(tmp_path / "z.png"), "mp4 doi ten thanh .png ma van qua cua"
+    assert not f(tmp_path / "khong-co.png")
+
+
+def test_pha_ANH_khong_danh_dau_DONE_cho_file_khong_phai_anh():
+    """`img_path.exists()` không đủ — và nó GHI ĐÈ dấu `error` của pha video.
+
+    Vòng lặp kín đã đo thật, TH1-0182 cảnh 81 hỏng BỐN lượt liên tiếp lúc
+    17:17, 17:30, 17:43 và 18:02 ngày 15/08/2026:
+
+        pha ảnh  : có file          -> đánh dấu "done"
+        pha video: máy chủ từ chối  -> FAIL, đánh dấu "error"
+        lượt sau : y hệt
+    """
+    import inspect
+    import ve3_worker
+    nguon = inspect.getsource(ve3_worker)
+    i = nguon.find("if img_path.exists() and media_id:")
+    assert i > 0, "khong tim thay nhanh danh dau done"
+    quanh = nguon[i:i + 700]
+    assert "_la_anh_that" in quanh, (
+        "van danh dau 'done' chi vi file ton tai -> ghi de dau 'error' cua pha video")
+    assert ".unlink()" in quanh, "phat hien file hong ma khong xoa -> luot sau lai qua cua"
