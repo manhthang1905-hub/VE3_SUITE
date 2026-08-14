@@ -177,6 +177,37 @@ BACKEND_ANH_CU = frozenset(v for v in BACKEND_ANH.values() if v != "shopapi")
 #:       riêng. Chuyển lại những máy đã dính bản 1.
 CHUYEN_API_PHIEN = 2
 
+#: ═══ SÀN SONG SONG CHO MÁY CŨ — 14/08/2026 ═══
+#:
+#: Chuyển được sang API rồi vẫn có thể chạy chậm như chưa chuyển, vì ba con số
+#: dưới đây nằm trong `settings.yaml` — file bị `PROTECTED_PATHS` **và**
+#: `GIT_PROTECTED_FILES` **và** `.gitignore` chặn, đúng ba lớp đã ngăn phép
+#: chuyển backend. Máy cũ giữ giá trị thời chạy Chrome, khi một "mã" chỉ dám
+#: giữ vài chỗ vì mỗi chỗ là một cửa sổ Chrome thật.
+#:
+#: Đo trên máy chủ thật 14/08/2026, hai khách đang chạy::
+#:
+#:      máy chủ mời mỗi khách : ~979 chỗ ảnh · ~288 chỗ video
+#:      khách GIỮ cùng lúc    :     2 chỗ ảnh (đỉnh 2, trung bình 1,2–2,0)
+#:
+#: Tức khai thác **0,2%** phần ảnh. Ba worker `idle`, hàng chờ 1–2 giây, ảnh
+#: p50 32 giây — máy chủ rảnh suốt trong khi chủ dự án thấy "1 phút 1 ảnh".
+#: Con số 2 đó chính là mặc định thời Chrome còn sót lại.
+#:
+#: Sàn dưới đây KHÔNG phải số bịa: `8 mã × 40 ảnh = 320 chỗ`, `× 16 video = 128
+#: chỗ` là cấu hình ĐÃ CHẠY THẬT (xem `_load_config`). Cố ý không dùng 0 ("theo
+#: trần máy chủ") cho máy cũ: 8 mã × 979 chỗ là con số đã giết nhà máy 9 lần
+#: ngày 12/08/2026.
+SAN_ANH_MOI_MA = 40
+SAN_VIDEO_MOI_MA = 16
+SAN_MA_SONG_SONG = 8
+
+#: Phiên bản của phép NÂNG TRẦN. Tăng khi sửa `_nang_tran_song_song_may_cu`
+#: theo hướng máy đã nâng hụt cần nâng lại. Dùng số chứ không dùng cờ `True`,
+#: vì đúng lý do đã trả giá ở `CHUYEN_API_PHIEN`: cờ một-bit không phân biệt
+#: nổi "đã chạy bằng bản hỏng" với "đã chạy bằng bản đúng".
+NANG_TRAN_PHIEN = 1
+
 
 def _phien_da_chuyen(cfg):
     """Cấu hình này đã qua phép chuyển ở phiên bản nào? Chưa qua → 0.
@@ -4207,6 +4238,10 @@ Write-Output $kill.Count
         self.config_data.setdefault("video_token_chromes", 3)    # chrome đẻ token video (async cần ít)
         self.config_data.setdefault("video_workers_per_account", 7)  # luồng submit/account ultra
         self._chuyen_may_cu_sang_api()
+        # PHẢI chạy SAU phép chuyển: máy chưa sang API thì trần song song của
+        # chế độ API chưa có nghĩa gì, và nâng trước là ghi vào cấu hình một
+        # con số cho đường mà máy đó chưa đi.
+        self._nang_tran_song_song_may_cu()
         self._bao_duong_di()
 
     def _bao_duong_di(self):
@@ -4326,6 +4361,96 @@ Write-Output $kill.Count
                   "cho cả ảnh lẫn video. Chỉ chuyển MỘT LẦN.".format(cu),
                   "[CHUYỂN ĐƯỜNG] Bản lưu cấu hình cũ: {0}".format(luu or "(không chép được)"),
                   "[CHUYỂN ĐƯỜNG] Muốn quay lại pool Chrome: Settings → hai ô backend → chọn lại → Lưu."):
+            self._duong_di_cho_bao.append(d)
+            ghi_log_file(d, "WARN")
+
+    def _nang_tran_song_song_may_cu(self):
+        """Máy cũ còn giữ trần song song thời Chrome → nâng lên sàn API MỘT LẦN.
+
+        ═══ VÌ SAO PHẢI NẰM TRONG CODE ═══
+
+        Giống hệt `_chuyen_may_cu_sang_api`: ba con số này sống trong
+        `settings.yaml`, mà file đó bị chặn bởi `PROTECTED_PATHS` **và**
+        `GIT_PROTECTED_FILES` **và** `.gitignore`. Không có bản cập nhật nào
+        chạm được vào chúng. `setdefault` trong `_load_config` cũng không cứu
+        được: nó chỉ điền khi khoá VẮNG MẶT, còn máy cũ thì khoá có mặt với
+        giá trị nhỏ — nên nó lặng lẽ không làm gì.
+
+        Hậu quả đo được 14/08/2026: khách giữ **2 chỗ ảnh** trong khi máy chủ
+        mời ~979, ba worker `idle`, và chủ dự án thấy "1 phút 1 ảnh". Không có
+        gì trong log báo điều đó — mọi job đều xong, mọi ảnh đều ra.
+
+        ═══ BỐN CÁI PHANH (cùng khuôn với phép chuyển backend) ═══
+
+        1. **Một lần cho mỗi PHIÊN BẢN**, so `da_nang_tran_song_song` với
+           :data:`NANG_TRAN_PHIEN`. Ai cố ý hạ trần sau đó sẽ không bị ép lại.
+        2. **CHỈ NÂNG, không bao giờ hạ.** Số đã ≥ sàn thì để yên — người vận
+           hành có thể đã đo và chọn cao hơn, và ghi đè xuống là phá việc của họ.
+        3. **`0` là lựa chọn CÓ Ý, không phải số cũ.** `0` nghĩa "theo trần động
+           của máy chủ" — đúng cái chủ dự án yêu cầu ("server xử lý được bao
+           nhiêu thì cứ dùng bấy nhiêu, đừng có làm cứng"). Nâng nó thành 40 là
+           biến một trần ĐỘNG thành trần CỨNG, tức đi lùi.
+        4. **Chép lưu trước khi ghi, và nói to** — kèm đường dẫn bản lưu.
+        """
+        cfg = self.config_data
+        try:
+            da = int(cfg.get("da_nang_tran_song_song") or 0)
+        except (TypeError, ValueError):
+            da = 0
+        if da >= NANG_TRAN_PHIEN:
+            return
+
+        def _nang(khoa, san):
+            """Trả `(cũ, mới)` nếu cần nâng, `None` nếu để yên."""
+            if khoa not in cfg:
+                return None                      # vắng mặt → `setdefault` lo
+            try:
+                v = int(cfg.get(khoa) or 0)
+            except (TypeError, ValueError):
+                return None                      # giá trị lạ → không đoán hộ
+            if v == 0 or v >= san:
+                return None                      # phanh 2 và 3
+            return (v, san)
+
+        doi = {}
+        for khoa, san in (("max_concurrent", SAN_ANH_MOI_MA),
+                          ("shopapi_video_concurrency", SAN_VIDEO_MOI_MA),
+                          ("shopapi_ma_song_song", SAN_MA_SONG_SONG)):
+            kq = _nang(khoa, san)
+            if kq is not None:
+                doi[khoa] = kq
+
+        if not doi:
+            cfg["da_nang_tran_song_song"] = NANG_TRAN_PHIEN   # đã đủ trần — đóng cửa
+            return
+
+        luu = ""
+        try:
+            goc = VE3_DIR / "config" / "settings.yaml"
+            if goc.exists():
+                ban = goc.with_name("settings.yaml.truoc-nang-tran-{0}".format(
+                    _time.strftime("%Y%m%d_%H%M%S")))
+                ban.write_bytes(goc.read_bytes())
+                luu = str(ban)
+        except Exception as e:
+            ghi_log_file("Khong chep luu duoc settings.yaml truoc khi nang tran: {0}".format(e),
+                         "WARN")
+
+        for khoa, (_cu, moi) in doi.items():
+            cfg[khoa] = moi
+        cfg["da_nang_tran_song_song"] = NANG_TRAN_PHIEN
+        try:
+            self._save_config()
+        except Exception as e:
+            ghi_log_file("Khong ghi duoc settings.yaml sau khi nang tran: {0}".format(e), "ERROR")
+
+        mo_ta = " · ".join("{0} {1}→{2}".format(k, c, m) for k, (c, m) in sorted(doi.items()))
+        self._duong_di_cho_bao = getattr(self, "_duong_di_cho_bao", [])
+        for d in ("[NÂNG TRẦN] Máy này còn giữ trần song song thời Chrome ({0}). Đo ngày "
+                  "14/08/2026: khách chỉ giữ 2 chỗ ảnh trong khi máy chủ mời ~979.".format(mo_ta),
+                  "[NÂNG TRẦN] Bản lưu cấu hình cũ: {0}".format(luu or "(không chép được)"),
+                  "[NÂNG TRẦN] Muốn đổi lại: Settings → ba ô song song → chọn lại → Lưu. "
+                  "Đặt 0 nghĩa là đi theo trần động của máy chủ."):
             self._duong_di_cho_bao.append(d)
             ghi_log_file(d, "WARN")
 

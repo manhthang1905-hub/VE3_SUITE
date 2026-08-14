@@ -80,10 +80,19 @@ from __future__ import annotations
 
 import math
 import threading
+import logging
 import time
 from collections import deque
 from datetime import datetime
 from typing import Any, Deque, Optional
+
+from ._nho_nhip import BoNhoNhip
+
+#: Nhật ký nhịp. Trước 14/08/2026 mô-đun này **câm hoàn toàn**: bảng của tool
+#: nói "nghẽn ở PHÍA TOOL — xem logs/ve3-*.log", mà `grep` cả 44.311 dòng log
+#: ra 0 kết quả về nhịp. Nó chỉ người đọc tới một cuốn sổ trắng, và chỗ nghẽn
+#: phải suy luận từ mã nguồn thay vì đọc số.
+_LOG = logging.getLogger("shopapi.nhip")
 
 __all__ = ["NhipDo", "cho_hang_doi_cua"]
 
@@ -177,10 +186,35 @@ class NhipDo:
         nguong_tre: float = NGUONG_TRE,
         tre_toi_thieu: float = TRE_TOI_THIEU,
         nho_mau: int = NHO_MAU,
+        nho_khoa: Optional[str] = None,
+        nho: Optional["BoNhoNhip"] = None,
         _dong_ho=time.monotonic,
     ) -> None:
         self._san = max(1, int(san))
         self._nhip = float(max(self._san, int(bat_dau)))
+
+        # ═══ NHỚ NHỊP QUA CÁC LẦN CHẠY — 14/08/2026 ═══
+        #
+        # Bên VE3_SUITE mỗi "mã" là một TIẾN TRÌNH RIÊNG, nên mỗi mã dựng một
+        # `NhipDo` mới bắt đầu lại từ 1. Nhân đôi mỗi vòng, một vòng bằng một
+        # job (~60 giây với video) thì chạm 64 mất 6 phút — mã ngắn xong trước
+        # đó, tiến trình chết mang theo cả bài học, mã sau leo lại từ chân.
+        #
+        # Đo được trên bảng của tool: `video: xin 64 → chạy 2`, trong khi máy
+        # chủ cùng lúc mời ~288 chỗ video và hàng chờ chỉ 1–2 giây.
+        #
+        # Bộ nhớ chỉ đề nghị chỗ BẮT ĐẦU (đã lùi một bậc, có hạn dùng). Trần
+        # máy chủ đọc mỗi lô qua `dat_tran()` vẫn là mức chặn trên.
+        self._nho_khoa = None if nho_khoa is None else str(nho_khoa)
+        self._nho = nho
+        if self._nho_khoa and self._nho is None:
+            self._nho = BoNhoNhip()
+        if self._nho_khoa and self._nho is not None:
+            goi_y = self._nho.bat_dau_tu(self._nho_khoa, self._san)
+            if goi_y is not None and goi_y > self._nhip:
+                _LOG.info("nhip[%s]: vao lai o %.0f (nho tu lan chay truoc), thay vi %.0f",
+                          self._nho_khoa, goi_y, self._nhip)
+                self._nhip = float(goi_y)
         #: Còn trong pha LEO NHANH — chưa gặp tín hiệu nghẽn nào. Xem `xong()`.
         self._leo_nhanh = True
         self._tran: Optional[int] = None if tran is None else max(0, int(tran))
@@ -326,6 +360,7 @@ class NhipDo:
                     moi = min(moi, float(max(self._tran, self._san)))
                 self._nhip = moi
                 self._chuoi = 0
+                self._ghi_nho(moi)          # ghi thưa — xem GIAN_GHI_GIAY
                 return
 
             self._chuoi += 1
@@ -335,6 +370,7 @@ class NhipDo:
                 if self._tran is not None:
                     moi = min(moi, float(max(self._tran, self._san)))
                 self._nhip = moi
+                self._ghi_nho(moi)
 
     def bi_chan(self, cho: Optional[float] = None) -> None:
         """Ăn ``429`` — tín hiệu GIẢM MẠNH: **chia đôi**, không phải trừ 1.
@@ -392,9 +428,25 @@ class NhipDo:
     def _giam(self) -> None:
         # Chạm nghẽn = đã tìm thấy mép. Hết pha leo nhanh cho tới hết mẻ; từ
         # đây dò từng bước quanh mức máy chủ chịu được. Xem .
+        cu = self._nhip
         self._leo_nhanh = False
         self._nhip = max(float(self._san), self._nhip / 2.0)
         self._chuoi = 0
+        # Ghi ÉP mức vừa chạm nghẽn: đây là con số đáng giữ nhất trong cả mẻ —
+        # nó là mép thật của nhà máy lúc này, chứ không phải một bậc bất kỳ
+        # trên đường leo. Mã sau vào lại ở nửa mức này (xem `_nho_nhip.py`).
+        self._ghi_nho(cu, ep=True)
+        _LOG.info("nhip[%s]: GIAM %.0f -> %.0f (cham nghen)",
+                  self._nho_khoa or "-", cu, self._nhip)
+
+    def _ghi_nho(self, nhip: float, *, ep: bool = False) -> None:
+        """Cất nhịp cho lần chạy sau. Hỏng thì im — bộ nhớ không được cản việc."""
+        if not self._nho_khoa or self._nho is None:
+            return
+        try:
+            self._nho.ghi(self._nho_khoa, nhip, ep=ep)
+        except Exception:       # noqa: BLE001 — đĩa/quyền/đua ghi, không cản mẻ
+            pass
 
     def _nha_may_dung(self, cho: float) -> None:
         self._nhip = float(self._san)

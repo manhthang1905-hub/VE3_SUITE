@@ -170,6 +170,31 @@ class BaseClient:
         #: lớp retry hấp thụ hết trước khi tới nơi.
         self.nhip_do = NhipDo()
 
+        #: Vòng dò RIÊNG cho từng loại job, dựng khi cần — xem `_nhip_theo_loai`.
+        self._nhip_loai: Dict[str, NhipDo] = {}
+
+    def _nhip_theo_loai(self, loai: str) -> NhipDo:
+        """Vòng dò của một loại job, có NHỚ nhịp qua các lần chạy.
+
+        ═══ VÌ SAO TÁCH THEO LOẠI ═══
+
+        Ảnh và video không cùng năng lực: đo ngày 14/08/2026 trên cùng cỗ máy,
+        kho ảnh 95 tài khoản × 32 luồng = 3.040 chỗ, kho video 10 tài khoản ×
+        32 = 320 chỗ. Một vòng dò dùng chung sẽ mang mép vừa tìm được ở video
+        (nhỏ) áp cho ảnh, hoặc ngược lại — và cái sai theo hướng "ngược lại"
+        thì đặt tải video gấp mười lần nhà máy chịu được.
+
+        ═══ VÌ SAO PHẢI NHỚ ═══
+
+        Bên VE3_SUITE mỗi mã là một TIẾN TRÌNH RIÊNG, nên không có gì sống đủ
+        lâu để học. Xem khối chú thích đầu `_nho_nhip.py` để có số đo.
+        """
+        vong = self._nhip_loai.get(loai)
+        if vong is None:
+            vong = NhipDo(nho_khoa=loai)
+            self._nhip_loai[loai] = vong
+        return vong
+
     @property
     def has_api_key(self) -> bool:
         """Client đã có API key chưa.
@@ -501,8 +526,10 @@ class ShopAPI(BaseClient):
         # đặn giữa lúc nhà máy đang ngộp. Nên khi khách tiêm limiter riêng, ta
         # **đổi luôn limiter của client** trong suốt mẻ rồi trả lại như cũ.
         vong_cu = self.nhip_do
-        if nhip is not None:
-            self.nhip_do = nhip
+        # Khách tiêm limiter riêng thì tôn trọng tuyệt đối; không thì dùng vòng
+        # dò CỦA LOẠI JOB NÀY — nó nhớ nhịp qua các lần chạy, thứ mà một tiến
+        # trình sống vài phút không tự học nổi.
+        self.nhip_do = nhip if nhip is not None else self._nhip_theo_loai(loai)
         vong = self.nhip_do
         try:
             return self._chay_ca_me(loai, cong_viec, tao, vong, cho_khi_dung)
