@@ -795,3 +795,66 @@ def test_viec_hong_VAN_giu_dung_cho_trong_ket_qua():
     ket = sb.chay_ca_me(list(range(9)), _chay, "image", log=lambda *a, **k: None,
                         gia_tri_khi_hong=None, tu_dieu_tiet=False, tran_tool=4)
     assert ket == [None, 10, 20, None, 40, 50, None, 70, 80]
+
+
+# ── Nhịp gửi TỰ DÒ: đừng tin con số tôi gõ ───────────────────────────────────
+#
+# `NGAN_SACH_REQ_PHUT = 850` suy ra từ hạn mức 1.000 ghi trong hợp đồng, và nó
+# SAI. Đo 15/08/2026 với đúng ngân sách đó: vẫn 464 lần `429` trong 10 phút và
+# 0 ảnh ra. Hạn mức thật thấp hơn số công bố, hoặc tính trên cửa sổ khác, hoặc
+# còn tính cả thứ tôi không nhìn thấy. Không cần biết đáp án — chỉ cần cư xử
+# như TCP: đụng tường thì lùi một nửa, đi êm thì bò lên.
+
+
+def test_429_thi_CHIA_DOI_nhip_gui():
+    dh = _DongHo()
+    th = sb.ThungGui(so_ban=1, ngan_sach=1800.0, dong_ho=dh)
+    truoc = th.toc_do()
+    th.bi_chan()
+    assert abs(th.toc_do() - truoc / 2) < 1e-9
+
+
+def test_429_thi_XA_SACH_token_khong_ban_tiep_ngay():
+    """Vừa phanh xong mà vẫn còn token là lại đâm vào đúng bức tường đó."""
+    dh = _DongHo()
+    th = sb.ThungGui(so_ban=1, ngan_sach=1800.0, dong_ho=dh)
+    th.bi_chan()
+    assert th.xin(100) == 0
+
+
+def test_di_em_thi_BO_LEN_lai():
+    """Lùi không được phép là lùi vĩnh viễn — nhà máy rảnh ra là phải ăn theo."""
+    dh = _DongHo()
+    th = sb.ThungGui(so_ban=1, ngan_sach=1800.0, dong_ho=dh)
+    th.bi_chan()
+    thap = th.toc_do()
+    for _ in range(40):
+        th.tron_tru()
+    assert th.toc_do() > thap * 1.5
+
+
+def test_bo_len_KHONG_vuot_muc_khoi_diem():
+    dh = _DongHo()
+    th = sb.ThungGui(so_ban=1, ngan_sach=1800.0, dong_ho=dh)
+    dau = th.toc_do()
+    for _ in range(500):
+        th.tron_tru()
+    assert th.toc_do() <= dau + 1e-9
+
+
+def test_khong_ha_qua_HA_TOI_DA_lan():
+    """Chia đôi mãi thì rơi xuống vùng mỗi token chờ vài giây = tool đứng hình."""
+    dh = _DongHo()
+    th = sb.ThungGui(so_ban=1, ngan_sach=3200.0, dong_ho=dh)
+    dau = th.toc_do()
+    for _ in range(50):
+        th.bi_chan()
+    assert th.toc_do() >= dau / sb.ThungGui.HA_TOI_DA - 1e-9
+
+
+def test_vong_chay_HA_NHIP_GUI_khi_an_429():
+    """Hạ số job đang bay mà giữ nguyên nhịp rót thì lát nữa lại đụng đúng tường đó."""
+    import inspect
+    than = inspect.getsource(sb.chay_ca_me)
+    assert "thung.bi_chan()" in than, "429 ma khong ha nhip GUI"
+    assert "thung.tron_tru()" in than, "di em ma khong bo len -> lui mot lan la lui mai"

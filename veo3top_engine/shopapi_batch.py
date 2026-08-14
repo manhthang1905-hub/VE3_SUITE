@@ -787,6 +787,8 @@ class ThungGui:
         self._so_ban = so_ban
         self._ngan_sach = float(ngan_sach if ngan_sach is not None
                                 else _so_moi_truong("SHOPAPI_NGAN_SACH_REQ", NGAN_SACH_REQ_PHUT))
+        #: Trần trên của phép bò lên — không bò quá mức khởi điểm.
+        self._tran_ngan_sach = self._ngan_sach
 
     def toc_do(self):
         """Bao nhiêu job được gửi mỗi giây, phần của TIẾN TRÌNH NÀY."""
@@ -821,6 +823,38 @@ class ThungGui:
         """Chưa đủ một token thì phải nghỉ bao lâu nữa."""
         thieu = max(0.0, 1.0 - self._token)
         return thieu / self.toc_do() if thieu > 0 else 0.0
+
+    # ── Tự dò ngân sách, đừng tin con số tôi gõ ─────────────────────────────
+    #
+    # `NGAN_SACH_REQ_PHUT = 850` là suy ra từ hạn mức 1.000 ghi trong hợp đồng,
+    # và nó SAI. Đo 15/08/2026 với đúng ngân sách đó: vẫn 464 lần `429` trong
+    # 10 phút và **0 ảnh ra**. Hạn mức thật thấp hơn con số công bố, hoặc được
+    # tính trên cửa sổ khác, hoặc còn tính cả thứ tôi không nhìn thấy.
+    #
+    # Không cần biết đáp án. Chỉ cần cư xử như TCP: đụng tường thì lùi một nửa,
+    # đi êm thì bò lên. Vòng dò tự tìm ra con số đúng, và nó còn đi theo được
+    # cả khi máy chủ đổi hạn mức mà không báo ai.
+
+    #: Không bao giờ hạ ngân sách dưới mức này (req/phút) — hạ nữa là đứng im.
+    SAN_NGAN_SACH = 30.0
+    #: ...và cũng không hạ quá ngần này lần so với mức khởi điểm. Chia đôi mãi
+    #: thì rơi xuống vùng mỗi token chờ vài giây, tức là tool đứng hình vì một
+    #: chuỗi `429` mà đáng lẽ chỉ cần lùi vài bậc. Quá 32 lần thì vấn đề không
+    #: còn là nhịp gửi nữa.
+    HA_TOI_DA = 32.0
+    #: Mỗi lô đi êm thì nới ngân sách thêm ngần này.
+    NOI = 1.04
+
+    def bi_chan(self):
+        """Ăn `429` -> CHIA ĐÔI ngân sách gửi. Trả mức mới (req/phút)."""
+        san = max(self.SAN_NGAN_SACH, self._tran_ngan_sach / self.HA_TOI_DA)
+        self._ngan_sach = max(san, self._ngan_sach * 0.5)
+        self._token = 0.0          # xả sạch token: đừng bắn tiếp ngay sau cú phanh
+        return self._ngan_sach
+
+    def tron_tru(self):
+        """Một lô đi êm -> bò lên. Tăng nhân, chậm hơn hẳn lúc lùi."""
+        self._ngan_sach = min(self._tran_ngan_sach, self._ngan_sach * self.NOI)
 
 
 def _so_moi_truong(ten, mac_dinh):
@@ -1139,6 +1173,10 @@ def chay_ca_me(viec, chay_mot, loai, tran_tool=None, client=None, api_key=None,
                 if gia_tri.ma == 429:
                     nhip.bi_chan(gia_tri.cho)
                     cong.bi_nghen(gia_tri.cho)
+                    # ⚠ HẠ CẢ NHỊP GỬI, không chỉ số job song song. `429` nghĩa
+                    # là GỬI QUÁ NHANH — hạ số job đang bay mà giữ nguyên nhịp
+                    # rót thì lát nữa lại đụng đúng bức tường đó.
+                    thung.bi_chan()
                 else:
                     nhip.nha_may_dung(gia_tri.cho)
                     cong.nha_may_dung(gia_tri.cho)
@@ -1147,6 +1185,7 @@ def chay_ca_me(viec, chay_mot, loai, tran_tool=None, client=None, api_key=None,
             nhip.xong()
             if trang_thai == "xong":
                 hieu_qua.ghi_xong()   # CHỈ đếm hàng ra thật, không đếm job hỏng
+                thung.tron_tru()      # đi êm thì bò lại lên
         return lai
 
     try:
