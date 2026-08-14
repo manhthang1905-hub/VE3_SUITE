@@ -5438,20 +5438,52 @@ Get-CimInstance Win32_Process |
                     if code in seen:
                         continue
                     got = False
-                    # ANH hom nay: dem o img_backup (anh GOC day du - copy2 giu mtime goc). img/ sau finalize
-                    # XOA png da thanh video -> dem img/ bi THIEU. Project chua finalize (chua co img_backup) -> fallback img/.
-                    img_src = (pd / "img_backup") if (pd / "img_backup").exists() else (pd / "img")
-                    if img_src.exists():
+                    # ẢNH hôm nay: đếm ở `img_backup` (ảnh GỐC đầy đủ — `copy2`
+                    # giữ nguyên mtime gốc). Sau finalize, `img/` đã xoá png nào
+                    # đã thành video, nên đếm `img/` là đếm hụt. Dự án chưa
+                    # finalize (chưa có `img_backup`) thì lùi về `img/` — an
+                    # toàn, vì `_finalize_img` chép sang backup TRƯỚC rồi mới
+                    # xoá, không có khe nào ảnh biến mất khỏi cả hai chỗ.
+                    #
+                    # ⚠ BA THƯ MỤC, KHÔNG PHẢI MỘT. Ảnh cảnh chỉ là phần lớn
+                    # nhất, không phải toàn bộ sản lượng ảnh:
+                    #
+                    #   img_backup/   ảnh CẢNH   — mỗi cảnh một ảnh
+                    #   nv/           ảnh NHÂN VẬT/BỐI CẢNH — PHASE 1 sinh từ
+                    #                 prompt tham chiếu (`_repair_reference_media_id`)
+                    #   thumb/        THUMBNAIL — `_generate_thumbnail` sinh từ
+                    #                 prompt trong sheet thumbnail
+                    #
+                    # Cả ba đều là job ảnh gửi lên máy chủ và đều tính tiền. Đo
+                    # 14/08/2026 trên 24 mã: 2.367 cảnh + 24 nhân vật + 72
+                    # thumbnail = 2.463. Bỏ hai cái sau là báo hụt 96 ảnh
+                    # (3,9%) — và hụt đúng ở phần đắt: ảnh nhân vật phải qua
+                    # vòng kiểm/sửa media_id nên tốn hơn ảnh cảnh.
+                    #
+                    # `thumb/` còn chứa `{MÃ}.png` do
+                    # `_fallback_copy_thumbnail_from_character` CHÉP từ `nv/`
+                    # khi không có prompt — chép chứ không sinh, nên đếm nó là
+                    # đếm hai lần một tấm ảnh. Chỉ lấy `thumb_*`.
+                    nguon_anh = (
+                        ((pd / "img_backup") if (pd / "img_backup").exists() else (pd / "img"), ""),
+                        (pd / "nv", ""),
+                        (pd / "thumb", "thumb_"),
+                    )
+                    for thu_muc, tien_to in nguon_anh:
+                        if not thu_muc.exists():
+                            continue
                         try:
-                            if img_src.stat().st_mtime >= today_start:
-                                for f in list(img_src.glob("*.png")) + list(img_src.glob("*.jpg")):
-                                    try:
-                                        if f.stat().st_mtime >= today_start:
-                                            imgs += 1; got = True
-                                    except OSError:
-                                        pass
+                            if thu_muc.stat().st_mtime < today_start:
+                                continue   # prune: không có file mới hôm nay
                         except OSError:
-                            pass
+                            continue
+                        for f in list(thu_muc.glob(tien_to + "*.png")) + \
+                                 list(thu_muc.glob(tien_to + "*.jpg")):
+                            try:
+                                if f.stat().st_mtime >= today_start:
+                                    imgs += 1; got = True
+                            except OSError:
+                                pass
                     # VIDEO hôm nay: mp4 nằm ở `vid/` VÀ ở `img/` (bước I2V ghi
                     # đè `img/{n}.png` thành `img/{n}.mp4`).
                     #

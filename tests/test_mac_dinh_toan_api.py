@@ -851,10 +851,12 @@ def test_dem_video_KHU_TRUNG_theo_ten_file():
     hash khớp — 49/49 file trùng tên. Đếm cả hai là nhân đôi sản lượng video, và
     con số phóng đại đó lên thẳng ô "VIDEO HÔM NAY" của giao diện.
     """
+    # Đọc TRỌN thân hàm bằng AST. Bản trước cắt cứng 4.000 ký tự từ chỗ `def`,
+    # nên chỉ cần thêm một khối chú thích ở phần đếm ảnh là `da_dem` rơi ra
+    # ngoài lát cắt và bài này đỏ oan — đúng kiểu bài kiểm gác nhầm chỗ.
     nguon = VE3_GUI.read_text(encoding="utf-8", errors="replace")
-    moc = nguon.find("def _count_production_today")
-    assert moc > 0
-    than = nguon[moc:moc + 4000]
+    than = ast.get_source_segment(nguon, _ham("_count_production_today")) or ""
+    assert than, "khong doc duoc than ham _count_production_today"
     assert "da_dem" in than, "khong khu trung mp4 -> video bi dem doi"
     # Chỉ soi ĐÚNG dòng duyệt hai thư mục mp4 — `pd / "img"` còn xuất hiện ở
     # phần đếm ảnh phía trên, tìm cả hàm là bắt nhầm.
@@ -1203,3 +1205,118 @@ def test_moi_lan_sua_phep_chuyen_phai_TANG_so_phien():
         "quay ve co mot-bit la lap lai dung cai bay cu"
     assert 'da_chuyen_sang_shopapi"] = True' not in than, \
         "van con dong co bang True — may sau nay lai kep chinh no lan nua"
+
+
+# ── Sản lượng ẢNH: ba thư mục, không phải một ────────────────────────────────
+
+
+def _cay_du_an(tmp_path, monkeypatch):
+    """Dựng `PROJECTS/` + `old/` giả và trả về hàm đếm đã trỏ vào đó."""
+    import sys
+    VE3 = Path(__file__).resolve().parents[1] / "tools" / "ve3"
+    if str(VE3) not in sys.path:
+        sys.path.insert(0, str(VE3))
+    import ve3_gui
+    du, kho = tmp_path / "PROJECTS", tmp_path / "old"
+    du.mkdir(); kho.mkdir()
+    monkeypatch.setattr(ve3_gui, "PROJECTS_DIR", du)
+    monkeypatch.setattr(ve3_gui, "ARCHIVE_DIR", kho)
+
+    class _App:
+        _count_production_today = ve3_gui.VE3App._count_production_today
+
+    return du, _App()._count_production_today
+
+
+def test_anh_NHAN_VAT_va_THUMBNAIL_cung_la_san_luong(tmp_path, monkeypatch):
+    """Ảnh cảnh chỉ là phần lớn nhất, không phải toàn bộ.
+
+    `nv/` (PHASE 1 sinh ảnh nhân vật/bối cảnh từ prompt tham chiếu) và `thumb/`
+    (`_generate_thumbnail` sinh từ sheet thumbnail) đều là job ảnh gửi lên máy
+    chủ và đều tính tiền. Đo 14/08/2026 trên 24 mã thật: 2.367 cảnh + 24 nhân
+    vật + 72 thumbnail = 2.463. Chỉ đếm cảnh là báo hụt 96 ảnh (3,9%), và hụt
+    đúng ở phần đắt — ảnh nhân vật phải qua vòng kiểm/sửa media_id.
+    """
+    import time
+    du, dem = _cay_du_an(tmp_path, monkeypatch)
+    d = du / "TL9-0001"
+    for sub in ("img_backup", "nv", "thumb", "vid"):
+        (d / sub).mkdir(parents=True)
+    for i in range(5):
+        (d / "img_backup" / "{0}.png".format(i)).write_bytes(b"x")
+    (d / "nv" / "nv1.png").write_bytes(b"x")
+    for i in (1, 2, 3):
+        (d / "thumb" / "thumb_{0:03d}.png".format(i)).write_bytes(b"x")
+    (d / "vid" / "1.mp4").write_bytes(b"y")
+
+    anh, vid = dem(tu_giay=time.time() - 3600)
+    assert anh == 9, "dem ra {0} — dang le 5 canh + 1 nhan vat + 3 thumbnail = 9".format(anh)
+    assert vid == 1
+
+
+def test_thumbnail_CHEP_tu_nhan_vat_KHONG_duoc_dem(tmp_path, monkeypatch):
+    """`_fallback_copy_thumbnail_from_character` ghi `thumb/{MÃ}.png`.
+
+    Nó CHÉP từ `nv/` chứ không sinh ảnh mới — đếm nó là đếm hai lần cùng một
+    tấm. Chỉ `thumb_*` mới là ảnh do máy chủ sinh.
+    """
+    import time
+    du, dem = _cay_du_an(tmp_path, monkeypatch)
+    d = du / "TL9-0002"
+    (d / "nv").mkdir(parents=True)
+    (d / "thumb").mkdir(parents=True)
+    (d / "nv" / "nv1.png").write_bytes(b"x")
+    (d / "thumb" / "TL9-0002.png").write_bytes(b"x")     # bản chép — KHÔNG tính
+    (d / "thumb" / "thumb_001.png").write_bytes(b"x")    # ảnh thật
+
+    anh, _ = dem(tu_giay=time.time() - 3600)
+    assert anh == 2, "dem ra {0} — dang le 1 nhan vat + 1 thumbnail that = 2".format(anh)
+
+
+def test_anh_canh_van_lay_o_img_backup_khi_co(tmp_path, monkeypatch):
+    """Sau finalize, `img/` đã xoá png thành video — đếm `img/` là đếm hụt."""
+    import time
+    du, dem = _cay_du_an(tmp_path, monkeypatch)
+    d = du / "TL9-0003"
+    (d / "img_backup").mkdir(parents=True)
+    (d / "img").mkdir(parents=True)
+    for i in range(4):
+        (d / "img_backup" / "{0}.png".format(i)).write_bytes(b"x")
+        (d / "img" / "{0}.mp4".format(i)).write_bytes(b"y")   # png đã thành mp4
+
+    anh, vid = dem(tu_giay=time.time() - 3600)
+    assert (anh, vid) == (4, 4)
+
+
+def test_chua_finalize_thi_van_dem_duoc_anh_o_img(tmp_path, monkeypatch):
+    """`_finalize_img` chép sang backup TRƯỚC rồi mới xoá — không có khe mất ảnh."""
+    import time
+    du, dem = _cay_du_an(tmp_path, monkeypatch)
+    d = du / "TL9-0004"
+    (d / "img").mkdir(parents=True)
+    for i in range(3):
+        (d / "img" / "{0}.png".format(i)).write_bytes(b"x")
+
+    anh, _ = dem(tu_giay=time.time() - 3600)
+    assert anh == 3
+
+
+def test_BAN_SAO_THU_BA_o_AUTO_visual_KHONG_duoc_dem(tmp_path, monkeypatch):
+    """Mỗi mã xong được chép làm BA bản, và bản thứ ba dễ bị quên.
+
+    `_archive_project` chạy `copytree` hai lần: một vào `old/<MÃ>_<dấu thời
+    gian>`, một vào `D:\AUTO\visual\<MÃ>` (`EDIT_VISUAL_DIR`). Bản ở
+    `visual/` mang tên MÃ TRẦN, không có dấu thời gian — nên nếu ai đó đưa nó
+    vào vòng đếm thì phép chống-trùng theo mã vẫn khớp và không lộ ra, nhưng
+    một mã nằm ở PROJECTS + old + visual thì tổng phồng lên gấp bội.
+    """
+    import sys
+    VE3 = Path(__file__).resolve().parents[1] / "tools" / "ve3"
+    if str(VE3) not in sys.path:
+        sys.path.insert(0, str(VE3))
+    import ve3_gui
+    nguon = VE3_GUI.read_text(encoding="utf-8", errors="replace")
+    than = ast.get_source_segment(nguon, _ham("_count_production_today")) or ""
+    assert "EDIT_VISUAL_DIR" not in than, (
+        "visual/ la BAN SAO cua PROJECTS — dem no la nhan doi san luong")
+    assert "PROJECTS_DIR" in than and "ARCHIVE_DIR" in than
