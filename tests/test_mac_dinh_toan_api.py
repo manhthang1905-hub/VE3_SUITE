@@ -293,7 +293,8 @@ class _AppGia:
             sys.path.insert(0, str(VE3))
         import ve3_gui
         self.config_data = config_data
-        for ten in ("_chi_dung_shopapi", "_so_ma_song_song_shopapi", "_pair_ao_shopapi"):
+        for ten in ("_chi_dung_shopapi", "_so_ma_song_song_shopapi",
+                    "_so_cho_lam_ao", "_pair_ao_shopapi"):
             setattr(self, ten, getattr(ve3_gui.VE3App, ten).__get__(self))
         # Đường pair THẬT còn cần mấy thứ này; bài kiểm không dựng server nào.
         self.server_status_cache = []
@@ -324,16 +325,32 @@ def test_hang_cho_co_cho_lam_khi_chay_toan_api():
     assert len({p["pair_id"] for p in pairs}) == len(pairs), "pair_id phai khac nhau"
 
 
+def _so_cho(app):
+    return len(_goi("_get_server_pairs", app, only_available=True))
+
+
 def test_so_cho_lam_dieu_chinh_duoc():
-    app = _AppGia(dict(CFG_API, shopapi_ma_song_song=5))
-    assert len(_goi("_get_server_pairs", app, only_available=True)) == 5
+    """Vặn `shopapi_ma_song_song` phải có tác dụng — vặn to thì nhiều chỗ hơn.
+
+    ⚠ TRƯỚC 15/08/2026 bài này đòi ĐÚNG BẰNG con số cấu hình. Không đòi được
+    nữa, và đó là chủ ý: hàng chờ giờ tách hai trạm ảnh/video, nên rổ chỗ làm
+    phải chứa nổi CẢ HAI trạm cùng đầy (xem `_so_cho_lam_ao`). Con số người
+    dùng đặt trở thành mức SÀN của tổng, không còn là con số cuối cùng.
+
+    Đóng đinh bằng dấu hiệu quan sát được thay vì bằng một hằng số: đặt cao hơn
+    thì phải được nhiều chỗ hơn, và không bao giờ ít hơn mức đã đặt.
+    """
+    it = _AppGia(dict(CFG_API, shopapi_ma_song_song=5))
+    nhieu = _AppGia(dict(CFG_API, shopapi_ma_song_song=20))
+    assert _so_cho(it) >= 5, "dat 5 ma duoc it hon 5 -> con so vo nghia"
+    assert _so_cho(nhieu) > _so_cho(it), "van to ma khong duoc them cho nao"
 
 
 def test_so_cho_lam_rac_thi_ve_mac_dinh_chu_khong_no():
+    """Giá trị rác thì lùi về mặc định, KHÔNG ném lỗi làm chết vòng hàng chờ."""
     import ve3_gui
     app = _AppGia(dict(CFG_API, shopapi_ma_song_song="nhieu vao"))
-    assert (len(_goi("_get_server_pairs", app, only_available=True))
-            == ve3_gui.SHOPAPI_MA_SONG_SONG_MAC_DINH)
+    assert _so_cho(app) >= ve3_gui.SHOPAPI_MA_SONG_SONG_MAC_DINH
 
 
 def test_cho_lam_ao_KHONG_dung_ServerPool_cho_server_khong_ton_tai():
@@ -372,7 +389,8 @@ def test_con_server_trong_cau_hinh_ma_chay_toan_API_thi_VAN_dung_cho_lam_ao():
         {"url": "http://127.0.0.1:8801", "name": "Sv-1", "enabled": True}]))
     pairs = _goi("_get_server_pairs", app, only_available=False)
     assert all(p.get("ao_shopapi") for p in pairs), [p["pair_id"] for p in pairs]
-    assert len(pairs) == ve3_gui.SHOPAPI_MA_SONG_SONG_MAC_DINH, (
+    # Danh sách trên có ĐÚNG MỘT server Chrome. Bám theo nó thì ra 1 chỗ làm.
+    assert len(pairs) >= ve3_gui.SHOPAPI_MA_SONG_SONG_MAC_DINH, (
         "so ma song song van bam theo so server Chrome thay vi theo cau hinh API")
 
 

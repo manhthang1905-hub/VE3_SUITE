@@ -6865,7 +6865,25 @@ Get-CimInstance Win32_Process |
             "available": True,
             "queue_size": 0,
             "ao_shopapi": True,      # `_build_project_pair_cfg` đọc cờ này
-        } for i in range(self._so_ma_song_song_shopapi())]
+        } for i in range(self._so_cho_lam_ao())]
+
+    def _so_cho_lam_ao(self):
+        """Mở bao nhiêu chỗ làm ảo.
+
+        Hàng chờ có HAI cửa nối tiếp nhau, và chúng đếm bằng hai thước khác
+        nhau: cửa `max_codes` đếm RIÊNG từng trạm, còn cửa `no_free_pair` lấy
+        từ MỘT rổ chung. Rổ chung mà chỉ đủ cho một trạm thì trạm nào chạy
+        trước sẽ vét sạch, trạm kia đứng ngoài — và vì cửa `max_codes` của nó
+        vẫn còn chỗ, log không hề nói là bị chặn vì trạm nào.
+
+        Nên rổ phải đủ cho CẢ HAI trạm cùng đầy. Vẫn giữ mức tổng làm sàn để
+        không bao giờ hẹp hơn trước.
+        """
+        tong = self._so_ma_song_song_shopapi()
+        if not cau_hinh_toan_api(self.config_data):
+            return tong
+        return max(tong, self._so_ma_song_song_shopapi("image")
+                   + self._so_ma_song_song_shopapi("video"))
 
     def _get_server_pairs(self, only_available=False):
         # ĐI TOÀN API -> chỗ làm ẢO, BẤT KỂ trong cấu hình còn bao nhiêu server.
@@ -9915,17 +9933,53 @@ Get-CimInstance Win32_Process |
                             detail = "no_pending_units" if not has_pending else "blocked_by_lock_or_hold"
                         self._queue_ve3_skip_log(pd.name, "not_ready", detail)
                         continue
-                    # === TÁCH 2 TRẠM (chỉ backend pool): mã cần ẢNH -> image-only (nhả slot sớm, làm đầy pool 96);
-                    #     ảnh XONG cần VIDEO -> video-only (finalize). Backend khác -> 'all' (nguyên khối như cũ). ===
+                    # === TÁCH 2 TRẠM: mã cần ẢNH -> image-only (nhả slot sớm);
+                    #     ảnh XONG cần VIDEO -> video-only (finalize).
+                    #     Backend cũ (Chrome/Flow) -> 'all' (nguyên khối như cũ). ===
+                    #
+                    # ⚠ API SHOPAPI PHẢI TÁCH TRẠM, TRƯỚC ĐÂY BỊ BỎ SÓT.
+                    #
+                    # Cửa này từng khoá cứng đúng chữ `_pool_mode`, nên đi API
+                    # thì MỌI mã vào với `_stage = "all"` — và kéo sập hai thứ
+                    # phía dưới cùng một lúc:
+                    #
+                    #   1. `_so_ma_song_song_shopapi(_stage)` chỉ tách rổ khi
+                    #      `pha` là "image"/"video". Nhận "all" thì nó rơi về rổ
+                    #      CHUNG. Tức là cả khối chú thích "ẢNH VÀ VIDEO LÀ HAI
+                    #      NHÀ MÁY RIÊNG" ngay dưới đây CHƯA TỪNG chạy ở chế độ
+                    #      API — chỉ pool mới với tới.
+                    #   2. Mode "all" nghĩa là một tiến trình làm ảnh XONG rồi
+                    #      làm tiếp video trong CÙNG chỗ làm. Ảnh ~50 giây một
+                    #      cái, video ~580 giây và mỗi mã 80–100 cái. Nên chỉ
+                    #      sau ít phút là cả 8 chỗ làm đều đang xay video, mã
+                    #      nào còn thiếu ảnh thì đứng ngoài với `no_free_pair`.
+                    #
+                    # Triệu chứng đúng như người dùng thấy 15/08/2026: "nhiều mã
+                    # đang chạy mà ảnh chỉ ra 3 cái/phút", trong khi mỗi mã còn
+                    # cả chục ảnh chưa làm. Nhà máy ảnh rảnh, tool thì không có
+                    # chỗ nào để phát việc ảnh.
                     _run_mode = "all"; _stage = "all"
-                    if _pool_mode:
+                    if _pool_mode or che_do_toan_api(cfg):
                         if self._project_needs_image(pd):
                             _run_mode = "image-only"; _stage = "image"
                         elif self._project_needs_video(pd):
                             _run_mode = "video-only"; _stage = "video"
-                        else:
+                        elif _pool_mode:
                             self._queue_ve3_skip_log(pd.name, "no_stage")
                             continue
+                        else:
+                            # Tới đây là mâu thuẫn: `needs_ve3` vừa nói CÒN việc,
+                            # mà không trạm nào nhận. Chỉ xảy ra khi
+                            # `_project_pending_img_vid` ném lỗi — hai hàm dò trạm
+                            # đều nuốt lỗi rồi trả `False`.
+                            #
+                            # Bỏ qua ở đây là mã đó không bao giờ chạy nữa và
+                            # không ai biết vì sao. Chạy nguyên khối như đường cũ
+                            # thì chậm hơn một chút nhưng việc vẫn xong, và dòng
+                            # WARN dưới đây nói thẳng là có gì đó đọc không nổi.
+                            self._log(f"[QUEUE] {pd.name}: con viec ma khong tram nao "
+                                      "nhan (doc Excel loi?) -> chay nguyen khoi",
+                                      "WARN", "queue")
                     # GIỚI HẠN SỐ MÃ SONG SONG — TÁCH theo trạm: trạm ẢNH nhiều (đầy pool 96), trạm VIDEO ít (10 Ultra).
                     # max_concurrent_codes (mode all) = 0 -> không giới hạn. Đếm active THEO ĐÚNG trạm (queue_ve3_stage).
                     # ⚠ ĐI API THÌ ĐỪNG HỎI POOL CHROME. `_compute_pool_capacity`
