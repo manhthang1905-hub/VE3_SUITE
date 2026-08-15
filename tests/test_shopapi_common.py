@@ -755,3 +755,72 @@ def test_hoi_dung_LOAI_job_dang_can(sc, monkeypatch, con_tho_that):
                                               "video": {"workers_online": 0}}}})
     assert con_tho_that("image") is True
     assert con_tho_that("video") is False
+
+
+# ── Chia trần THEO VIỆC, không theo đầu người ────────────────────────────────
+
+
+def _dat_nhip(tmp_path, loai, viec_ds):
+    """Dựng thư mục nhịp sống với mỗi phần tử là một tiến trình đang chạy.
+
+    `None` = tiến trình bản CŨ, chỉ ghi mốc giờ, không khai số việc.
+    """
+    import time as _t
+    d = tmp_path / "nhip"
+    d.mkdir(exist_ok=True)
+    for i, v in enumerate(viec_ds):
+        p = d / "{0}-{1}-x".format(loai, 1000 + i)
+        p.write_text(str(int(_t.time())) if v is None
+                     else "{0}\n{1}".format(int(_t.time()), int(v)), encoding="utf-8")
+    return str(d)
+
+
+def test_ma_nhieu_viec_duoc_nhieu_cho_hon(sc, tmp_path):
+    """Dựng lại đúng cảnh 11:04 ngày 15/08/2026: chín tiến trình video, trần 374.
+
+    Chia đều thì ai cũng 41 — bảy mã gần rỗng giữ 233 chỗ không dùng, hai mã có
+    việc thì thiếu chỗ. TH2-0033 còn 52 video mà chỉ được 41, phải để 11 việc
+    nằm chờ sang lô sau.
+    """
+    viec = [1, 1, 1, 3, 4, 12, 17, 45, 52]
+    d = _dat_nhip(tmp_path, "video", viec)
+
+    phan_0033 = sc.chia_theo_viec("video", 374, 52, thu_muc=d)
+    phan_0199 = sc.chia_theo_viec("video", 374, 1, thu_muc=d)
+
+    assert phan_0033 >= 52, (
+        f"ma con 52 video chi duoc {phan_0033} cho -> van phai chia lam nhieu lo")
+    assert phan_0199 < 41, (
+        f"ma con 1 video van giu {phan_0199} cho -> giu cho khong dung")
+    assert phan_0033 > phan_0199 * 10, "chia van gan nhu deu, khong theo viec"
+
+
+def test_tong_phat_ra_KHONG_vuot_tran(sc, tmp_path):
+    """Cộng suất của mọi tiến trình phải nằm trong trần — không thì cả bọn 429."""
+    viec = [1, 1, 1, 3, 4, 12, 17, 45, 52]
+    d = _dat_nhip(tmp_path, "video", viec)
+    tong = sum(sc.chia_theo_viec("video", 374, v, thu_muc=d) for v in viec)
+    assert tong <= 374, f"phat ra {tong} tren tran 374"
+
+
+def test_ban_cu_KHONG_khai_viec_thi_lui_ve_chia_deu(sc, tmp_path):
+    """Nâng cấp dần từng tiến trình không được làm ai thiệt.
+
+    Tiến trình không khai được tính bằng đúng số việc của mình, nên khi cả máy
+    còn bản cũ thì công thức rút gọn về `tran / N` — bằng đúng cách chia đều.
+    """
+    d = _dat_nhip(tmp_path, "video", [None] * 9)
+    assert sc.chia_theo_viec("video", 374, 52, thu_muc=d) == 374 // 9
+
+
+def test_khong_doc_duoc_gi_thi_tra_None_de_nguoi_goi_lui(sc, tmp_path):
+    d = str(tmp_path / "rong")
+    import os
+    os.makedirs(d, exist_ok=True)
+    assert sc.chia_theo_viec("video", 374, 10, thu_muc=d) is None
+
+
+def test_luon_duoc_it_nhat_MOT_cho(sc, tmp_path):
+    """Mã bé giữa một đám mã to vẫn phải nhúc nhích được, không đứng im."""
+    d = _dat_nhip(tmp_path, "video", [1] + [900] * 8)
+    assert sc.chia_theo_viec("video", 40, 1, thu_muc=d) >= 1

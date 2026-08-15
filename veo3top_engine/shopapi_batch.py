@@ -575,7 +575,7 @@ def _tu_dieu_tiet_mac_dinh():
 
 
 def _hoi_tran(loai, tran_tool=None, client=None, api_key=None, log=print,
-              truoc_do=None, so_ban=None, tu_dieu_tiet=None):
+              truoc_do=None, so_ban=None, tu_dieu_tiet=None, viec_con_lai=None):
     """Một lời hỏi `/v1/me`, đã chặn trên. Trả `0` khi nhà máy đang dừng.
 
     `truoc_do` là trần đọc được lần gần nhất. Hỏi không được thì trả LẠI con số
@@ -695,7 +695,17 @@ def _hoi_tran(loai, tran_tool=None, client=None, api_key=None, log=print,
             ban = int(so_ban) if so_ban else int(_sc.dem_ban_dang_chay(loai))
         except (TypeError, ValueError):
             ban = 1
-        phan_may_chu = max(1, n // max(1, ban))
+        # Chia THEO VIỆC khi biết mình còn bao nhiêu việc; không biết thì chia
+        # đều theo đầu người như cũ. Chia đều phát chỗ cho tiến trình rỗng rồi
+        # bỏ đói tiến trình đang ôm cả đống — xem `_sc.chia_theo_viec`.
+        phan_may_chu = None
+        if viec_con_lai:
+            try:
+                phan_may_chu = _sc.chia_theo_viec(loai, n, viec_con_lai)
+            except Exception:
+                phan_may_chu = None
+        if not phan_may_chu:
+            phan_may_chu = max(1, n // max(1, ban))
         try:
             phan_luong = int(_sc.phan_luong_cua_toi())
         except Exception:
@@ -1172,17 +1182,30 @@ def chay_ca_me(viec, chay_mot, loai, tran_tool=None, client=None, api_key=None,
         # Điểm danh mỗi lần ghé qua đây: `NhipSong` tự thưa ra 20 giây một lần,
         # nên gọi thoải mái. Tiến trình chết đột ngột thì file nguội đi và tự
         # hết tính sau 90 giây — không cần ai dọn.
+        #
+        # Khai luôn CÒN BAO NHIÊU VIỆC. Anh em đọc con số này để chia trần theo
+        # việc chứ không chia đều đầu người — mã còn 1 video không giữ chỗ của
+        # mã còn 52. Xem `_sc.chia_theo_viec`.
+        _con = len(con_lai) + len(dang_bay)
         if _nhip_song is not None:
-            _nhip_song.diem_danh()
+            _nhip_song.diem_danh(con_viec=_con)
         if _tran_moi_nhat[0] > 0 and (gio - _tran_moi_nhat[1]) < TRAN_TTL:
             return _tran_moi_nhat[0]
         t = _hoi_tran(loai, tran_tool, client=client, api_key=api_key, log=log,
-                      truoc_do=_tran_moi_nhat[0], tu_dieu_tiet=tu_dieu_tiet)
+                      truoc_do=_tran_moi_nhat[0], tu_dieu_tiet=tu_dieu_tiet,
+                      viec_con_lai=_con)
         # `0` = nhà máy ĐANG DỪNG. KHÔNG nhớ nó: nhớ số 0 thì lượt sau đọc phải
         # số 0 đã cũ và tưởng nhà máy vẫn chết, trong khi nó có thể vừa sống lại.
         if t > 0:
             _tran_moi_nhat[0], _tran_moi_nhat[1] = t, gio
         return t
+
+    #: Job đã gửi, chưa biết kết quả. Đây là thứ thay cho hàng rào cũ.
+    #
+    # ⚠ PHẢI KHAI TRƯỚC LỜI GỌI `_doc_tran()` NGAY DƯỚI. `_tran_hien_tai` đọc
+    # `len(con_lai) + len(dang_bay)` để khai số việc còn lại; khai sau là
+    # `NameError` ngay ở lô đầu của mọi mẻ.
+    dang_bay = {}
 
     if nhip is None:
         # HỎI TRẦN TRƯỚC KHI DỰNG VÒNG DÒ. Máy chủ đã tính sẵn phần của ta (sức
@@ -1198,8 +1221,6 @@ def chay_ca_me(viec, chay_mot, loai, tran_tool=None, client=None, api_key=None,
     cong = cong if cong is not None else CongHangCho(han_giay=han_giay)
     da_cho = 0.0
     lo_thu = 0
-    #: Job đã gửi, chưa biết kết quả. Đây là thứ thay cho hàng rào cũ.
-    dang_bay = {}
     #: Một pool sống suốt cả mẻ. `ThreadPoolExecutor` dựng luồng LƯỜI nên đặt
     #: rộng bằng trần cứng không tốn gì: số luồng thật sự mở ra luôn bằng số job
     #: đang bay, mà số đó đã bị `nhip` + `cong` chặn ở trên rồi.

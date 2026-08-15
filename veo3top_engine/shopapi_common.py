@@ -1471,16 +1471,28 @@ class NhipSong:
         self.duong_dan = os.path.join(
             self.thu_muc, "{0}-{1}-{2}".format(self.loai, self.pid, id(self)))
         self._lan_cuoi = 0.0
+        self.con_viec = None
         self.diem_danh(ep=True)
 
-    def diem_danh(self, ep=False):
-        """Chạm lại file. Gọi thoải mái — tự thưa ra `NHIP_SONG_NHIP` giây/lần."""
+    def diem_danh(self, ep=False, con_viec=None):
+        """Chạm lại file. Gọi thoải mái — tự thưa ra `NHIP_SONG_NHIP` giây/lần.
+
+        `con_viec` là SỐ JOB TIẾN TRÌNH NÀY CÒN PHẢI LÀM. Ghi ra để anh em chia
+        trần theo việc chứ không chia theo đầu người — xem :func:`chia_theo_viec`.
+        """
         gio = time.time()
+        if con_viec is not None:
+            try:
+                self.con_viec = max(0, int(con_viec))
+            except (TypeError, ValueError):
+                pass
         if not ep and (gio - self._lan_cuoi) < NHIP_SONG_NHIP:
             return
         try:
             with open(self.duong_dan, "w", encoding="utf-8") as f:
                 f.write(str(int(gio)))
+                if self.con_viec is not None:
+                    f.write("\n{0}".format(int(self.con_viec)))
             self._lan_cuoi = gio
         except OSError:
             pass
@@ -1526,6 +1538,89 @@ def dem_ban_dang_chay(loai, thu_muc=None, han=None, bay_gio=None):
     except OSError:
         return 1
     return max(1, n)
+
+
+def doc_viec_dang_cho(loai, thu_muc=None, han=None, bay_gio=None):
+    """Số việc còn lại của TỪNG tiến trình đang chạy mẻ `loai`.
+
+    Trả về danh sách; phần tử là `int` khi tiến trình đó có khai, `None` khi
+    không (bản cũ chỉ ghi mốc giờ). Danh sách rỗng = không đọc được gì.
+    """
+    thu_muc = thu_muc or thu_muc_nhip_song()
+    han = float(NHIP_SONG_HAN if han is None else han)
+    gio = float(time.time() if bay_gio is None else bay_gio)
+    tien_to = (str(loai) + "-") if loai else ""
+    ds = []
+    try:
+        ten_ds = os.listdir(thu_muc)
+    except OSError:
+        return ds
+    for ten in ten_ds:
+        if ten == _TEN_FILE_NGAN_SACH:
+            continue
+        if tien_to and not ten.startswith(tien_to):
+            continue
+        duong = os.path.join(thu_muc, ten)
+        try:
+            if (gio - os.path.getmtime(duong)) > han:
+                continue
+            with open(duong, "r", encoding="utf-8") as f:
+                dong = f.read().split("\n")
+        except OSError:
+            continue
+        if len(dong) >= 2 and dong[1].strip():
+            try:
+                ds.append(max(0, int(dong[1].strip())))
+                continue
+            except ValueError:
+                pass
+        ds.append(None)
+    return ds
+
+
+def chia_theo_viec(loai, tran, viec_cua_toi, thu_muc=None, han=None, bay_gio=None):
+    """Suất của tiến trình này trong `tran`, chia THEO VIỆC chứ không theo đầu người.
+
+    ═══ VÌ SAO KHÔNG CHIA ĐỀU ═══
+
+    Chia đều cho số tiến trình nghe công bằng, nhưng nó phát chỗ cho những
+    tiến trình không có việc mà tiêu, rồi bỏ đói đúng tiến trình đang ôm cả
+    đống. Đo thật 11:04 ngày 15/08/2026, chín tiến trình video, trần 374:
+
+        TH1-0199   1 video    được 41 chỗ  -> dùng 1,  phí 40
+        TH1-0304   1 video    được 41 chỗ  -> dùng 1,  phí 40
+        TH1-0200   1 video    được 41 chỗ  -> dùng 1,  phí 40
+        TH1-0126   3 video    được 41 chỗ  -> dùng 3,  phí 38
+        TH2-0007   4 video    được 41 chỗ  -> dùng 4,  phí 37
+        TH2-0008  12 video    được 41 chỗ  -> dùng 12, phí 29
+        TH2-0056  17 video    được 41 chỗ  -> dùng 17, phí 24
+        TH1-0100  45 video    được 41 chỗ  -> KHÔNG ĐỦ
+        TH2-0033  52 video    được 41 chỗ  -> KHÔNG ĐỦ, 11 việc nằm chờ
+
+    Tổng việc thật 136, tổng chỗ phát ra 369. Hai tiến trình có việc thì thiếu
+    chỗ, bảy tiến trình gần như rỗng thì giữ 233 chỗ không dùng tới.
+
+    Chia theo việc thì TH2-0033 được 52/136 × 374 = 143 chỗ, thừa sức nuốt cả
+    52 việc trong MỘT lô thay vì bốn lô.
+
+    ═══ LÙI VỀ AN TOÀN ═══
+
+    Tiến trình nào không khai số việc (bản cũ) được tính bằng ĐÚNG số việc của
+    mình. Nên khi cả máy còn chạy bản cũ, tổng = N × việc-của-tôi và công thức
+    rút gọn về `tran / N` — đúng bằng cách chia đều trước đây, không lệch một
+    đơn vị. Nâng cấp dần từng tiến trình cũng không ai bị thiệt.
+    """
+    try:
+        cua_toi = max(1, int(viec_cua_toi))
+    except (TypeError, ValueError):
+        return None
+    ds = doc_viec_dang_cho(loai, thu_muc=thu_muc, han=han, bay_gio=bay_gio)
+    if not ds:
+        return None
+    tong = sum(cua_toi if v is None else max(1, v) for v in ds)
+    if tong <= 0:
+        return None
+    return max(1, int(int(tran) * cua_toi // tong))
 
 
 # ── Ngân sách LUỒNG của cả máy ───────────────────────────────────────────────
