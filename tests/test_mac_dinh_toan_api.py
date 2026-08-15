@@ -293,6 +293,9 @@ class _AppGia:
             sys.path.insert(0, str(VE3))
         import ve3_gui
         self.config_data = config_data
+        # Hằng số cấp LỚP — `__get__` không mang theo, phải chép sang.
+        self.MA_SONG_SONG_TOI_DA = ve3_gui.VE3App.MA_SONG_SONG_TOI_DA
+        self.MA_MOI_PHA_TOI_THIEU = ve3_gui.VE3App.MA_MOI_PHA_TOI_THIEU
         for ten in ("_chi_dung_shopapi", "_so_ma_song_song_shopapi",
                     "_so_cho_lam_ao", "_pair_ao_shopapi"):
             setattr(self, ten, getattr(ve3_gui.VE3App, ten).__get__(self))
@@ -340,10 +343,15 @@ def test_so_cho_lam_dieu_chinh_duoc():
     Đóng đinh bằng dấu hiệu quan sát được thay vì bằng một hằng số: đặt cao hơn
     thì phải được nhiều chỗ hơn, và không bao giờ ít hơn mức đã đặt.
     """
+    import ve3_gui
+    tran = ve3_gui.VE3App.MA_SONG_SONG_TOI_DA
     it = _AppGia(dict(CFG_API, shopapi_ma_song_song=5))
-    nhieu = _AppGia(dict(CFG_API, shopapi_ma_song_song=20))
+    nhieu = _AppGia(dict(CFG_API, shopapi_ma_song_song=tran + 10))
     assert _so_cho(it) >= 5, "dat 5 ma duoc it hon 5 -> con so vo nghia"
-    assert _so_cho(nhieu) > _so_cho(it), "van to ma khong duoc them cho nao"
+    # Dưới mức tự tính thì con số tự tính thắng — đó là chủ ý: `settings.yaml`
+    # cũ của những máy đã chạy từ trước không được ghim chúng ở mức thấp mãi.
+    # Đặt CAO HƠN thì phải được tôn trọng, vì đó là máy của người dùng.
+    assert _so_cho(nhieu) > _so_cho(it), "dat cao hon muc tu tinh ma khong duoc them cho"
 
 
 def test_so_cho_lam_rac_thi_ve_mac_dinh_chu_khong_no():
@@ -1590,6 +1598,11 @@ def test_moi_PHA_co_ro_cho_lam_RIENG(monkeypatch):
     """
     g = _ve3_gui()
     import shopapi_common as sc
+    # Rổ trạm đo bằng SỨC CHỨA nhà máy (`hard_cap`), không bằng chỗ còn trống:
+    # chỗ còn trống tụt xuống khi ta đang chạy, nên nó tự khoá trạm lại.
+    monkeypatch.setattr(sc, "tran_cung_may_chu",
+                        lambda loai, api_key=None, client=None, bay_gio=None:
+                        {"image": 800, "video": 40}.get(loai, 0))
     monkeypatch.setattr(sc, "tran_song_song",
                         lambda loai, api_key=None, mac_dinh=1, client=None:
                         {"image": 800, "video": 40}.get(loai, 0))

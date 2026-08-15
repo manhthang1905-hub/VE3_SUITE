@@ -78,6 +78,8 @@ def app(gui, monkeypatch):
     def _tao(tran_anh, tran_video, dat_tay=8):
         a = _App(gui, tran_anh, tran_video, dat_tay)
         import shopapi_common as sc
+        monkeypatch.setattr(sc, "tran_cung_may_chu",
+                            lambda loai, **kw: a._tran.get(loai, 0))
         monkeypatch.setattr(sc, "tran_song_song",
                             lambda loai, mac_dinh=0, **kw: a._tran.get(loai, mac_dinh))
         a._so_ma_song_song_shopapi = gui.VE3App._so_ma_song_song_shopapi.__get__(a)
@@ -86,19 +88,25 @@ def app(gui, monkeypatch):
     return _tao
 
 
-def test_ro_cho_lam_du_cho_ca_hai_tram(app):
-    """Hai trạm cùng đầy thì rổ chung phải chứa nổi.
+def test_mot_tram_KHONG_vet_sach_duoc_cho_lam(app):
+    """Trạm nào cũng phải chừa lại một suất tối thiểu cho trạm kia.
 
-    Rổ hẹp hơn tổng hai trạm là kiểu hỏng câm nhất: cửa `max_codes` của trạm
-    ảnh vẫn báo còn chỗ, mà mã vẫn bị đá ra ở cửa ngay sau đó với lý do
-    `no_free_pair` — không nhắc gì tới trạm nào.
+    Không chừa thì đây là kiểu hỏng câm nhất: cửa `max_codes` của trạm ảnh vẫn
+    báo còn chỗ, mà mã vẫn bị đá ra ở cửa ngay sau đó với lý do `no_free_pair`
+    — không nhắc gì tới trạm nào.
+
+    Cách chừa là chặn trên của MỖI trạm đã trừ sẵn suất của trạm còn lại, chứ
+    KHÔNG phải nới rổ chung bằng tổng hai trạm: mỗi chỗ làm là một tiến trình
+    thật mở một file Excel, cộng lại là 40+ tiến trình trên một máy đã từng chỉ
+    chạy 9.
     """
     a = app(tran_anh=1536, tran_video=832)
-    ro_anh = a._so_ma_song_song_shopapi("image")
-    ro_video = a._so_ma_song_song_shopapi("video")
-    assert a._so_cho_lam_ao() >= ro_anh + ro_video, (
-        f"ro cho lam {a._so_cho_lam_ao()} < {ro_anh}+{ro_video} -> tram nao chay "
-        "truoc vet sach, tram kia dung ngoai")
+    cho = a._so_cho_lam_ao()
+    for pha in ("image", "video"):
+        ro = a._so_ma_song_song_shopapi(pha)
+        assert cho - ro >= _App.MA_MOI_PHA_TOI_THIEU, (
+            f"tram {pha} an {ro}/{cho} cho lam -> tram kia con {cho - ro}, "
+            "khong du mot suat toi thieu")
 
 
 def test_nha_may_hep_van_giu_du_san_cu(app):

@@ -6820,13 +6820,36 @@ Get-CimInstance Win32_Process |
             # Mỗi mã góp được bao nhiêu job vào nhà máy: lấy trần LOẠI NHỎ HƠN
             # (video) làm mẫu số, vì đó là loại dễ hết việc trước.
             if pha in ("image", "video"):
-                # Rổ RIÊNG của pha: trần của chính loại job đó, và không bao giờ
-                # để một pha bị bóp về 0 — mã ảnh phải luôn có ít nhất vài chỗ
-                # kể cả khi nhà máy ảnh đang hẹp, nếu không thì việc ảnh tồn mãi.
-                tran_pha = int(_sc.tran_song_song(pha, mac_dinh=0) or 0)
+                # ═══ ĐO BẰNG SỨC CHỨA NHÀ MÁY, KHÔNG BẰNG CHỖ CÒN TRỐNG ═══
+                #
+                # Bản trước hỏi `tran_song_song` — số chỗ máy chủ ĐANG CÒN cấp.
+                # Con số đó tụt xuống khi ta đang dùng, nên nó tự khoá mình:
+                # càng nhiều mã chạy thì trạm càng hẹp, và mã mới không bao giờ
+                # tới lượt.
+                #
+                # Đo thật 11:33–11:35 ngày 15/08/2026 (đã có bản chia theo việc):
+                # trạm video tụt còn `4/4` rồi `5/5`, trong khi MƯỜI BỐN mã đứng
+                # ngoài — TH1-0322, TH2-0007, 0056, 0008, 0033, 0077, 0122, 0061,
+                # 0160, 0005, 0055, 0125, 0109, 0126. Năm mã được chạy chỉ khai
+                # tổng 121 việc, mà trần đang cấp khoảng 200. Nhà máy còn chỗ,
+                # tool thì hết mã để phát.
+                #
+                # `hard_cap` là SỨC CHỨA của nhà máy, không đổi theo việc ta
+                # đang chạy — nên nó là thước đúng cho câu "cần bao nhiêu mã để
+                # lúc nào cũng đủ việc mà lấp". Nhận quá tay giờ đã an toàn:
+                # trần được chia THEO VIỆC (`shopapi_common.chia_theo_viec`) nên
+                # thêm mã không cướp chỗ của mã đang chạy, và tổng vẫn trong trần.
+                #
+                # Chặn trên để lại đúng một suất tối thiểu cho trạm kia: trạm
+                # video không được ăn hết chỗ làm rồi bỏ đói trạm ảnh.
+                tran_pha = int(_sc.tran_cung_may_chu(pha) or 0)
+                if tran_pha <= 0:
+                    tran_pha = int(_sc.tran_song_song(pha, mac_dinh=0) or 0)
                 if tran_pha > 0:
+                    chan_tren = max(self.MA_MOI_PHA_TOI_THIEU,
+                                    self.MA_SONG_SONG_TOI_DA - self.MA_MOI_PHA_TOI_THIEU)
                     return max(self.MA_MOI_PHA_TOI_THIEU,
-                               min(self.MA_SONG_SONG_TOI_DA, int(round(tran_pha / 40.0))))
+                               min(chan_tren, int(round(tran_pha / 40.0))))
                 return self.MA_MOI_PHA_TOI_THIEU
             tran = max(int(_sc.tran_song_song("image", mac_dinh=0) or 0),
                        int(_sc.tran_song_song("video", mac_dinh=0) or 0))
@@ -6882,8 +6905,14 @@ Get-CimInstance Win32_Process |
         tong = self._so_ma_song_song_shopapi()
         if not cau_hinh_toan_api(self.config_data):
             return tong
-        return max(tong, self._so_ma_song_song_shopapi("image")
-                   + self._so_ma_song_song_shopapi("video"))
+        # ⚠ KHÔNG cộng hai trạm lại. Mỗi chỗ làm là một TIẾN TRÌNH THẬT, mỗi
+        # tiến trình mở một file Excel — cộng lại là 40+ tiến trình trên một máy
+        # đã từng chỉ chạy 9. Chặn ở `MA_SONG_SONG_TOI_DA` như thiết kế ban đầu.
+        #
+        # Trạm này không bỏ đói trạm kia được, vì chặn trên của MỖI trạm đã trừ
+        # sẵn một suất tối thiểu cho trạm còn lại (xem
+        # `_so_ma_song_song_shopapi`). Nên rổ chung chỉ cần đủ cho mức đó.
+        return max(tong, self.MA_SONG_SONG_TOI_DA)
 
     def _get_server_pairs(self, only_available=False):
         # ĐI TOÀN API -> chỗ làm ẢO, BẤT KỂ trong cấu hình còn bao nhiêu server.
