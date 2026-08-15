@@ -673,7 +673,7 @@ def test_pha_ANH_khong_danh_dau_DONE_cho_file_khong_phai_anh():
     import inspect
     import ve3_worker
     nguon = inspect.getsource(ve3_worker)
-    i = nguon.find("if img_path.exists() and media_id:")
+    i = nguon.find("if img_path.exists() and (media_id or not self._can_media_id_canh()):")
     assert i > 0, "khong tim thay nhanh danh dau done"
     quanh = nguon[i:i + 700]
     assert "_la_anh_that" in quanh, (
@@ -752,3 +752,54 @@ def test_nhanh_DONE_phai_duoc_DIA_xac_nhan():
     assert "_anh_scene_con_dung_duoc" in sau, (
         "nhanh 'done' van tin Excel tuyet doi -> canh mat anh chet vinh vien")
     assert "pending.append(scene)" in sau, "phat hien thieu anh ma khong dua vao hang dung lai"
+
+
+# ── media_id của CẢNH: ai thật sự cần? ───────────────────────────────────────
+
+
+def test_shopapi_KHONG_bat_buoc_media_id_cua_canh(tmp_path, nhat_ky, co_khoa):
+    """Đi API thì `media_id` của cảnh là ô trống KHÔNG AI ĐỌC.
+
+    Ba chỗ có thể dùng tới nó, không chỗ nào dùng:
+
+    * `_submit_video_shopapi` chỉ nhận đường dẫn `img/<id>.png` rồi tự upload.
+    * `_load_media_ids` chỉ đọc trang NHÂN VẬT (`wb.get_characters()`).
+    * `_make_ref` nhúng base64 từ `nv/<tên>.png` vì API không hiểu `mediaId`.
+    """
+    w = _worker(tmp_path, nhat_ky)
+    assert w._can_media_id_canh() is False
+
+
+def test_che_do_flow_cu_VAN_bat_buoc_media_id(tmp_path, nhat_ky, co_khoa):
+    """Flow/Chrome đi Image-to-Video bằng `mediaId`, thiếu mã là cảnh vô dụng
+    thật — nới ở đây là hỏng chế độ cũ."""
+    w = _worker(tmp_path, nhat_ky, {"generation_backend": "flow_api",
+                                    "veo3top_image_mode": "flow"})
+    assert w._can_media_id_canh() is True
+
+
+def test_pha_anh_va_pha_video_HOI_CUNG_MOT_HAM(tmp_path, nhat_ky, co_khoa):
+    """Đóng đinh cái đã sinh ra lỗi: hai pha tự viết điều kiện riêng rồi lệch.
+
+    Pha 4 (video) tha `media_id` cho shopapi từ lâu; pha 3 (ảnh) vẫn bắt. Kết
+    quả đo thật 15/08/2026 lúc 10:28: TH2-0139 dựng lại đúng 12 cảnh (47–58) đã
+    có ảnh trên đĩa, TH2-0162 cũng đúng 12 — mỗi cảnh là 100₫ và một suất thợ
+    lấy về một ô Excel chẳng ai đọc.
+    """
+    import inspect
+
+    for ham in (VE3Worker._generate_scenes, VE3Worker._generate_videos):
+        nguon = inspect.getsource(ham)
+        assert "_can_media_id_canh" in nguon, (
+            f"{ham.__name__} khong hoi ham chung -> hai pha se lech lai")
+        assert 'generation_backend != "veo3top_b_pool"' not in nguon, (
+            f"{ham.__name__} tu che lai dieu kien thay vi hoi ham chung")
+
+
+def test_co_anh_tren_dia_thi_KHONG_dung_lai_du_thieu_media_id(tmp_path, nhat_ky, co_khoa):
+    """Cửa pha 3 phải mở cho ảnh đã có, khi mã không bắt buộc."""
+    import inspect
+
+    nguon = inspect.getsource(VE3Worker._generate_scenes)
+    assert "img_path.exists() and (media_id or not self._can_media_id_canh())" in nguon, (
+        "cua pha 3 van doi media_id -> moi luot chay lai dung het anh cu")

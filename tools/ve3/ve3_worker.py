@@ -2826,7 +2826,7 @@ Generator/context error:
             # 17:30, 17:43 và 18:02 ngày 15/08/2026, mỗi lượt ăn một "lượt
             # trắng". Kiểm bằng CHÍNH THƯỚC MÁY CHỦ DÙNG (magic bytes) thì vòng
             # lặp đứt ngay trong lượt này, không phải chờ pha video phát hiện.
-            if img_path.exists() and media_id:
+            if img_path.exists() and (media_id or not self._can_media_id_canh()):
                 if not self._la_anh_that(img_path):
                     self.log("  Scene {0}: file anh co nhung KHONG PHAI ANH "
                              "(magic bytes sai) - dung lai".format(scene.scene_id), "WARN")
@@ -2842,6 +2842,8 @@ Generator/context error:
                 continue
 
             # ÄÃ£ cÃ³ áº£nh nhÆ°ng thiáº¿u media_id (cháº¡y dá»Ÿ) â†’ cáº§n táº¡o láº¡i
+            # Chỉ tới được đây khi `_can_media_id_canh()` là True, tức chế độ
+            # Flow/Chrome — nơi thiếu mã thì cảnh thật sự vô dụng.
             if img_path.exists() and not media_id:
                 self.log(f"  Scene {scene.scene_id}: cÃ³ áº£nh nhÆ°ng thiáº¿u media_id â€” táº¡o láº¡i", "WARN")
 
@@ -3053,6 +3055,34 @@ Generator/context error:
             seen.add(c)
             dedup.append(c)
         return dedup, base_no_ext
+
+    def _can_media_id_canh(self) -> bool:
+        """Cảnh có BẮT BUỘC phải có `media_id` riêng không?
+
+        CHỈ chế độ Flow/Chrome cần. Ở đó Image-to-Video đi bằng `mediaId` của
+        Flow, nên ảnh không có mã thì cảnh vô dụng thật.
+
+        `pool` và API `shopapi` thì KHÔNG, vì không ai đọc nó:
+
+        * `_submit_video_shopapi` chỉ nhận ĐƯỜNG DẪN `img/<id>.png` rồi tự
+          upload lấy URL công khai — không đụng `media_id` một chữ nào.
+        * Tham chiếu lúc dựng ảnh KHÔNG lấy từ cảnh mà lấy từ trang NHÂN VẬT:
+          `_load_media_ids` chỉ đọc `wb.get_characters()`. Và ở hai chế độ này
+          nó còn đi bằng BYTES — `_make_ref` nhúng base64 từ `nv/<tên>.png`,
+          vì API không hiểu `mediaId` của Flow.
+
+        Nói gọn: ở shopapi, `media_id` của CẢNH được ghi vào Excel rồi nằm đó.
+        Bắt dựng lại vì thiếu nó là đốt tiền thật để điền một ô trống.
+
+        ⚠ Pha 3 (ảnh) và pha 4 (video) PHẢI hỏi cùng hàm này. Hai bên từng tự
+        viết điều kiện riêng và lệch nhau: pha 4 đã tha từ lâu, pha 3 vẫn bắt.
+        Hậu quả là MỖI lượt chạy dựng lại toàn bộ ảnh cũ. Đo thật 15/08/2026
+        lúc 10:28: TH2-0139 dựng lại đúng 12 cảnh (47–58) đã có ảnh nằm trên
+        đĩa, TH2-0162 cũng đúng 12 cảnh — trong khi `Media IDs loaded: 0` cho
+        thấy chẳng ai cần mã đó cả. Cùng lỗi họ hàng với `_pool_ref_local`
+        ngay bên dưới: một hàm chữa cho `pool` mà quên `shopapi`.
+        """
+        return self.generation_backend != "veo3top_b_pool" and not self.use_shopapi_for_video
 
     def _pool_ref_local(self, ref_name: str) -> bool:
         """POOL / SHOPAPI: ref build bằng EMBED base64 từ FILE local (nv/<ref>.png)
@@ -3547,8 +3577,7 @@ Generator/context error:
         # FLOW2 local mode: upload anh scene len Ultra -> media_id Ultra vao Excel TRUOC khi I2V
         # veo3top_b_pool: NHÀ MÁY CHUNG tự upload ảnh per-account -> KHÔNG bulk upload ở đây.
         # API shopapi cung KHONG bulk upload: buoc I2V tu upload anh scene lay URL cong khai.
-        if self.use_local_token_for_image and self.generation_backend != "veo3top_b_pool" \
-                and not self.use_shopapi_for_video:
+        if self.use_local_token_for_image and self._can_media_id_canh():
             self._upload_local_images_for_video(wb, scenes)
             scenes = wb.get_scenes()  # reload media_id moi (Ultra-bound)
 
@@ -3578,7 +3607,7 @@ Generator/context error:
             # pool: chỉ cần ẢNH (nhà máy tự upload lấy media_id); mode khác cần media_id sẵn.
             # API shopapi: cũng chỉ cần ẢNH — `_submit_video_shopapi` tự upload `img/X.png`
             # lấy URL công khai. Bắt buộc media_id ở đây là chặn oan CẢ project.
-            need_media = self.generation_backend != "veo3top_b_pool" and not self.use_shopapi_for_video
+            need_media = self._can_media_id_canh()
             if not img_path.exists() or (need_media and not media_id):
                 self.log(f"  Skip scene {scene.scene_id}: chÆ°a cÃ³ áº£nh hoáº·c media_id")
                 continue
