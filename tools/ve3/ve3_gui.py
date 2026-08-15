@@ -930,10 +930,30 @@ class HomePage(ctk.CTkScrollableFrame):
         Widget chỉ cập nhật qua self.after(0, ...) trên main thread."""
         import threading
 
-        # GUARD: thread poll trước chưa xong (pool chậm) -> KHÔNG spawn thêm (chống chồng chất thread) -> lên lịch lại
+        # ⚠ MỘT CHUỖI HẸN GIỜ, KHÔNG HAI — ĐÂY LÀ CHỖ LÀM GUI ĐƠ SAU VÀI GIỜ.
+        #
+        # Bản trước hẹn lại ở HAI nhánh mà không huỷ cái nào:
+        #
+        #     nhánh bận  : self.after(POOL_POLL_MS, self._poll_pool_health)
+        #     luồng xong : self.after(POOL_POLL_MS, self._poll_pool_health)
+        #
+        # Chừng nào một lượt poll còn nhanh hơn chu kỳ thì không sao. Nhưng
+        # `/v1/me` chậm là chuyện thường — đã đo 121 giây một lượt ngày
+        # 15/08/2026. Lúc đó timer nổ giữa chừng, thấy `busy` nên tự hẹn lại
+        # MỘT chuỗi mới, trong khi luồng đang chạy vẫn sẽ hẹn thêm MỘT chuỗi
+        # nữa khi nó xong. Mỗi lần quá hạn là **cộng thêm một chuỗi**, và chuỗi
+        # thì không bao giờ chết.
+        #
+        # Tính ra: `/v1/me` mất 15 giây trên chu kỳ 15 giây -> mỗi vòng dư một
+        # chuỗi; sau một giờ là hàng trăm chuỗi, mỗi chuỗi tự đẻ một luồng mỗi
+        # chu kỳ. Vòng lặp sự kiện của Tk ngập callback -> lag dần rồi "Not
+        # Responding". Càng nghẽn máy chủ thì càng nhanh đơ — đúng lúc người
+        # dùng cần nhìn bảng nhất.
+        #
+        # Giờ: NHỚ id hẹn giờ, HUỶ cái cũ trước khi hẹn cái mới. Bao nhiêu
+        # đường vào cũng chỉ còn đúng một chuỗi sống.
         if getattr(self, "_pool_poll_busy", False):
-            try: self.after(POOL_POLL_MS, self._poll_pool_health)
-            except Exception: pass
+            self._hen_poll_pool()
             return
         self._pool_poll_busy = True
 
@@ -1108,10 +1128,27 @@ class HomePage(ctk.CTkScrollableFrame):
                 pass
             finally:
                 self._pool_poll_busy = False
-                try: self.after(POOL_POLL_MS, self._poll_pool_health)
+                # Hẹn lại QUA MAIN THREAD: `after` không an toàn khi gọi từ
+                # luồng nền, và `_hen_poll_pool` còn đụng `after_cancel`.
+                try: self.after(0, self._hen_poll_pool)
                 except Exception: pass
 
         threading.Thread(target=_work, daemon=True, name="pool-health").start()
+
+    def _hen_poll_pool(self):
+        """Hẹn lượt poll kế — CHỈ GIỮ MỘT chuỗi. Xem khối `why` ở `_poll_pool_health`."""
+        if getattr(self, "_closing", False):
+            return
+        cu = getattr(self, "_pool_poll_timer_id", None)
+        if cu is not None:
+            try:
+                self.after_cancel(cu)
+            except Exception:
+                pass
+        try:
+            self._pool_poll_timer_id = self.after(POOL_POLL_MS, self._poll_pool_health)
+        except Exception:
+            self._pool_poll_timer_id = None
 
     #: Nhãn 8 ô mỗi trạm ở CHẾ ĐỘ API shopapi.
     #:
@@ -5308,7 +5345,7 @@ Write-Output $kill.Count
         self._auto_restart_at = 0
         self._pending_restart_id = None
         self._log("[QUEUE] Tu dong chay sau 30s... (bam STOP hoac Update de huy)", "INFO")
-        self.after(1000, self._auto_start_tick)
+        self._hen_auto_start()
 
     def _auto_start_tick(self):
         if not hasattr(self, '_auto_start_countdown') or self._auto_start_countdown <= 0:
@@ -5324,7 +5361,28 @@ Write-Output $kill.Count
         else:
             if self._auto_start_countdown % 10 == 0:
                 self._log(f"[QUEUE] Tu dong chay sau {self._auto_start_countdown}s...", "INFO")
-            self.after(1000, self._auto_start_tick)
+            self._hen_auto_start()
+
+    def _hen_auto_start(self):
+        """Hẹn nhịp đếm ngược kế — CHỈ GIỮ MỘT chuỗi.
+
+        Đếm ngược tự kết thúc khi về 0 nên nó không phình vô hạn như vòng poll
+        `/health`. Nhưng hai chuỗi song song thì đếm nhanh gấp đôi và hàng chờ
+        tự chạy sớm hơn người dùng tưởng — họ mất quãng 30 giây để bấm STOP.
+        Cùng một kỷ luật, áp cho mọi vòng lặp định kỳ: nhớ id, huỷ rồi mới hẹn.
+        """
+        if getattr(self, "_closing", False):
+            return
+        cu = getattr(self, "_auto_start_timer_id", None)
+        if cu is not None:
+            try:
+                self.after_cancel(cu)
+            except Exception:
+                pass
+        try:
+            self._auto_start_timer_id = self.after(1000, self._auto_start_tick)
+        except Exception:
+            self._auto_start_timer_id = None
 
     def _schedule_auto_restart(self):
         """Schedule full GUI restart after 12h to reset all errors."""

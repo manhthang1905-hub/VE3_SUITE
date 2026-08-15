@@ -1619,3 +1619,59 @@ def test_khong_di_API_thi_pha_KHONG_doi_gi(monkeypatch):
 
     a = _App()
     assert a._so_ma_song_song_shopapi("image") == 8 == a._so_ma_song_song_shopapi("video")
+
+
+# ── GUI đơ sau vài giờ: chuỗi hẹn giờ nhân lên ───────────────────────────────
+
+
+def _dong_ma_thuc(nguon):
+    """Bỏ dòng chú thích — chú thích có nhắc tên hàm là bài kiểm bắt nhầm."""
+    return [d for d in nguon.splitlines() if not d.lstrip().startswith("#")]
+
+
+def test_poll_pool_chi_co_MOT_cho_hen_gio():
+    """Hai chỗ hẹn lại mà không huỷ = mỗi lần quá hạn cộng thêm một chuỗi.
+
+    Bản trước hẹn ở CẢ nhánh "đang bận" LẪN nhánh "luồng chạy xong":
+
+        nhánh bận  : self.after(POOL_POLL_MS, self._poll_pool_health)
+        luồng xong : self.after(POOL_POLL_MS, self._poll_pool_health)
+
+    Nhanh hơn chu kỳ thì không sao. Nhưng `/v1/me` chậm là chuyện thường — đã
+    đo **121 giây** một lượt ngày 15/08/2026. Lúc đó timer nổ giữa chừng, thấy
+    bận nên tự hẹn MỘT chuỗi mới, còn luồng đang chạy vẫn hẹn thêm MỘT chuỗi
+    nữa khi xong. Chuỗi không bao giờ chết.
+
+    `/v1/me` mất 15 giây trên chu kỳ 15 giây -> mỗi vòng dư một chuỗi; sau một
+    giờ là hàng trăm chuỗi, mỗi chuỗi tự đẻ một luồng mỗi chu kỳ. Vòng lặp sự
+    kiện của Tk ngập callback -> lag dần rồi "Not Responding". Càng nghẽn máy
+    chủ càng nhanh đơ — đúng lúc cần nhìn bảng nhất.
+    """
+    ma = _dong_ma_thuc(VE3_GUI.read_text(encoding="utf-8", errors="replace"))
+    hen = [d for d in ma if "self.after(" in d and "_poll_pool_health" in d]
+    assert len(hen) == 1, (
+        "co {0} cho hen lai poll pool -> chuoi hen gio se nhan len:\n{1}"
+        .format(len(hen), "\n".join(hen)))
+    assert "_pool_poll_timer_id" in hen[0], "khong nho id thi khong huy duoc"
+
+
+def test_hen_poll_pool_HUY_cai_cu_truoc():
+    nguon = VE3_GUI.read_text(encoding="utf-8", errors="replace")
+    than = ast.get_source_segment(nguon, _ham("_hen_poll_pool")) or ""
+    assert than, "khong tim thay _hen_poll_pool"
+    assert "after_cancel" in than, "hen moi ma khong huy cu -> van nhan chuoi"
+    i_huy, i_hen = than.find("after_cancel"), than.find("self.after(")
+    assert 0 < i_huy < i_hen, "phai HUY TRUOC roi moi hen"
+
+
+@pytest.mark.parametrize("ham", [
+    "_refresh_project_views", "_process_monitor_tick", "_hen_auto_start",
+    "_hen_poll_pool",
+])
+def test_moi_vong_hen_gio_lap_lai_deu_phai_HUY_hen_cu(ham):
+    """Bất kỳ callback nào vừa tự hẹn lại vừa được gọi từ chỗ khác đều dính bẫy này."""
+    nguon = VE3_GUI.read_text(encoding="utf-8", errors="replace")
+    than = ast.get_source_segment(nguon, _ham(ham)) or ""
+    assert than, "khong tim thay {0}".format(ham)
+    assert "after_cancel" in than, (
+        "{0} tu hen lai ma khong huy hen cu -> chuoi nhan len theo gio chay".format(ham))
