@@ -1355,6 +1355,44 @@ def tran_cung_may_chu(loai, api_key=None, client=None, bay_gio=None):
     return v
 
 
+def con_tho_khong(loai, api_key=None, client=None):
+    """Nhà máy loại này còn thợ online không? `None` = hỏi không được.
+
+    ═══ VÌ SAO CẦN PHÂN BIỆT ═══
+
+    `503 engine_unavailable` có HAI nghĩa hoàn toàn khác nhau, mà tên mã lỗi
+    thì chỉ có một:
+
+    * **Nhà máy chết hẳn** — `workers_online = 0`. Gửi thêm là phí, phải dừng.
+    * **Thợ còn đủ nhưng lúc này không ai rảnh** — chen chúc nhất thời.
+
+    Đối xử giống nhau thì rất đắt. `NhipDo.nha_may_dung()` kéo nhịp về SÀN (1),
+    đóng băng 30 giây, rồi thăm dò lại bằng đúng 1 job — và luật leo là +1 mỗi
+    lô mượt. Với job video ~500 giây một lô, bò từ 1 về lại 40 mất hàng giờ.
+    Một cú nghẹt thoáng qua đổi lấy cả buổi chiều chạy ở nhịp 1.
+
+    Đo thật 11:03–11:05 ngày 15/08/2026: chín tiến trình video, mỗi cái ăn một
+    `503` rồi tụt từ `tran may chu 124` xuống `nhip 1.0`, trong khi CÙNG LÚC
+    hai mã khác vẫn được nhận job và xếp hàng thứ 27. Nhà máy rõ ràng còn sống.
+
+    Còn thợ thì `429` mới là cách hiểu đúng: chia đôi rồi bò lên lại, không
+    đóng băng. Xem chỗ dùng ở `shopapi_batch`.
+
+    Đọc qua `doc_v1_me_chung` nên nhiều tiến trình chỉ tốn MỘT lời gọi trong
+    mỗi 8 giây — rẻ hơn nhiều so với cái giá của một lần đoán sai.
+    """
+    me = doc_v1_me_chung(api_key=api_key, client=client, timeout=15.0)
+    if not me:
+        return None
+    chi_tiet = _lay(_lay(_lay(me, "limits"), "concurrent_jobs_detail"), loai)
+    if chi_tiet is None:
+        return None
+    tho = _lay(chi_tiet, "workers_online")
+    if tho is None:
+        return None
+    return _so(tho, 0) > 0
+
+
 def _lay(o, khoa):
     """Đọc một khoá từ dict HOẶC từ `Model` của SDK. `None` khi không có."""
     if o is None:

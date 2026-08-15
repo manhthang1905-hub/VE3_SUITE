@@ -943,3 +943,68 @@ def test_vong_chay_CO_dung_phep_hoi_nhip():
     assert "lan_nghen[0] = time.monotonic()" in than, "khong ghi nhan luc nghen cuoi"
     i = than.find("can_hoi_nhip(")
     assert "_tao_nhip(bat_dau=" in than[i:i + 700], "phat hien can hoi ma khong hoi"
+
+
+# ── `503` khi nhà máy VẪN CÒN THỢ ────────────────────────────────────────────
+
+
+def test_503_ma_con_tho_thi_CHIA_DOI_chu_khong_dong_bang(tran_gia, nhat_ky, sc,
+                                                         monkeypatch, me_nhanh):
+    """Chen chúc nhất thời khác nhà máy chết — và cái giá của việc nhầm rất đắt.
+
+    `nha_may_dung()` kéo nhịp về SÀN (1), đóng băng 30 giây, rồi thăm dò lại
+    bằng đúng 1 job; luật leo là +1 mỗi lô mượt. Với video ~500 giây một lô thì
+    bò từ 1 về 40 mất hàng giờ.
+
+    Đo thật 11:03–11:05 ngày 15/08/2026: chín tiến trình video, mỗi cái ăn một
+    `503` rồi tụt từ `tran may chu 124` xuống `nhip 1.0 cho phep 0` — trong khi
+    CÙNG LÚC hai mã khác vẫn được nhận job và xếp hàng thứ 27. Nhà máy còn sống
+    nguyên; chỉ mỗi tool tự tắt.
+    """
+    tran_gia(16)
+    monkeypatch.setattr(sc, "con_tho_khong", lambda loai, api_key=None, client=None: True)
+    so_lan = {}
+
+    def _chay(v):
+        so_lan[v] = so_lan.get(v, 0) + 1
+        if v == 1 and so_lan[v] == 1:
+            raise sc.BiNghen(503)
+        return v
+
+    # 40 việc / trần 16: sau lô đầu vẫn còn hơn 20 việc chờ, nên cỡ lô kế tiếp
+    # phản ánh ĐÚNG nhịp chứ không bị số việc còn lại giới hạn.
+    ket = sb.chay_ca_me(list(range(40)), _chay, "video", log=nhat_ky, **me_nhanh)
+
+    assert ket == list(range(40)), "503 KHONG duoc lam mat viec"
+    lo = _lo_da_ban(nhat_ky)
+    assert max(lo[1:], default=0) > 1, (
+        "sau 503 van tham do bang dung 1 job -> con tho ma tool tu dong bang, "
+        f"cac lo da ban: {lo}")
+
+
+def test_503_ma_HET_tho_thi_van_dung_han(tran_gia, nhat_ky, ngu_gia, sc, monkeypatch):
+    """`workers_online = 0` là nhà máy chết thật — nới ở đây là nhồi vào chỗ trống."""
+    tran_gia(16)
+    monkeypatch.setattr(sc, "con_tho_khong", lambda loai, api_key=None, client=None: False)
+
+    def _chay(v):
+        raise sc.BiNghen(503)
+
+    ket = sb.chay_ca_me(list(range(5)), _chay, "image", log=nhat_ky, ngu=ngu_gia,
+                        cho_khi_dung=30.0, cho_toi_da=90.0)
+    assert all(r is None for r in ket)
+    assert any("DANG DUNG" in m for _lv, m in nhat_ky.dong), (
+        "het tho ma khong bao nha may dung")
+
+
+def test_hoi_khong_duoc_thi_chon_phia_AN_TOAN(tran_gia, nhat_ky, ngu_gia, sc, monkeypatch):
+    """`/v1/me` hỏng thì coi như nhà máy chết: gửi vào chỗ chết là đốt lượt thử."""
+    tran_gia(16)
+    monkeypatch.setattr(sc, "con_tho_khong", lambda loai, api_key=None, client=None: None)
+
+    def _chay(v):
+        raise sc.BiNghen(503)
+
+    sb.chay_ca_me(list(range(4)), _chay, "image", log=nhat_ky, ngu=ngu_gia,
+                  cho_khi_dung=30.0, cho_toi_da=90.0)
+    assert any("DANG DUNG" in m for _lv, m in nhat_ky.dong)

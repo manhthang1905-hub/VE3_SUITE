@@ -72,7 +72,29 @@ def nhip_song_rieng(monkeypatch, tmp_path):
     monkeypatch.setenv("SHOPAPI_NGAN_SACH_REQ", "100000000")
     monkeypatch.setattr(_sc, "tran_cung_may_chu",
                         lambda loai, api_key=None, client=None, bay_gio=None: 10 ** 6)
+    # `con_tho_khong` cũng hỏi `GET /v1/me` THẬT — nhánh `503` gọi nó để biết
+    # nhà máy chết hẳn hay chỉ chen chúc. Mặc định `None` ("hỏi không được") giữ
+    # nguyên hành vi cũ là dừng hẳn, nên bài kiểm nào không quan tâm tới phân
+    # biệt đó vẫn đo đúng thứ nó định đo. Bài nào quan tâm thì tự đặt lại.
+    _con_tho_that["f"] = _sc.con_tho_khong
+    monkeypatch.setattr(_sc, "con_tho_khong",
+                        lambda loai, api_key=None, client=None: None)
     yield
+
+
+#: Bản THẬT của `con_tho_khong`, giữ lại vì fixture trên đã thay nó cho mọi bài.
+_con_tho_that = {}
+
+
+@pytest.fixture
+def con_tho_that(nhip_song_rieng):
+    """Bản thật của `shopapi_common.con_tho_khong` — cho bài kiểm CHÍNH nó.
+
+    Fixture `nhip_song_rieng` chạy tự động và thay hàm này bằng bản trả `None`,
+    nên bài nào muốn kiểm chính nó phải lấy lại bản gốc ở đây. Không có lối này
+    thì bài kiểm xanh trong khi chẳng đo gì cả.
+    """
+    return _con_tho_that["f"]
 
 
 @pytest.fixture

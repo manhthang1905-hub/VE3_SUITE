@@ -1267,7 +1267,26 @@ def chay_ca_me(viec, chay_mot, loai, tran_tool=None, client=None, api_key=None,
                     # là GỬI QUÁ NHANH — hạ số job đang bay mà giữ nguyên nhịp
                     # rót thì lát nữa lại đụng đúng bức tường đó.
                     thung.bi_chan()
+                elif _sc.con_tho_khong(loai, client=client) is True:
+                    # `503` mà nhà máy VẪN CÒN THỢ = chen chúc nhất thời, không
+                    # phải chết. Đối xử như `429`: chia đôi rồi bò lên lại.
+                    #
+                    # `nha_may_dung` kéo nhịp về SÀN (1) + đóng băng 30 giây +
+                    # thăm dò bằng 1 job, và luật leo là +1 mỗi lô mượt. Với
+                    # video ~500 giây một lô thì bò từ 1 về 40 mất hàng giờ.
+                    #
+                    # Đo 11:03–11:05 ngày 15/08/2026: chín tiến trình video, mỗi
+                    # cái ăn một `503` rồi tụt từ `tran may chu 124` xuống
+                    # `nhip 1.0 cho phep 0`, trong khi CÙNG LÚC hai mã khác vẫn
+                    # được nhận và xếp hàng thứ 27. Cả chín đóng băng vì một cú
+                    # nghẹt mà nhà máy chưa hề ngừng chạy.
+                    nhip.bi_chan(gia_tri.cho)
+                    cong.bi_nghen(gia_tri.cho)
+                    thung.bi_chan()
                 else:
+                    # Hết thợ thật, hoặc hỏi không được -> giữ nguyên cách cũ:
+                    # dừng hẳn. Hỏi không được thì chọn phía AN TOÀN, vì gửi vào
+                    # một nhà máy đã chết là đốt lượt thử chứ không ra hàng.
                     nhip.nha_may_dung(gia_tri.cho)
                     cong.nha_may_dung(gia_tri.cho)
                 continue

@@ -707,3 +707,51 @@ def test_KHONG_con_go_cung_thoi_han_nao(sc):
     nguon = Path(sc.__file__).read_text(encoding="utf-8", errors="replace")
     assert "song 7 ngay" not in nguon and "sống 7 ngày" not in nguon, \
         "van con gia dinh 'link song 7 ngay' — sai tu 14/08/2026"
+
+
+# ── Nhà máy còn thợ hay chết hẳn ─────────────────────────────────────────────
+
+
+def _me_tho(loai, so_tho):
+    return {"limits": {"concurrent_jobs_detail": {loai: {"workers_online": so_tho}}}}
+
+
+def test_con_tho_khi_workers_online_lon_hon_0(sc, monkeypatch, con_tho_that):
+    monkeypatch.setattr(sc, "doc_v1_me_chung",
+                        lambda **kw: _me_tho("video", 3))
+    assert con_tho_that("video") is True
+
+
+def test_het_tho_khi_workers_online_bang_0(sc, monkeypatch, con_tho_that):
+    monkeypatch.setattr(sc, "doc_v1_me_chung",
+                        lambda **kw: _me_tho("video", 0))
+    assert con_tho_that("video") is False
+
+
+def test_hoi_khong_duoc_thi_tra_None_chu_KHONG_doan_bua(sc, monkeypatch, con_tho_that):
+    """Ba kiểu "không biết" phải cho ra `None`, không được lẫn với `False`.
+
+    Nơi gọi (`shopapi_batch`) dùng `is True` để nới nhánh `503`. `None` rơi
+    xuống nhánh an toàn — dừng hẳn. Trả `False` thay cho "không biết" thì vẫn
+    an toàn, nhưng trả `True` thì thành nhồi job vào nhà máy đã chết.
+    """
+    monkeypatch.setattr(sc, "doc_v1_me_chung", lambda **kw: {})
+    assert con_tho_that("video") is None
+
+    monkeypatch.setattr(sc, "doc_v1_me_chung",
+                        lambda **kw: {"limits": {"concurrent_jobs_detail": {}}})
+    assert con_tho_that("video") is None
+
+    monkeypatch.setattr(sc, "doc_v1_me_chung",
+                        lambda **kw: {"limits": {"concurrent_jobs_detail":
+                                                 {"video": {"limit": 40}}}})
+    assert con_tho_that("video") is None
+
+
+def test_hoi_dung_LOAI_job_dang_can(sc, monkeypatch, con_tho_that):
+    """Nhà máy ảnh và nhà máy video chết độc lập — hỏi nhầm loại là kết luận sai."""
+    monkeypatch.setattr(sc, "doc_v1_me_chung", lambda **kw: {
+        "limits": {"concurrent_jobs_detail": {"image": {"workers_online": 8},
+                                              "video": {"workers_online": 0}}}})
+    assert con_tho_that("image") is True
+    assert con_tho_that("video") is False
