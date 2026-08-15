@@ -827,7 +827,9 @@ class HomePage(ctk.CTkScrollableFrame):
     def _mk_log(self):
         c = self._card(2, "Logs")
         # Increase height to allow 2 rows of tabs
-        self.log_tabs = ctk.CTkTabview(c, fg_color="transparent", segmented_button_fg_color="#DDD", segmented_button_selected_color=RN, segmented_button_selected_hover_color="#1565C0", text_color=T1, height=240)
+        # `command` chạy khi bấm sang thẻ khác -> đổ phần đã gom của thẻ đó ra.
+        # Không có nó thì thẻ vừa mở đứng im cho tới dòng log kế tiếp.
+        self.log_tabs = ctk.CTkTabview(c, fg_color="transparent", segmented_button_fg_color="#DDD", segmented_button_selected_color=RN, segmented_button_selected_hover_color="#1565C0", text_color=T1, height=240, command=self._the_vua_doi)
         self.log_tabs.grid(row=1, column=0, padx=10, pady=(0,3), sticky="nsew")
 
         # Tabs now use shortened names (e.g., "0116" instead of "TL1-0116")
@@ -1709,11 +1711,36 @@ class HomePage(ctk.CTkScrollableFrame):
             box._last_scroll_time = now
         box.configure(state="disabled")
 
+    def _ten_the(self, target_key):
+        """Tên THẺ mà một đích log rơi vào. Thẻ mã lấy đoạn sau dấu gạch."""
+        if target_key in ("VE3", "Excel"):
+            return target_key
+        return target_key.split("-")[-1] if "-" in target_key else target_key
+
+    def _the_dang_xem(self):
+        """Thẻ người dùng đang mở, hoặc `None` khi chưa dựng xong giao diện."""
+        try:
+            return self.log_tabs.get()
+        except Exception:
+            return None
+
+    def _the_vua_doi(self):
+        """Bấm sang thẻ khác thì đổ phần đã gom của thẻ đó ra."""
+        self._flush_pending_logs()
+
     def _flush_pending_logs(self):
+        """Đổ chữ đã gom ra hộp — CHỈ của thẻ đang mở.
+
+        Đổ hết mọi thẻ là quay lại đúng cái vừa chữa: hai chục hộp cùng nhận
+        chữ, mỗi hộp một lượt vẽ lại thanh cuộn trên luồng vẽ.
+        """
         if not self.log_pending:
             return
+        dang_xem = self._the_dang_xem()
         for key, lines in list(self.log_pending.items()):
             if not lines:
+                continue
+            if dang_xem is not None and self._ten_the(key) != dang_xem:
                 continue
             if key == "Excel":
                 box = self.log_excel_box
@@ -1725,7 +1752,10 @@ class HomePage(ctk.CTkScrollableFrame):
                 # Project is no longer running — route buffered logs to VE3 tab
                 box = self.log_ve3_box
             self._append_log_text(box, "".join(lines), line_count=len(lines))
-        self.log_pending.clear()
+            # ⚠ CHỈ XOÁ THẺ VỪA ĐỔ. `log_pending.clear()` sẽ vứt luôn chữ của
+            # những thẻ ta cố ý bỏ qua — bấm sang thẻ đó thì trống trơn, và
+            # người dùng mất đúng đoạn log họ đang đi tìm.
+            self.log_pending.pop(key, None)
 
     def get_or_create_project_log(self, code):
         """Get or create a log tab for a specific project code.
@@ -2257,8 +2287,30 @@ class HomePage(ctk.CTkScrollableFrame):
             for target_key in target_keys:
                 buckets.setdefault(target_key, []).append(line)
 
+        dang_xem = self._the_dang_xem()
         for target_key, lines in buckets.items():
-            if not getattr(self, "logs_visible", True):
+            # ═══ CHỈ VẼ VÀO THẺ ĐANG MỞ ═══
+            #
+            # Người dùng chỉ nhìn được MỘT thẻ một lúc, nhưng bản trước vẫn ghi
+            # chữ vào cả hai chục hộp log cùng lúc. Mỗi lần `insert` vào một
+            # `CTkTextbox` là một lượt `scrollbar.set` -> `_draw`, tức là vẽ lại
+            # một canvas — trên LUỒNG VẼ.
+            #
+            # Ngăn xếp watchdog (`%TEMP%\ve3_watchdog.log`, 1.006 lần chẹn) chỉ
+            # đúng mấy khung đó ở trên cùng:
+            #
+            #     ctk_scrollbar.py:161 _draw        357 lan
+            #     __init__.py:1376 update_idletasks 357 lan
+            #     ctk_scrollbar.py:255 set          298 lan
+            #
+            # Từ khi tách trạm, số mã chạy cùng lúc lên tới 24 — tức 24 hộp log
+            # sống, mỗi dòng log trả giá 24 lần. Ghi vào đúng một hộp là bớt
+            # chừng ấy lần.
+            #
+            # Thẻ không mở vẫn giữ chữ trong `log_pending` (đã có sẵn hạn
+            # `log_max_pending_per_tab`), bấm sang là hiện ra ngay.
+            if (not getattr(self, "logs_visible", True)
+                    or self._ten_the(target_key) != dang_xem):
                 arr = self.log_pending.setdefault(target_key, [])
                 arr.extend(lines)
                 if len(arr) > self.log_max_pending_per_tab:

@@ -4166,6 +4166,11 @@ Generator/context error:
         img_path = self.img_dir / f"{_P(output_path).stem}.png"
         if not img_path.exists():
             return False, {}, f"shopapi-vid: khong thay anh scene {img_path}"
+        # CỬA CUỐI trước khi dấu đi vào từng khung hình của clip. Ảnh dựng ở bản
+        # trước bản này chưa qua bước xoá; soát ở đây thì chúng cũng sạch mà
+        # không phải dựng lại. Ảnh đã xử lý mang dấu trong phần thông tin PNG
+        # nên không bị xoá lần hai.
+        self._xoa_dau_nha_cung_cap(img_path)
         try:
             _shopapi_nap_engine()
             import shopapi_video_client as svc
@@ -4206,8 +4211,30 @@ Generator/context error:
             # Xem chu thich o `_submit_video_shopapi`.
             nem_khi_nghen=_shopapi_trong_me(),
         )
+        if ok:
+            self._xoa_dau_nha_cung_cap(output_path)
         return (ok, (info or {}).get("media_name"), self._shopapi_sinfo(info),
                 err if not ok else "")
+
+    def _xoa_dau_nha_cung_cap(self, duong_dan):
+        """Xoá dấu ngôi sao góc phải dưới, NGAY sau khi ảnh về đĩa.
+
+        ═══ VÌ SAO PHẢI Ở ĐÂY, KHÔNG PHẢI Ở KHÂU SAU ═══
+
+        Đường dựng là Image-to-Video: ảnh scene chính là KHUNG ĐẦU của clip. Ảnh
+        còn dấu thì mọi khung của clip đều mang dấu, và lúc đó xoá phải xử từng
+        khung hình — đắt gấp bội và không đảo lại được sạch.
+
+        Hàm tự bỏ qua ảnh đã xử lý (đóng dấu trong phần thông tin PNG) nên gọi
+        lại nhiều lần vẫn an toàn. Quan trọng: phép đảo alpha KHÔNG tự biết mình
+        đã chạy, xoá hai lần là để lại một ngôi sao ĐEN.
+        """
+        try:
+            _shopapi_nap_engine()
+            import xoa_dau_anh as _xd
+            _xd.xoa_dau_file(str(duong_dan), log=self.log)
+        except Exception as e:  # noqa: BLE001 — buoc lam dep, khong duoc lam chet luot chay
+            self.log("  xoa dau: bo qua ({0}: {1})".format(type(e).__name__, e), "WARN")
 
     @staticmethod
     def _shopapi_sinfo(info):

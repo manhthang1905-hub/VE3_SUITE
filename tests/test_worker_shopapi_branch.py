@@ -803,3 +803,28 @@ def test_co_anh_tren_dia_thi_KHONG_dung_lai_du_thieu_media_id(tmp_path, nhat_ky,
     nguon = inspect.getsource(VE3Worker._generate_scenes)
     assert "img_path.exists() and (media_id or not self._can_media_id_canh())" in nguon, (
         "cua pha 3 van doi media_id -> moi luot chay lai dung het anh cu")
+
+
+# ── Xoá dấu nhà cung cấp: phải nằm trên CẢ HAI đường ─────────────────────────
+
+
+def test_xoa_dau_chay_o_ca_luc_TAO_ANH_lan_truoc_khi_DUNG_VIDEO():
+    """Ảnh scene là KHUNG ĐẦU của clip — dấu lọt qua là dính vào mọi khung hình.
+
+    Cắm ở một chỗ thôi thì hụt một nửa: chỉ cắm lúc tạo ảnh thì ảnh dựng ở bản
+    cũ vẫn bẩn; chỉ cắm trước khi dựng video thì ảnh nằm chờ trên đĩa vẫn bẩn và
+    người dùng mở ra vẫn thấy dấu.
+    """
+    import inspect
+
+    for ham in (VE3Worker._submit_image_shopapi, VE3Worker._submit_video_shopapi):
+        nguon = inspect.getsource(ham)
+        assert "_xoa_dau_nha_cung_cap" in nguon, (
+            "{0} khong xoa dau -> dau di thang vao clip".format(ham.__name__))
+
+
+def test_xoa_dau_KHONG_duoc_lam_chet_luot_chay(tmp_path, nhat_ky, co_khoa):
+    """Bước làm đẹp mà ném lỗi thì cả mẻ chết vì một cái logo."""
+    w = _worker(tmp_path, nhat_ky)
+    hong = tmp_path / "khong-ton-tai" / "9.png"
+    w._xoa_dau_nha_cung_cap(hong)      # khong duoc nem
