@@ -112,3 +112,45 @@ def test_file_DOI_thi_PHAI_doc_lai(gui, tmp_path, monkeypatch):
     ep.write_bytes(b"gia-da-doi-kich-thuoc")   # size đổi -> chữ ký đổi
     a._get_project_state_cached(tmp_path)
     assert so_lan["n"] == 2, "file da doi ma van tra ban cu -> hang cho nhin so lieu chet"
+
+
+# ── Vòng quét phải TỰ NÓI nó mất bao lâu ─────────────────────────────────────
+
+
+class _AppBao:
+    def __init__(self, gui):
+        self.dong = []
+        self._log = lambda m, lv="INFO", kenh="": self.dong.append((lv, m))
+        self._bao_nhip_quet = gui.VE3App._bao_nhip_quet.__get__(self)
+        self.QUET_CHAM_GIAY = gui.VE3App.QUET_CHAM_GIAY
+        self.QUET_BAO_MOI = gui.VE3App.QUET_BAO_MOI
+
+
+def test_quet_cham_thi_NOI_RA_kem_ma_cham_nhat(gui):
+    """"Hàng chờ chậm" mà không có số thì mọi phép chữa đều là đoán.
+
+    Log 17:14–17:20 ngày 15/08/2026: vòng bò 6 giây một mã. Đo `openpyxl` trên
+    máy dev thì một quyển 121 cảnh chỉ mất 0,04 giây — nên chỗ tốn thời gian
+    KHÔNG nằm ở nơi ai cũng nghĩ, và phải đo ở máy người dùng mới biết.
+    """
+    a = _AppBao(gui)
+    a._bao_nhip_quet([("TH1-0001", 1.0), ("TH2-0002", 30.0), ("TH3-0003", 2.0)])
+    assert a.dong, "quet 33 giay ma khong noi gi"
+    _lv, m = a.dong[0]
+    assert "TH2-0002" in m, "khong chi ra ma nao an het thoi gian: {0}".format(m)
+    assert "3 ma" in m and "s/ma" in m, m
+
+
+def test_quet_nhanh_thi_IM_LANG(gui):
+    """Vòng khoẻ chỉ mất vài trăm mili-giây — nói ra là biến log thành nhiễu."""
+    a = _AppBao(gui)
+    a._bao_nhip_quet([("TH1-0001", 0.05)] * 20)
+    assert not a.dong
+
+
+def test_KHONG_noi_lai_qua_day(gui):
+    """Đây là dòng chẩn đoán, không phải dòng theo dõi."""
+    a = _AppBao(gui)
+    a._bao_nhip_quet([("TH1-0001", 99.0)])
+    a._bao_nhip_quet([("TH1-0001", 99.0)])
+    assert len(a.dong) == 1, "moi vong mot dong -> log ngap, khong ai doc nua"

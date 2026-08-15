@@ -9852,6 +9852,41 @@ Get-CimInstance Win32_Process |
             pass
         return False
 
+    #: Vòng quét lâu hơn chừng này giây thì nói ra. Một vòng khoẻ chỉ mất vài
+    #: trăm mili-giây; 20 giây là đã đủ để mã cuối danh sách chờ hàng phút.
+    QUET_CHAM_GIAY = 20.0
+
+    #: Đừng nói lại quá dày — đây là dòng chẩn đoán, không phải dòng theo dõi.
+    QUET_BAO_MOI = 120.0
+
+    def _bao_nhip_quet(self, ds):
+        """Nói ra vòng quét vừa mất bao lâu, và mã nào ăn hết thời gian.
+
+        Không có dòng này thì "hàng chờ chậm" chỉ là cảm giác, và mọi phép chữa
+        đều là đoán. Log 17:14–17:20 ngày 15/08/2026 cho thấy vòng bò 6 giây một
+        mã — nhưng đo `openpyxl` trên máy dev thì một quyển 121 cảnh chỉ mất
+        0,04 giây, nên chỗ tốn thời gian KHÔNG nằm ở nơi ai cũng nghĩ.
+
+        In cả ba mã chậm nhất: nếu tất cả đều chậm đều thì đó là chi phí cố định
+        mỗi mã; nếu chỉ vài mã chậm thì đó là mấy mã đó có gì riêng.
+        """
+        if not ds:
+            return
+        tong = sum(g for _t, g in ds)
+        if tong < self.QUET_CHAM_GIAY:
+            return
+        lan_cuoi = float(getattr(self, "_quet_bao_lan_cuoi", 0.0) or 0.0)
+        gio = _time.time()
+        if gio - lan_cuoi < self.QUET_BAO_MOI:
+            return
+        self._quet_bao_lan_cuoi = gio
+        cham = sorted(ds, key=lambda x: -x[1])[:3]
+        self._log(
+            "[QUEUE] quet {0} ma het {1:.0f}s (tb {2:.1f}s/ma). Cham nhat: {3}"
+            .format(len(ds), tong, tong / len(ds),
+                    ", ".join("{0} {1:.1f}s".format(t, g) for t, g in cham)),
+            "WARN", "ve3")
+
     def _queue_ve3_loop(self, cfg):
         try:
             while not self.queue_stop_requested:
@@ -9875,7 +9910,27 @@ Get-CimInstance Win32_Process |
                     busy_pair_ids = set(self.queue_active_pairs.keys())
                 free_pairs = [p for p in pairs if p["pair_id"] not in busy_pair_ids]
 
+                # ═══ ĐO CHÍNH VÒNG QUÉT NÀY ═══
+                #
+                # Log 17:14–17:20 ngày 15/08/2026: vòng bò **6 giây một mã**, và
+                # đọc mã không tìm ra nó ở đâu — đo `openpyxl` trên máy dev thì
+                # một quyển 121 cảnh chỉ mất 0,04 giây. Sáu giây kia là số ĐO
+                # trên máy người dùng, nên phải đo Ở ĐÓ mới biết.
+                #
+                # Cái giá của việc không biết rất thật: một vòng quét 72 mã mất
+                # bảy phút, nên mã nằm cuối danh sách gần như không bao giờ tới
+                # lượt — và vì mã video nằm đầu, trạm ảnh đói (`image-only: 1`
+                # trên 72 mã, `Scene OK: 0`).
+                #
+                # Đo bằng cách chấm giờ ở ĐẦU mỗi vòng lặp rồi trừ ở vòng sau:
+                # thân vòng dài hai trăm dòng với hàng chục lối `continue`, bọc
+                # `try/finally` quanh nó là mời một lỗi mới vào chỗ nhạy nhất.
+                _mach = {"moc": 0.0, "ten": "", "ds": []}
                 for pd in self._queue_projects_ve3():
+                    _gio_nay = _time.monotonic()
+                    if _mach["moc"]:
+                        _mach["ds"].append((_mach["ten"], _gio_nay - _mach["moc"]))
+                    _mach["moc"], _mach["ten"] = _gio_nay, pd.name
                     if self.queue_stop_requested:
                         break
                     for stale_name in ("excel", "ve3"):
@@ -10103,6 +10158,8 @@ Get-CimInstance Win32_Process |
                         self.queue_ve3_tasks[pd.name] = task
                     task.start()
                     free_pairs = [p for p in free_pairs if p["pair_id"] != pair["pair_id"]]
+
+                self._bao_nhip_quet(_mach["ds"])
 
                 with self.queue_lock:
                     active_count = len(self.queue_ve3_tasks)
