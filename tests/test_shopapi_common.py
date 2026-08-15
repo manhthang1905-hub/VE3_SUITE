@@ -824,3 +824,81 @@ def test_luon_duoc_it_nhat_MOT_cho(sc, tmp_path):
     """Mã bé giữa một đám mã to vẫn phải nhúc nhích được, không đứng im."""
     d = _dat_nhip(tmp_path, "video", [1] + [900] * 8)
     assert sc.chia_theo_viec("video", 40, 1, thu_muc=d) >= 1
+
+
+# ── `concurrent_jobs` là TỔNG, phải tự trừ số đang chạy ──────────────────────
+
+
+def _me_chay(loai, running):
+    return {"limits": {"concurrent_jobs_detail": {loai: {"running": running}}}}
+
+
+@pytest.fixture
+def khac_that(nhip_song_rieng):
+    """Bản THẬT của `nguoi_khac_dang_chay` — fixture tự động đã thay nó."""
+    import conftest
+    return conftest._con_tho_that["khac"]
+
+
+def test_tru_dung_phan_NGUOI_KHAC_chu_khong_tru_ca_running(sc, monkeypatch, khac_that):
+    """`running` đã gồm job của chính mình. Trừ trọn là tự bóp mình về 0.
+
+    Mỗi lần mình gửi thêm thì `running` tăng đúng chừng ấy; nếu trần trừ trọn
+    `running` thì trần tụt đúng chừng ấy, và mẻ không bao giờ lớn lên được.
+    Lấy `running - của_mình` ra phần NGƯỜI KHÁC thì con số đứng yên khi mình
+    gửi thêm — đúng như nó phải thế.
+    """
+    monkeypatch.setattr(sc, "doc_v1_me_chung", lambda **kw: _me_chay("video", 100))
+    assert khac_that("video", dang_bay_cua_toi=40) == 60
+    assert khac_that("video", dang_bay_cua_toi=100) == 0
+    # Mình gửi thêm 20 (running 100 -> 120) thì phần người khác KHÔNG đổi.
+    monkeypatch.setattr(sc, "doc_v1_me_chung", lambda **kw: _me_chay("video", 120))
+    assert khac_that("video", dang_bay_cua_toi=60) == 60
+
+
+def test_hoi_khong_duoc_thi_None_de_nguoi_goi_bo_qua_buoc_tru(sc, monkeypatch, khac_that):
+    """Không rõ thì đừng đoán: trừ bừa là tự bóp cả mẻ vì một lỗi mạng."""
+    monkeypatch.setattr(sc, "doc_v1_me_chung", lambda **kw: {})
+    assert khac_that("video", dang_bay_cua_toi=10) is None
+
+
+def test_running_am_hoac_rac_KHONG_lam_tran_am(sc, monkeypatch, khac_that):
+    monkeypatch.setattr(sc, "doc_v1_me_chung", lambda **kw: _me_chay("video", 5))
+    assert khac_that("video", dang_bay_cua_toi=999) == 0
+
+
+# ── Ba cửa cùng cho ra `429`, cách chữa ngược nhau ───────────────────────────
+
+
+class _LoiGia(Exception):
+    def __init__(self, ten, code="", retry_after=None):
+        self.__class__ = type(ten, (_LoiGia,), {})
+        self.code = code
+        self.retry_after = retry_after
+
+
+def test_resource_exhausted_KHONG_bi_doc_thanh_gui_qua_nhanh(sc):
+    """Máy chủ nói rõ 15/08/2026: đó là mã CỦA WORKER, không phải của cửa vào.
+
+    Job đã được NHẬN rồi nhà máy mới hết chỗ giữa chừng — hệ thống phía sau quá
+    tải, không phải client rót nhanh quá. Ghìm nhịp rót để chữa nó là kéo nhầm
+    cần: rót chậm lại không làm nhà máy rộng ra.
+    """
+    e = _LoiGia("JobFailedError", code="resource_exhausted")
+    n = sc.phan_loai_nghen(e)
+    assert n is not None and n.ma == 429
+    assert n.ly_do == "resource_exhausted", "mat ly do -> nhanh xu ly keo nham can"
+
+
+def test_queue_full_giu_duoc_ly_do_va_Retry_After(sc):
+    """Hàng chờ riêng của khách đầy: chờ hàng vơi, rót chậm lại không giúp gì."""
+    e = _LoiGia("RateLimitError", code="queue_full", retry_after=7)
+    n = sc.phan_loai_nghen(e)
+    assert n.ma == 429 and n.ly_do == "queue_full" and n.cho == 7
+
+
+def test_rate_limit_thuong_van_la_gui_qua_nhanh(sc):
+    """Vượt `requests_per_minute` thì đúng là rót nhanh quá — phải ghìm."""
+    e = _LoiGia("RateLimitError")
+    n = sc.phan_loai_nghen(e)
+    assert n.ma == 429 and n.ly_do not in ("queue_full", "resource_exhausted")

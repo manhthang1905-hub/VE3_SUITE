@@ -1080,3 +1080,36 @@ def test_mep_that_CO_HAN_khong_thanh_xieng(tran_gia, nhat_ky, sc):
     assert 0.5 < sb.SAT_TRAN < 1.0, (
         "nguong 'sat tran' phai duoi 1: so job dang bay dao dong quanh tran "
         "chu khong dung yen dung o do")
+
+
+def test_resource_exhausted_KHONG_ghim_nhip_ROT(tran_gia, nhat_ky, sc, me_nhanh):
+    """Nhịp RÓT (`ThungGui`) chỉ được hạ khi đúng là rót quá nhanh.
+
+    `resource_exhausted` là nhà máy quá tải phía sau, `queue_full` là hàng chờ
+    của khách đầy — cả hai rót chậm lại đều không giúp gì, mà giá phải trả rất
+    thật: nhịp rót chỉ bò lại lên bằng những lô trơn tru, mà lô video thì 60–90
+    giây một cái.
+    """
+    tran_gia(400)      # tran rong -> khong roi vao nhanh "sat tran"
+    truoc = []
+
+    def _chay(v):
+        if v in (2, 3, 4, 5, 6, 7):
+            raise sc.BiNghen(429, ly_do="resource_exhausted")
+        return v
+
+    import shopapi_batch as _sb
+    goc = _sb.ThungGui.bi_chan
+
+    def _theo_doi(self, *a, **k):
+        truoc.append(1)
+        return goc(self, *a, **k)
+
+    _sb.ThungGui.bi_chan = _theo_doi
+    try:
+        sb.chay_ca_me(list(range(20)), _chay, "image", log=nhat_ky, **me_nhanh)
+    finally:
+        _sb.ThungGui.bi_chan = goc
+
+    assert not truoc, (
+        "ghim nhip rot vi nha may qua tai -> keo nham can, va bo lai rat lau")

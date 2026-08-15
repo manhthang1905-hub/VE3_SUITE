@@ -165,8 +165,11 @@ class BiNghen(Exception):
     khác nhau: 429 chia đôi nhịp, 503 dừng hẳn rồi thăm dò lại bằng đúng 1 job.
     """
 
-    def __init__(self, ma, cho=None, goc=None):
+    def __init__(self, ma, cho=None, goc=None, ly_do=""):
         self.ma = int(ma)
+        #: `code` máy chủ gửi kèm. Ba cửa khác nhau cùng cho ra `429`, và cách
+        #: chữa của chúng ngược nhau — xem :func:`phan_loai_nghen`.
+        self.ly_do = str(ly_do or "")
         #: `Retry-After` máy chủ gửi kèm (giây), hoặc `None` khi không có.
         self.cho = cho
         #: Ngoại lệ gốc của SDK — giữ lại để ghi log cho đúng nguyên văn.
@@ -1210,7 +1213,17 @@ def phan_loai_nghen(exc):
         return exc
     ten = type(exc).__name__
     if ten == "RateLimitError":
-        return BiNghen(429, getattr(exc, "retry_after", None), exc)
+        # BA CỬA KHÁC NHAU CÙNG CHO RA `429`, và cách chữa ngược nhau. Máy chủ
+        # xác nhận 15/08/2026:
+        #
+        #   `queue_full`      hàng chờ RIÊNG của khách đầy -> chờ hàng vơi;
+        #                     hạ nhịp GỬI không giúp gì, hàng vẫn đầy chừng ấy.
+        #   rate limit        vượt `requests_per_minute` -> đúng là gửi quá
+        #                     nhanh, phải ghìm nhịp rót.
+        #
+        # Gộp làm một thì một nửa số lần ta kéo sai cần.
+        return BiNghen(429, getattr(exc, "retry_after", None), exc,
+                       ly_do=str(getattr(exc, "code", "") or "rate_limit"))
     if ten in ("EngineUnavailableError", "ServiceUnavailableError"):
         # 503: job KHÔNG được tạo, KHÔNG trừ tiền — chờ rồi gửi lại là đủ.
         return BiNghen(503, getattr(exc, "retry_after", None), exc)
@@ -1224,9 +1237,18 @@ def phan_loai_nghen(exc):
         # tức là đạp ga đúng lúc máy chủ vừa nói hết chỗ.
         #
         # Job kiểu này **đã được hoàn 100% tiền**, nên trả việc về đầu hàng chờ
-        # là đúng cả về tiền lẫn về nhịp. Cho mã `429` để vòng dò chia đôi nhịp
-        # (không phải `503`: nhà máy vẫn sống, chỉ là đang chật).
-        return BiNghen(429, getattr(exc, "retry_after", None), exc)
+        # là đúng cả về tiền lẫn về nhịp.
+        #
+        # ⚠ NHƯNG NÓ KHÔNG PHẢI "GỬI QUÁ NHANH". Máy chủ nói rõ 15/08/2026:
+        # `resource_exhausted` là mã CỦA WORKER, không phải của cửa vào API —
+        # job đã được NHẬN rồi, nhà máy mới hết chỗ giữa chừng. Nghĩa là hệ
+        # thống phía sau đang quá tải, chứ không phải client rót nhanh quá.
+        #
+        # Ghìm nhịp rót để chữa nó là kéo nhầm cần: rót chậm lại không làm nhà
+        # máy rộng ra. Vẫn giữ mã `429` (nhà máy còn sống, khác `503`), nhưng
+        # `ly_do` để nhánh xử lý biết mà đừng đụng vào nhịp gửi.
+        return BiNghen(429, getattr(exc, "retry_after", None), exc,
+                       ly_do="resource_exhausted")
     return None
 
 
@@ -1353,6 +1375,54 @@ def tran_cung_may_chu(loai, api_key=None, client=None, bay_gio=None):
     with _tran_cung_khoa:
         _tran_cung_nho[loai] = (v, gio)
     return v
+
+
+def doc_dang_chay(loai, api_key=None, client=None):
+    """Số job loại này đang chạy của CẢ TÀI KHOẢN. `None` = hỏi không được.
+
+    Bao gồm job của MỌI máy đang dùng chung khoá, không chỉ máy này.
+    """
+    me = doc_v1_me_chung(api_key=api_key, client=client, timeout=15.0)
+    if not me:
+        return None
+    chi_tiet = _lay(_lay(_lay(me, "limits"), "concurrent_jobs_detail"), loai)
+    if chi_tiet is None:
+        return None
+    v = _lay(chi_tiet, "running")
+    if v is None:
+        return None
+    return max(0, _so(v, 0))
+
+
+def nguoi_khac_dang_chay(loai, dang_bay_cua_toi=0, api_key=None, client=None):
+    """Bao nhiêu job loại này đang chạy mà KHÔNG phải của mẻ này. `None` = không rõ.
+
+    ═══ `concurrent_jobs` LÀ TỔNG, KHÔNG PHẢI SỐ CHỖ CÒN TRỐNG ═══
+
+    Máy chủ xác nhận 15/08/2026: `limits.concurrent_jobs.<loại>` lấy thẳng từ
+    `tran.<loại>.per_user` — **tổng** số job một khách được chạy song song.
+    Client phải tự trừ số đang chạy mới ra số gửi thêm được.
+
+    Tool trước đây coi nó là số chỗ trống. Với MỘT máy thì sai số còn nuốt được;
+    với HAI máy chung một khoá thì hỏng hẳn: mỗi máy đếm tiến trình của riêng
+    mình (`NhipSong` ghi file trong thư mục tạm CỦA MÁY ĐÓ), nên cả hai đều
+    tưởng mình sở hữu trọn hạn mức. Tổng gửi ra gấp đôi hạn mức, và `429` là
+    chuyện chắc chắn. Đo 12:00–12:28 ngày 15/08/2026: 399 cú `429` trong 28 phút
+    trên đúng một khoá đang chạy ở hai máy.
+
+    `running` của máy chủ đã đếm CẢ HAI MÁY, nên trừ nó đi là hết chồng chéo —
+    không cần máy này biết gì về máy kia.
+
+    ⚠ TRỪ PHẦN *NGƯỜI KHÁC*, KHÔNG TRỪ CẢ `running`. `running` đã bao gồm job
+    của chính mình. Trừ trọn thì mỗi lần mình gửi thêm, trần của mình lại tụt
+    đúng chừng ấy — tự bóp mình về 0. Lấy `running - của_mình` ra "phần người
+    khác" thì con số đứng yên khi mình gửi thêm, đúng như nó phải thế.
+    """
+    tong = doc_dang_chay(loai, api_key=api_key, client=client)
+    if tong is None:
+        return None
+    khac = max(0, tong - max(0, int(dang_bay_cua_toi)))
+    return khac
 
 
 def con_tho_khong(loai, api_key=None, client=None):

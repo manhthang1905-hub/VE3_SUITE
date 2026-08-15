@@ -585,7 +585,8 @@ def _tu_dieu_tiet_mac_dinh():
 
 
 def _hoi_tran(loai, tran_tool=None, client=None, api_key=None, log=print,
-              truoc_do=None, so_ban=None, tu_dieu_tiet=None, viec_con_lai=None):
+              truoc_do=None, so_ban=None, tu_dieu_tiet=None, viec_con_lai=None,
+              dang_bay=None):
     """Một lời hỏi `/v1/me`, đã chặn trên. Trả `0` khi nhà máy đang dừng.
 
     `truoc_do` là trần đọc được lần gần nhất. Hỏi không được thì trả LẠI con số
@@ -678,6 +679,26 @@ def _hoi_tran(loai, tran_tool=None, client=None, api_key=None, log=print,
     except (TypeError, ValueError):
         cung = int(_sc.tran_cung(loai))
     n = min(tran, cung)
+
+    # ═══ TRỪ PHẦN NGƯỜI KHÁC ĐANG CHẠY ═══
+    #
+    # Máy chủ xác nhận 15/08/2026: `concurrent_jobs.<loại>` là TỔNG số job một
+    # khách được chạy song song, KHÔNG phải số chỗ còn trống. Client phải tự trừ
+    # số đang chạy.
+    #
+    # Bỏ qua bước này thì hai máy dùng chung một khoá đều tưởng mình sở hữu trọn
+    # hạn mức — `NhipSong` chỉ đếm tiến trình của MÁY MÌNH. Tổng gửi ra gấp đôi,
+    # và `429` là chuyện chắc chắn: 399 cú trong 28 phút, đo 12:00–12:28.
+    #
+    # `running` của máy chủ đã đếm cả hai máy, nên trừ nó là hết chồng chéo mà
+    # máy này không cần biết gì về máy kia.
+    try:
+        _khac = _sc.nguoi_khac_dang_chay(loai, dang_bay_cua_toi=dang_bay or 0,
+                                         api_key=api_key, client=client)
+    except Exception:
+        _khac = None
+    if _khac:
+        n = max(1, n - int(_khac))
 
     if tu_dieu_tiet:
         # ═══ CHIA PHẦN THAY VÌ GÕ CỨNG ═══
@@ -1236,7 +1257,7 @@ def chay_ca_me(viec, chay_mot, loai, tran_tool=None, client=None, api_key=None,
             return _tran_moi_nhat[0]
         t = _hoi_tran(loai, tran_tool, client=client, api_key=api_key, log=log,
                       truoc_do=_tran_moi_nhat[0], tu_dieu_tiet=tu_dieu_tiet,
-                      viec_con_lai=_con)
+                      viec_con_lai=_con, dang_bay=len(dang_bay))
         # `0` = nhà máy ĐANG DỪNG. KHÔNG nhớ nó: nhớ số 0 thì lượt sau đọc phải
         # số 0 đã cũ và tưởng nhà máy vẫn chết, trong khi nó có thể vừa sống lại.
         if t > 0:
@@ -1354,10 +1375,26 @@ def chay_ca_me(viec, chay_mot, loai, tran_tool=None, client=None, api_key=None,
                 elif gia_tri.ma == 429:
                     nhip.bi_chan(gia_tri.cho)
                     cong.bi_nghen(gia_tri.cho)
-                    # ⚠ HẠ CẢ NHỊP GỬI, không chỉ số job song song. `429` nghĩa
-                    # là GỬI QUÁ NHANH — hạ số job đang bay mà giữ nguyên nhịp
-                    # rót thì lát nữa lại đụng đúng bức tường đó.
-                    thung.bi_chan()
+                    # ⚠ CHỈ HẠ NHỊP RÓT KHI ĐÚNG LÀ RÓT QUÁ NHANH.
+                    #
+                    # Ba cửa cùng cho ra `429` và cách chữa ngược nhau (máy chủ
+                    # xác nhận 15/08/2026):
+                    #
+                    #   rate limit          vượt `requests_per_minute` — đúng
+                    #                       là rót nhanh quá, ghìm lại.
+                    #   queue_full          hàng chờ RIÊNG của khách đầy — rót
+                    #                       chậm lại không làm hàng vơi đi.
+                    #   resource_exhausted  mã CỦA WORKER: job đã được nhận rồi
+                    #                       nhà máy mới hết chỗ giữa chừng. Hệ
+                    #                       thống phía sau quá tải, không phải
+                    #                       lỗi nhịp rót.
+                    #
+                    # Hai cái sau mà đi ghìm nhịp rót là kéo nhầm cần, và giá
+                    # phải trả rất thật: nhịp rót chỉ bò lại lên bằng những lô
+                    # trơn tru, mà lô video thì 60–90 giây một cái.
+                    if str(getattr(gia_tri, "ly_do", "")) not in (
+                            "queue_full", "resource_exhausted"):
+                        thung.bi_chan()
                 elif _sc.con_tho_khong(loai, client=client) is True:
                     # `503` mà nhà máy VẪN CÒN THỢ = chen chúc nhất thời, không
                     # phải chết. Đối xử như `429`: chia đôi rồi bò lên lại.

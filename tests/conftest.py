@@ -76,6 +76,12 @@ def nhip_song_rieng(monkeypatch, tmp_path):
     # nhà máy chết hẳn hay chỉ chen chúc. Mặc định `None` ("hỏi không được") giữ
     # nguyên hành vi cũ là dừng hẳn, nên bài kiểm nào không quan tâm tới phân
     # biệt đó vẫn đo đúng thứ nó định đo. Bài nào quan tâm thì tự đặt lại.
+    # `nguoi_khac_dang_chay` cũng hỏi `GET /v1/me` THẬT. `None` = "không rõ" và
+    # nhánh trần bỏ qua bước trừ — đúng hành vi cũ, nên bài kiểm nào không quan
+    # tâm tới việc chia khoá giữa nhiều máy vẫn đo đúng thứ nó định đo.
+    _con_tho_that["khac"] = _sc.nguoi_khac_dang_chay
+    monkeypatch.setattr(_sc, "nguoi_khac_dang_chay",
+                        lambda loai, dang_bay_cua_toi=0, api_key=None, client=None: None)
     _con_tho_that["f"] = _sc.con_tho_khong
     monkeypatch.setattr(_sc, "con_tho_khong",
                         lambda loai, api_key=None, client=None: None)
