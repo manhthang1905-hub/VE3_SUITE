@@ -1425,6 +1425,40 @@ def nguoi_khac_dang_chay(loai, dang_bay_cua_toi=0, api_key=None, client=None):
     return khac
 
 
+def suc_khoe_nha_may(loai, api_key=None, client=None):
+    """Một dòng về nhà máy loại này, để log nói được LỖI CỦA AI.
+
+    ═══ VÌ SAO CẦN ═══
+
+    Log 12:57–13:06 ngày 15/08/2026: gửi 582 job, máy chủ NHẬN 106 (xếp hàng
+    tới vị trí 107), và trong chín phút **không một job nào xong** — video bình
+    thường chỉ 60–90 giây. Đọc log thì chỉ thấy `429 / resource_exhausted` lặp
+    lại, không có lấy một con số nào nói nhà máy đang ra sao.
+
+    Không có dòng này thì mọi lượt chạy kém đều trông giống nhau, và câu hỏi
+    "tool hay nhà máy" phải trả lời bằng phỏng đoán. `workers_online = 0` là
+    dấu vân tay của một nhà máy chết (xem ghi chú `shopapi-nha-may-chet-duoi-tai`)
+    và nó nằm sẵn trong `/v1/me` — chỉ là chưa ai in ra.
+
+    Máy chủ còn viết sẵn `reason` bằng tiếng Việt cho đúng việc này.
+    """
+    me = doc_v1_me_chung(api_key=api_key, client=client, timeout=15.0)
+    chi_tiet = _lay(_lay(_lay(me, "limits"), "concurrent_jobs_detail"), loai)
+    if chi_tiet is None:
+        return "khong doc duoc GET /v1/me"
+    phan = []
+    for khoa, nhan in (("workers_online", "tho online"), ("running", "dang chay"),
+                       ("queued", "xep hang"), ("limit", "han muc"),
+                       ("capacity", "suc chua"), ("accounts_usable", "tai khoan dung duoc")):
+        v = _lay(chi_tiet, khoa)
+        if v is not None:
+            phan.append("{0} {1}".format(nhan, _so(v, 0)))
+    ly_do = _lay(chi_tiet, "reason")
+    if ly_do:
+        phan.append("may chu noi: {0}".format(ly_do))
+    return " | ".join(phan) if phan else "khong co so lieu nha may"
+
+
 def con_tho_khong(loai, api_key=None, client=None):
     """Nhà máy loại này còn thợ online không? `None` = hỏi không được.
 

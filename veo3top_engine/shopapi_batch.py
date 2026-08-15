@@ -569,6 +569,11 @@ SAT_TRAN = 0.85
 #: Nhà máy rộng ra, hay khách khác nghỉ, thì mép cũ thành xiềng.
 MEP_THAT_TTL = 120.0
 
+#: Trong chừng này giây sau cú `429` đầu tiên, mọi cú sau được coi là CÙNG MỘT
+#: ĐỢT và không hạ mép nữa. Cả loạt job đang bay cùng rơi về, mỗi cú thấy
+#: `dang_bay` nhỏ hơn cú trước — ghi hết là mép bị kéo tuột theo đà rơi.
+MEP_MOT_DOT = 20.0
+
 
 #: Tự điều tiết BẬT sẵn. Tắt bằng `SHOPAPI_TU_DIEU_TIET=0` khi cần ghim cứng
 #: số luồng để đo đạc — chứ không phải để chạy thật.
@@ -1066,7 +1071,10 @@ class DoHieuQua:
         """Hết cửa sổ thì chốt. Trả `(sản lượng/phút, số cùng lúc)` hoặc `None`."""
         gio = self._dong_ho()
         troi = gio - self._moc
-        if troi < self.cua_so:
+        if troi < self.cua_so or troi <= 0:
+            # ⚠ `troi <= 0` LÀ CỬA THẬT, KHÔNG PHẢI PHÒNG XA. Cửa sổ 0 giây
+            # (hoặc một đồng hồ tiêm vào chưa nhích) lọt qua vế đầu rồi chia
+            # cho 0 ngay dòng dưới, và cả mẻ chết vì một phép đo.
             return None
         san_luong = 60.0 * self._xong / troi
         cung_luc = int(round(self._tich / troi)) if troi > 0 else 0
@@ -1213,9 +1221,31 @@ def chay_ca_me(viec, chay_mot, loai, tran_tool=None, client=None, api_key=None,
         return len(dang_bay) >= tr * SAT_TRAN
 
     def _ghi_mep_that(bay):
-        """Nhớ mức vừa chạm `429`. Lấy mức THẤP NHẤT trong quãng còn hiệu lực."""
-        muc = max(1, int(bay) - 1)
+        """Nhớ mức vừa chạm `429` — CHỈ cú ĐẦU của mỗi đợt.
+
+        ⚠ ĐỪNG GHI THEO TỪNG CÚ. Một đợt nghẽn không đến lẻ một cú: cả loạt
+        job đang bay cùng rơi về, và mỗi cú rơi thấy `dang_bay` nhỏ hơn cú
+        trước. Ghi hết thì mép bị kéo tuột theo đúng đà rơi đó.
+
+        Bắt được nguyên văn trong log 12:59:46–12:59:48 ngày 15/08/2026, mã
+        TH1-0329::
+
+            ghi mep that 82
+            ghi mep that 81
+            ghi mep that 80
+            ...
+            ghi mep that 66
+
+        Mười sáu bậc trong hai giây, và nó còn đi tiếp tới sàn. Trong khi sự
+        thật chỉ có MỘT: máy chủ từ chối lúc đang bay 83, nên mép là 82. Mấy
+        cú sau là hệ quả của chính cú đầu, không phải tin mới.
+        """
         gio = time.monotonic()
+        con_trong_dot = (_mep_that[1] > 0 and (gio - _mep_that[1]) <= MEP_MOT_DOT)
+        if con_trong_dot:
+            _mep_that[1] = gio        # đợt còn đang diễn ra, gia hạn thôi
+            return
+        muc = max(1, int(bay) - 1)
         if _mep_that[0] <= 0 or (gio - _mep_that[1]) > MEP_THAT_TTL:
             _mep_that[0] = muc
         else:
@@ -1506,6 +1536,16 @@ def chay_ca_me(viec, chay_mot, loai, tran_tool=None, client=None, api_key=None,
                 .format(loai, _sl, _cl,
                         " -> HA tran xuong {0} (dong hon ma ra it hon)".format(hieu_qua.cho_phep())
                         if hieu_qua.cho_phep() else ""))
+            # KHÔNG RA GÌ MÀ VẪN CÓ JOB ĐANG BAY: in số liệu nhà máy ra, đừng
+            # bắt người đọc log đoán. Đo 12:57–13:06 ngày 15/08/2026: gửi 582
+            # job, máy chủ nhận 106, chín phút KHÔNG một job nào xong — mà log
+            # không có lấy một con số nào nói nhà máy đang ra sao.
+            if _sl <= 0 and dang_bay:
+                try:
+                    log("API shopapi: me {0} - KHONG ra hang nao. Nha may: {1}"
+                        .format(loai, _sc.suc_khoe_nha_may(loai, client=client)), "WARN")
+                except Exception:
+                    pass
         n = max(0, int(nhip.cho_phep()) - len(dang_bay))
         _tran_hq = hieu_qua.cho_phep()
         if _tran_hq:

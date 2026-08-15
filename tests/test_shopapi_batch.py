@@ -1113,3 +1113,71 @@ def test_resource_exhausted_KHONG_ghim_nhip_ROT(tran_gia, nhat_ky, sc, me_nhanh)
 
     assert not truoc, (
         "ghim nhip rot vi nha may qua tai -> keo nham can, va bo lai rat lau")
+
+
+def test_mot_DOT_nghen_chi_ghi_mep_MOT_lan(tran_gia, nhat_ky, sc, me_nhanh):
+    """Cả loạt job đang bay cùng rơi về là MỘT tin, không phải mười sáu tin.
+
+    Bắt được nguyên văn trong log 12:59:46–12:59:48 ngày 15/08/2026, TH1-0329::
+
+        ghi mep that 82
+        ghi mep that 81
+        ...
+        ghi mep that 66
+
+    Mười sáu bậc trong hai giây, và còn đi tiếp tới sàn. Sự thật chỉ có MỘT:
+    máy chủ từ chối lúc đang bay 83, nên mép là 82. Mấy cú sau là hệ quả của
+    chính cú đầu — ghi hết là mép bị kéo tuột theo đúng đà rơi.
+    """
+    tran_gia(30)
+
+    def _chay(v):
+        # CẢ LOẠT cùng bị chặn: đúng hình dạng của một đợt nghẽn thật, và là
+        # cách duy nhất chắc chắn cú ĐẦU rơi về lúc mẻ còn đang đầy trần.
+        raise sc.BiNghen(429, ly_do="resource_exhausted")
+
+    sb.chay_ca_me(list(range(40)), _chay, "image", log=nhat_ky, **me_nhanh)
+
+    mep = [int(m.split("ghi mep that ")[1].split(",")[0])
+           for _lv, m in nhat_ky.dong if "ghi mep that " in m]
+    assert mep, "khong ghi mep nao -> nhanh sat tran khong chay"
+    assert len(set(mep)) <= 2, (
+        "mep bi keo tuot theo da roi cua ca loat job: {0}".format(mep))
+
+
+def test_KHONG_ra_hang_thi_in_so_lieu_NHA_MAY(tran_gia, nhat_ky, sc, monkeypatch, me_nhanh):
+    """Đừng bắt người đọc log đoán "tool hay nhà máy".
+
+    Đo 12:57–13:06 ngày 15/08/2026: gửi 582 job, máy chủ nhận 106, chín phút
+    KHÔNG một job nào xong — mà log không có lấy một con số nào nói nhà máy
+    đang ra sao. `workers_online = 0` là vân tay của nhà máy chết, và nó nằm
+    sẵn trong `/v1/me`.
+    """
+    tran_gia(8)
+    monkeypatch.setattr(sc, "suc_khoe_nha_may",
+                        lambda loai, api_key=None, client=None: "tho online 0 | dang chay 106")
+
+    # Ép `chot_so` trả "0 job/phút" ngay lô đầu. Vặn `CUA_SO` xuống thật nhỏ
+    # thì bài kiểm bám ĐỒNG HỒ THẬT — `DoHieuQua` dùng `time.monotonic`, không
+    # dùng đồng hồ giả của `me_nhanh` — nên có lượt chạy nhanh quá, cửa sổ chưa
+    # kịp trôi, và bài đỏ ở một chỗ chẳng liên quan.
+    monkeypatch.setattr(sb.DoHieuQua, "chot_so", lambda self: (0.0, 5))
+
+    def _chay(v):
+        raise sc.BiNghen(429, ly_do="resource_exhausted")
+
+    sb.chay_ca_me(list(range(10)), _chay, "image", log=nhat_ky, **me_nhanh)
+
+    assert any("KHONG ra hang nao" in m and "tho online 0" in m
+               for _lv, m in nhat_ky.dong), (
+        "san luong 0 ma log khong noi gi ve nha may -> lai phai doan")
+
+
+def test_cua_so_0_giay_KHONG_lam_chet_ca_me():
+    """`troi <= 0` là cửa thật: cửa sổ 0 giây lọt qua vế `troi < cua_so`.
+
+    Bắt được lúc viết bài kiểm cho dòng sức khoẻ nhà máy — `ZeroDivisionError`
+    ném từ giữa vòng lặp mẻ, tức cả mẻ chết vì một phép ĐO.
+    """
+    hq = sb.DoHieuQua(cua_so=0.0, dong_ho=lambda: 1000.0)
+    assert hq.chot_so() is None
