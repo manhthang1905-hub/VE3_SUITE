@@ -8687,7 +8687,28 @@ Get-CimInstance Win32_Process |
             st = ep.stat()
             cache_sig = (float(st.st_mtime), int(st.st_size))
             cached = self._project_state_cache.get(cache_key)
-            if cached and cached.get("sig") == cache_sig and now - float(cached.get("ts", 0.0) or 0.0) < self._project_state_cache_ttl:
+            # ═══ CHỮ KÝ KHỚP LÀ ĐỦ, ĐỪNG BẮT NÓ HẾT HẠN THEO GIỜ ═══
+            #
+            # `sig` là `(mtime, size)` của chính file Excel. Khớp nghĩa là file
+            # KHÔNG hề đổi kể từ lần đọc trước — dữ liệu cũ vẫn đúng từng chữ.
+            # Thêm hạn 30 giây lên trên đó không làm nó đúng hơn, chỉ bắt đọc
+            # lại bằng `openpyxl` một quyển 100+ cảnh.
+            #
+            # Cái giá đo được trong log 12:57–13:06 ngày 15/08/2026: vòng phát
+            # việc bò **~9 giây một mã**. Trong chín phút nó xét được 82/109 mã
+            # — 27 mã cuối danh sách KHÔNG HỀ được nhìn tới. Hai mươi chỗ đầu
+            # rơi hết vào mã video nằm đầu danh sách, nên **không một mã ảnh
+            # nào được phát việc**: `image-only: 0`, `me image lo: 0`.
+            #
+            # Nhìn từ giao diện thì đúng như người dùng nói — "bên ảnh xử lý ít
+            # như kiểu có giới hạn gì đó". Giới hạn đó là cái hạn 30 giây này.
+            #
+            # Hạn giờ chỉ còn dùng khi KHÔNG `stat` nổi file (`cache_sig is
+            # None`) — lúc đó không có gì để so, đành tin theo thời gian.
+            if cached and cache_sig is not None and cached.get("sig") == cache_sig:
+                return cached.get("data")
+            if (cached and cache_sig is None
+                    and now - float(cached.get("ts", 0.0) or 0.0) < self._project_state_cache_ttl):
                 return cached.get("data")
         except Exception:
             cache_sig = None
