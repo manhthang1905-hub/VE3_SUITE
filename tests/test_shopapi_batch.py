@@ -1008,3 +1008,75 @@ def test_hoi_khong_duoc_thi_chon_phia_AN_TOAN(tran_gia, nhat_ky, ngu_gia, sc, mo
     sb.chay_ca_me(list(range(4)), _chay, "image", log=nhat_ky, ngu=ngu_gia,
                   cho_khi_dung=30.0, cho_toi_da=90.0)
     assert any("DANG DUNG" in m for _lv, m in nhat_ky.dong)
+
+
+# ── `429` NGAY TẠI TRẦN: trần sai, không phải nhịp sai ───────────────────────
+
+
+def test_429_sat_tran_KHONG_dap_nhip_ve_san(tran_gia, nhat_ky, sc, me_nhanh):
+    """`nhip` là MỤC TIÊU SỐ JOB CÙNG LÚC, không phải cỡ lô.
+
+    Chia đôi nó khi ta đang đứng đúng ở trần là trừng phạt nhầm thứ: số job
+    đang bay đã bị trần chặn rồi, cú `429` chỉ nói trần đó cao hơn sự thật.
+
+    Đo thật 12:16–12:17 ngày 15/08/2026, TH1-0328 làm ảnh::
+
+        12:16:29  lo 30 -> 57 dang bay / tran 58
+        12:16:50  429 | nhip 29.0 cho phep 29
+        12:17:22  429 | nhip 1.0  cho phep 1
+
+    Nửa phút, nhịp 29 xuống 1. Đường về đòi im tiếng 90 giây liền, điều gần như
+    không xảy ra khi đang ngồi ngay mép trần. Cả mẻ 399 cú `429` trong 28 phút,
+    sản lượng còn 4 ảnh/phút.
+    """
+    tran_gia(20)
+    so_lan = {}
+
+    def _chay(v):
+        so_lan[v] = so_lan.get(v, 0) + 1
+        # Trần rao 20, mép THẬT là 17: năm việc cuối của lô đầu bị chặn.
+        # Đường cũ chia đôi nhịp năm lần liền: 20 -> 10 -> 5 -> 2 -> 1 -> 1.
+        if v in (15, 16, 17, 18, 19) and so_lan[v] == 1:
+            raise sc.BiNghen(429)
+        return v
+
+    ket = sb.chay_ca_me(list(range(60)), _chay, "image", log=nhat_ky, **me_nhanh)
+
+    assert ket == list(range(60)), "429 KHONG duoc lam mat viec"
+    assert any("429 NGAY TAI TRAN" in m for _lv, m in nhat_ky.dong), (
+        "khong nhan ra la 429 sat tran -> doc nham thanh 'gui qua nhanh'")
+    lo = _lo_da_ban(nhat_ky)
+    # Mất 60 việc mà phải chia thành rất nhiều lô nghĩa là nhịp đã bị đập về
+    # sàn: mẻ bò từng job một thay vì lấp lại trần ngay khi có chỗ.
+    assert len(lo) <= 12, f"nhip bi dap ve san -> {len(lo)} lo cho 60 viec: {lo}"
+
+
+def test_429_XA_tran_VAN_chia_doi_nhip(tran_gia, nhat_ky, sc, me_nhanh):
+    """Còn xa trần mà đã `429` thì đúng là gửi quá nhanh — phải hạ nhịp.
+
+    Nới cả trường hợp này là quay lại đúng lỗi cũ: đập vào tường rồi lại đập.
+    """
+    tran_gia(400)      # tran rat rong -> khong bao gio sat tran
+
+    def _chay(v):
+        if v in (2, 3, 4):
+            raise sc.BiNghen(429)
+        return v
+
+    sb.chay_ca_me(list(range(30)), _chay, "image", log=nhat_ky, **me_nhanh)
+    lo = _lo_da_ban(nhat_ky)
+    assert min(lo[1:], default=99) < max(lo[:-1], default=0), (
+        f"429 xa tran ma nhip khong giam: {lo}")
+
+
+def test_mep_that_CO_HAN_khong_thanh_xieng(tran_gia, nhat_ky, sc):
+    """Một con số chỉ đi xuống là cái bẫy đã sập một lần ở lớp này.
+
+    Ngân sách luồng từng bị ghim ở sàn rồi không bao giờ tự gỡ. Mép thật đo
+    được cũng phải hết hạn: nhà máy rộng ra, hay khách khác nghỉ, thì mép cũ
+    thành xiềng.
+    """
+    assert sb.MEP_THAT_TTL > 0, "mep that khong co han -> mot lan 429 ghim mai"
+    assert 0.5 < sb.SAT_TRAN < 1.0, (
+        "nguong 'sat tran' phai duoi 1: so job dang bay dao dong quanh tran "
+        "chu khong dung yen dung o do")

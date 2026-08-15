@@ -559,6 +559,16 @@ NHIP_KIEM_DUNG = 2.0
 #: 15 giây: trần máy chủ đổi theo số khách đang chờ, không đổi theo từng giây.
 TRAN_TTL = 15.0
 
+#: Coi là "đang đứng sát trần" từ mức này trở lên. Dùng để đọc đúng nghĩa một
+#: cú `429`: sát trần thì đó là TRẦN SAI, còn xa trần mới là GỬI QUÁ NHANH.
+#: 0,85 vì số job đang bay dao động quanh trần chứ không đứng yên đúng ở đó.
+SAT_TRAN = 0.85
+
+#: Mép thật đo được sống bao lâu. Phải CÓ HẠN: một con số chỉ đi xuống là cái
+#: bẫy đã sập một lần ở lớp này (ngân sách luồng ghim ở sàn rồi không tự gỡ).
+#: Nhà máy rộng ra, hay khách khác nghỉ, thì mép cũ thành xiềng.
+MEP_THAT_TTL = 120.0
+
 
 #: Tự điều tiết BẬT sẵn. Tắt bằng `SHOPAPI_TU_DIEU_TIET=0` khi cần ghim cứng
 #: số luồng để đo đạc — chứ không phải để chạy thật.
@@ -1171,6 +1181,39 @@ def chay_ca_me(viec, chay_mot, loai, tran_tool=None, client=None, api_key=None,
     thung = ThungGui()
     #: Trần đọc gần nhất + lúc đọc. Vòng lặp hỏi qua `_doc_tran`, không hỏi thẳng.
     _tran_moi_nhat = [0, 0.0]
+    #: Mép THẬT vừa đo được: số job đang bay lúc máy chủ nói `429`. `[mức, lúc]`.
+    _mep_that = [0, 0.0]
+
+    def _sat_tran():
+        """Đang đứng sát trần chưa? Dùng để đọc đúng nghĩa một cú `429`."""
+        tr = _tran_moi_nhat[0]
+        if tr <= 0:
+            return False
+        return len(dang_bay) >= tr * SAT_TRAN
+
+    def _ghi_mep_that(bay):
+        """Nhớ mức vừa chạm `429`. Lấy mức THẤP NHẤT trong quãng còn hiệu lực."""
+        muc = max(1, int(bay) - 1)
+        gio = time.monotonic()
+        if _mep_that[0] <= 0 or (gio - _mep_that[1]) > MEP_THAT_TTL:
+            _mep_that[0] = muc
+        else:
+            _mep_that[0] = min(_mep_that[0], muc)
+        _mep_that[1] = gio
+
+    def _tran_mep_that():
+        """Mép đã đo, hoặc `0` khi chưa đo / đã cũ.
+
+        ⚠ PHẢI CÓ HẠN. Một con số chỉ đi xuống là cái bẫy đã sập một lần ở lớp
+        này (ngân sách luồng bị ghim ở sàn 24 và không bao giờ tự gỡ). Nhà máy
+        rộng ra, hay khách khác nghỉ, thì mép cũ thành xiềng.
+        """
+        if _mep_that[0] <= 0:
+            return 0
+        if (time.monotonic() - _mep_that[1]) > MEP_THAT_TTL:
+            _mep_that[0] = 0
+            return 0
+        return _mep_that[0]
 
     def _doc_tran():
         """Trần hiện tại, hỏi lại `/v1/me` nhiều nhất mỗi `TRAN_TTL` giây.
@@ -1281,7 +1324,34 @@ def chay_ca_me(viec, chay_mot, loai, tran_tool=None, client=None, api_key=None,
                 # Bị từ chối NGAY Ở CỬA: chưa tốn tiền, việc chưa mất.
                 lai.append(i)
                 lan_nghen[0] = time.monotonic()
-                if gia_tri.ma == 429:
+                if gia_tri.ma == 429 and _sat_tran():
+                    # ═══ `429` NGAY TẠI TRẦN LÀ TRẦN SAI, KHÔNG PHẢI NHỊP SAI ═══
+                    #
+                    # `nhip` là MỤC TIÊU SỐ JOB CÙNG LÚC (`n = nhip.cho_phep() -
+                    # len(dang_bay)`). Chia đôi nó khi ta đang đứng đúng ở trần
+                    # là trừng phạt nhầm thứ: số job đang bay đã bị trần chặn
+                    # rồi, cú `429` chỉ nói trần đó cao hơn sự thật.
+                    #
+                    # Đo thật 12:16–12:17 ngày 15/08/2026, TH1-0328 làm ảnh:
+                    #
+                    #     12:16:29  lo 30 -> 57 dang bay / tran 58   (đang lấp đầy)
+                    #     12:16:50  429 | nhip 29.0 cho phep 29
+                    #     12:17:22  429 | nhip 1.0  cho phep 1
+                    #
+                    # Nửa phút, nhịp 29 -> 1. Mà đường về thì phải im tiếng 90
+                    # giây liền (`can_hoi_nhip`) — điều gần như không xảy ra khi
+                    # ta đang ngồi ngay mép trần. Cả mẻ 399 cú `429` trong 28
+                    # phút, sản lượng còn 4 ảnh/phút.
+                    #
+                    # Việc đúng phải làm: GHI NHỚ mép thật vừa chạm, rồi chờ một
+                    # chỗ trống. Nhịp giữ nguyên để lúc có chỗ là lấp được ngay.
+                    _ghi_mep_that(len(dang_bay))
+                    cong.bi_nghen(gia_tri.cho)
+                    log("API shopapi: me {0} - 429 NGAY TAI TRAN ({1} dang bay, tran rao {2})"
+                        " -> ghi mep that {3}, GIU nhip {4:.0f} de lap lai ngay khi co cho"
+                        .format(loai, len(dang_bay), _tran_moi_nhat[0],
+                                _tran_mep_that(), float(nhip.cho_phep())), "WARN")
+                elif gia_tri.ma == 429:
                     nhip.bi_chan(gia_tri.cho)
                     cong.bi_nghen(gia_tri.cho)
                     # ⚠ HẠ CẢ NHỊP GỬI, không chỉ số job song song. `429` nghĩa
@@ -1403,6 +1473,12 @@ def chay_ca_me(viec, chay_mot, loai, tran_tool=None, client=None, api_key=None,
         _tran_hq = hieu_qua.cho_phep()
         if _tran_hq:
             n = min(n, max(0, _tran_hq - len(dang_bay)))
+        # Mép THẬT vừa đo bằng một cú `429` đáng tin hơn con số máy chủ rao:
+        # nó đến từ lượt gửi thật, ngay lúc này, và đã tính cả khách khác lẫn
+        # các máy khác đang dùng chung khoá.
+        _tran_mep = _tran_mep_that()
+        if _tran_mep:
+            n = min(n, max(0, _tran_mep - len(dang_bay)))
         # ⚠ CẮT THEO SỐ VIỆC CÒN LẠI **TRƯỚC KHI** GIỮ CHỖ, đừng làm ngược.
         # Xin 6 chỗ khi chỉ còn 5 việc là giữ 6 mà chỉ trả 5 — mỗi lượt cuối rò
         # một chỗ, và sau vài mẻ nối tiếp thì cổng khoá cứng vì tưởng còn job
