@@ -77,7 +77,12 @@ def chuan_bi_reference_urls(client, reference_images, log=print):
             continue
         # Đường dẫn máy KHÔNG gửi thẳng lên được: máy chủ không nhìn thấy ổ D của
         # bạn. Phải upload để đổi lấy URL công khai trước.
-        urls.append(client.uploads.upload_file(item, filename=_ten_file_ref(i, item)))
+        url = client.uploads.upload_file(item, filename=_ten_file_ref(i, item))
+        # Để lại một bản ngay trên đĩa máy này: worker veo3 chạy cùng máy, nên
+        # nó khỏi phải tải tấm ảnh vừa đi Singapore quay ngược về. Xem
+        # `shopapi_common.luu_ban_cuc_bo` để biết số đo.
+        _sc.luu_ban_cuc_bo(item, url)
+        urls.append(url)
     return urls
 
 

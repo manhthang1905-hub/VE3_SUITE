@@ -32,6 +32,7 @@ from __future__ import annotations
 
 import os
 import re
+import shutil
 import sys
 import threading
 import time
@@ -450,6 +451,83 @@ def lay_outputs(job):
         return list(many)
     one = _lay_truong(job, "output")
     return [one] if one else []
+
+
+#: Nơi để lại bản sao ảnh vừa đẩy lên, cho worker trên CÙNG máy dùng thẳng.
+#:
+#: Phải khớp `SHOPAPI_ANH_CUC_BO` mà worker đọc (`shopapi_worker/url_guard.py`)
+#: và `KHO_ANH_CUC_BO` bên tool Studio (`core/auto_khau.py`). Ba nơi, một đường.
+KHO_ANH_CUC_BO = os.environ.get("SHOPAPI_ANH_CUC_BO") or os.path.join(
+    os.environ.get("ProgramData", os.path.expanduser("~")), "ShopAPI", "anh-cuc-bo")
+
+#: Giữ bản sao bao lâu rồi dọn (giây). 6 giờ, rộng hơn hẳn đời một mẻ chạy.
+HAN_ANH_CUC_BO = 6 * 3600.0
+
+#: Bao lâu quét dọn một lượt (giây).
+NHIP_DON_ANH_CUC_BO = 600.0
+
+_LAN_DON_ANH_CUOI = 0.0
+_KHOA_DON_ANH = threading.Lock()
+_MA_UPLOAD_RE = re.compile(r"upl_[a-z0-9]{1,64}$")
+
+
+def luu_ban_cuc_bo(duong, url):
+    """Để lại một bản ảnh vừa đẩy lên, ngay trên đĩa máy này.
+
+    ═══ VÌ SAO ═══
+
+    Tool này và worker veo3 chạy trên CÙNG một máy. Trước bản này, tool đẩy ảnh
+    tham chiếu lên kho ở Singapore rồi worker trên đúng máy ấy tải chính tấm ảnh
+    đó ngược về — một tấm ảnh đi Việt Nam → Singapore → Việt Nam.
+
+    Đo ngày 16/08/2026 trên máy thật: mỗi 5 phút có 463 ảnh (178 MB) đi lên, đủ
+    kín đường lên của mạng nhà. Đường lên kín thì tín hiệu báo nhận của đường
+    xuống cũng nghẹt, nên chặng về chỉ còn 23 KB/s — 516 lượt tải hết hạn 30
+    giây giữa chừng, kéo 15–25% job hỏng. Và câu báo lỗi trả cho khách lại là
+    "hãy dùng một địa chỉ ảnh công khai", tức đổ lỗi cho họ vì đường truyền
+    của mình.
+
+    Chặng đẩy lên vẫn phải giữ (máy chủ cần URL để nhận job). Chặng về thì bỏ
+    được, và nó đúng là chặng đang chết.
+
+    Mọi lỗi ở đây đều nuốt: không có bản sao thì worker tải mạng như cũ, job vẫn
+    chạy. Ném lỗi ở đây là làm hỏng một khâu đang chạy được để đổi lấy tốc độ.
+    """
+    try:
+        ten = str(url).split("?", 1)[0].rsplit("/", 1)[-1]
+        ma = ten.split(".", 1)[0]
+        if not _MA_UPLOAD_RE.match(ma):
+            return
+        os.makedirs(KHO_ANH_CUC_BO, exist_ok=True)
+        dich = os.path.join(KHO_ANH_CUC_BO, ma)
+        # Ghi tên tạm rồi đổi tên: worker đọc được bất cứ lúc nào, và một file
+        # đang ghi dở là một tấm ảnh cụt — thứ hỏng âm thầm tận nhà máy.
+        tam = dich + ".dang-ghi"
+        shutil.copyfile(str(duong), tam)
+        os.replace(tam, dich)
+    except Exception:
+        return
+    _don_kho_anh_cuc_bo()
+
+
+def _don_kho_anh_cuc_bo():
+    """Xoá bản sao quá hạn. Không dọn thì kho phình ~1,6 GB mỗi giờ."""
+    global _LAN_DON_ANH_CUOI
+    bay_gio = time.time()
+    with _KHOA_DON_ANH:
+        if bay_gio - _LAN_DON_ANH_CUOI < NHIP_DON_ANH_CUC_BO:
+            return
+        _LAN_DON_ANH_CUOI = bay_gio
+    try:
+        for ten in os.listdir(KHO_ANH_CUC_BO):
+            duong = os.path.join(KHO_ANH_CUC_BO, ten)
+            try:
+                if bay_gio - os.path.getmtime(duong) > HAN_ANH_CUC_BO:
+                    os.remove(duong)
+            except OSError:
+                continue
+    except OSError:
+        return
 
 
 def url_cua_output(output):

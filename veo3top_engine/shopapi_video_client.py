@@ -157,6 +157,9 @@ def generate(image_path, prompt, out_path, aspect=None, seed=None, timeout=1600,
                 # Máy chủ không nhìn thấy ổ đĩa của bạn -> phải upload lấy URL.
                 image_url = client.uploads.upload_file(
                     str(image_path), filename=os.path.basename(str(image_path)))
+                # Bản sao tại chỗ cho worker veo3 chạy cùng máy — nó khỏi tải
+                # ngược tấm ảnh vừa đi Singapore về. Xem `luu_ban_cuc_bo`.
+                _sc.luu_ban_cuc_bo(image_path, image_url)
             except Exception as exc:
                 # Upload đi qua cùng cái cổng nên cũng ăn 429/503 như job.
                 _nem_neu_nghen(exc, nem_khi_nghen)
