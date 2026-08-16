@@ -603,9 +603,56 @@ NHIP_HOI = NhipHoiTham()
 # Cùng một hạn mức, gấp gần ba lần hàng ra. Đây là chỗ duy nhất còn nới được mà
 # không phải xin máy chủ nâng gì cả.
 
-#: Nhịp hỏi của luồng thu hoạch chung (giây). Job ảnh/video mất hàng chục giây
-#: nên 3 giây là thừa nhanh, mà cả phút chỉ tốn 20 lời gọi cho MỌI job.
-NHIP_THU_HOACH = 3.0
+#: Nhịp hỏi của luồng thu hoạch chung (giây).
+#:
+#: ═══════════════════════════════════════════════════════════════════════════
+#:  3,0 → 15,0 NGÀY 16/08/2026: KHỐI TRÊN KIA ĐANG TỐI ƯU NHẦM ĐƠN VỊ
+#: ═══════════════════════════════════════════════════════════════════════════
+#:
+#: Cả khối chú thích ở trên tính bằng **số lời gọi**, vì tin rằng ngân sách cứng
+#: là 1.000 request/phút. Phép tính ấy đúng, và nó đã kéo chi phí từ 5,7 xuống
+#: 1,05 lời gọi mỗi ảnh — một cải tiến thật.
+#:
+#: Nhưng ngân sách request KHÔNG phải nút thắt. Đo trên máy chủ thật hôm nay:
+#:
+#:     GET /v1/jobs   3.146 lần / 5 phút  =  10 request/giây
+#:     tốn 780 giây xử lý trong cửa sổ 300 giây  =  ~2,6 trên 4 lõi CPU
+#:
+#: Một lời gọi `?limit=100` trả về 100 job **kèm toàn bộ output** — thứ khiến nó
+#: rẻ về SỐ LƯỢNG lại đắt về CPU: ~257 ms mỗi lần, so với ~1 ms khi hỏi một job
+#: lẻ. Ta đã đổi 5 lời gọi rẻ lấy 1 lời gọi đắt gấp hai trăm lần.
+#:
+#: ═══ CÁI GIÁ, TRẢ BẰNG TIỀN CỦA CHÍNH KHÁCH ═══
+#:
+#: Máy chủ cạn CPU (load average 10 trên 4 vCPU) → tiến trình Node không giành
+#: được lượt chạy → giao dịch quyết toán hết giờ:
+#:
+#:     POST /internal/v1/jobs/{id}/complete
+#:     471 lỗi 500 / 124 thành công trong 10 phút  =  79% HỎNG
+#:
+#: Tức vòng thu hoạch này đang phá hỏng khâu **kết sổ tiền** của chính những job
+#: nó đang chờ. Tiết kiệm request để rồi mỗi job phải quyết toán ba lần.
+#:
+#: ═══ VÌ SAO 15 GIÂY VẪN LÀ THỪA NHANH ═══
+#:
+#: Chủ dự án: *"1 ảnh nhanh nhất cũng 30 giây, video cũng phải 2 phút, nên việc
+#: hỏi có thể để lâu hơn"*. Hỏi mỗi 3 giây cho một việc mất 30 giây là hỏi mười
+#: lần để nhận một câu trả lời — chín lần trong đó chắc chắn là "chưa xong".
+#:
+#: 15 giây: chậm nhất cũng chỉ trả kết quả muộn hơn 15 giây so với lúc job thật
+#: sự xong, trên một việc vốn mất 30–120 giây. Đổi lại, tải hỏi giảm 5 lần.
+NHIP_THU_HOACH = 15.0
+
+#: Về tay không thì giãn dần ra tới ngần này (giây).
+#:
+#: Vòng thu hoạch vẫn chạy trong lúc mọi job còn đang dựng, và lúc đó mỗi lời
+#: hỏi chắc chắn về tay không. Job video mất 2 phút, nên hai phút đầu có tới tám
+#: lượt hỏi vô ích ở nhịp 15 giây. Giãn ra khi về tay không, siết lại NGAY khi
+#: nhặt được: hàng đang ra đều thì vẫn nhanh, hàng đang dựng thì im.
+NHIP_THU_HOACH_TOI_DA = 60.0
+
+#: Mỗi lượt về tay không thì nhân nhịp lên ngần này lần.
+NHIP_THU_HOACH_GIAN = 1.5
 
 #: Mỗi lời hỏi lấy tối đa ngần này job. Trần của `GET /v1/jobs`.
 LO_THU_HOACH = 100
@@ -666,18 +713,33 @@ class ThuHoachChung:
     # ── Luồng nền ───────────────────────────────────────────────────────────
 
     def _vong(self):
+        # ═══ GIÃN NHỊP KHI VỀ TAY KHÔNG — 16/08/2026 ═══
+        #
+        # Vòng này chạy cả trong lúc mọi job còn đang dựng, và lúc đó mỗi lời hỏi
+        # chắc chắn không nhặt được gì. Job video mất 2 phút: ở nhịp cố định đó
+        # là tám lượt hỏi vô ích trước lượt đầu tiên có ích.
+        #
+        # Giãn khi về tay không, siết lại NGAY khi nhặt được — nên hàng đang ra
+        # đều thì vẫn chạy ở nhịp nhanh nhất, còn hàng đang dựng thì im. Cùng
+        # một luật mà `tu_dieu_luong` bên worker đang dùng, chỉ khác chiều.
+        nhip = self._nhip
         while True:
-            time.sleep(self._nhip)
+            time.sleep(nhip)
             with self._khoa:
                 if not self._cho:
                     return                      # hết việc thì luồng tự nghỉ
                 con_cho = set(self._cho)
+            truoc = self.so_nhat_duoc
             try:
                 self._mot_vong(con_cho)
             except Exception:
                 # Một lượt hỏi hỏng KHÔNG được giết luồng: job đang chờ sẽ treo
                 # tới hết hạn mà không ai biết vì sao.
                 pass
+            if self.so_nhat_duoc > truoc:
+                nhip = self._nhip               # có hàng -> về nhịp nhanh nhất
+            else:
+                nhip = min(NHIP_THU_HOACH_TOI_DA, nhip * NHIP_THU_HOACH_GIAN)
 
     def _mot_vong(self, con_cho):
         cursor = None
