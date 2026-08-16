@@ -5652,7 +5652,13 @@ Get-CimInstance Win32_Process |
             pruned = before - len(self.child_procs)
 
         # 2. Prune queue_ve3_procs (finished VE3 subprocesses)
-        with self.queue_lock:
+        #
+        # Hàm này chạy TRÊN LUỒNG VẼ (gọi từ `_refresh_project_views`), nên xin
+        # khoá phải CÓ HẠN. Bỏ một lượt dọn dẹp thì lượt sau dọn — 60 giây nữa,
+        # không ai thấy. Đứng chờ mãi thì cửa sổ treo.
+        if not self._khoa_hang_cho_luong_ve():
+            return
+        try:
             dead_ve3 = [code for code, p in (self.queue_ve3_procs or {}).items()
                         if not p or p.poll() is not None]
             for code in dead_ve3:
@@ -5668,6 +5674,8 @@ Get-CimInstance Win32_Process |
                 self.queue_ve3_tasks.pop(code, None)
                 self.queue_active_ve3.discard(code)
                 self.queue_ve3_stage.pop(code, None)   # dọn stage khi task chết (tránh stale chặn concurrency)
+        finally:
+            self.queue_lock.release()
 
         # 3. Prune caches (keep max 200 entries, remove oldest)
         for cache_name in ('_project_state_cache', '_project_binding_cache', '_ve3_priority_cache', 'project_progress_cache'):
@@ -5999,10 +6007,12 @@ Get-CimInstance Win32_Process |
             self._log(f"[RESET] {code}: khong tim thay Excel, bo qua", "WARN", "ve3")
             return
 
+        # ⚠ KHÔNG GHI LOG KHI ĐANG GIỮ `queue_lock` — xem `_bao_bo_qua`.
         with self.queue_lock:
-            if code in self.queue_active_ve3 or code in self.queue_active_excel:
-                self._log(f"[RESET] {code}: dang chay, khong the reset", "ERROR", "ve3")
-                return
+            _dang_chay = code in self.queue_active_ve3 or code in self.queue_active_excel
+        if _dang_chay:
+            self._log(f"[RESET] {code}: dang chay, khong the reset", "ERROR", "ve3")
+            return
 
         from tkinter import messagebox
         if not messagebox.askyesno("Xac nhan Reset",
@@ -6205,15 +6215,20 @@ Get-CimInstance Win32_Process |
             code = project_dir.name
             hold_marker = self._endpoint_hold_marker(project_dir)
             done_marker = self._endpoint_done_marker(project_dir)
+            # ⚠ KHÔNG GHI LOG KHI ĐANG GIỮ `queue_lock` — xem `_bao_bo_qua`.
+            _dang_xu_ly = False
             with self.queue_lock:
                 if code in self.endpoint_active_codes:
-                    self._log(
-                        f"[QUEUE] {code}: bo qua endpoint ({reason}) vi endpoint dang duoc xu ly",
-                        "WARN",
-                        "ve3",
-                    )
-                    return False
-                self.endpoint_active_codes.add(code)
+                    _dang_xu_ly = True
+                else:
+                    self.endpoint_active_codes.add(code)
+            if _dang_xu_ly:
+                self._log(
+                    f"[QUEUE] {code}: bo qua endpoint ({reason}) vi endpoint dang duoc xu ly",
+                    "WARN",
+                    "ve3",
+                )
+                return False
             if done_marker.exists():
                 self._log(
                     f"[QUEUE] {code}: bo qua endpoint ({reason}) vi da co marker endpoint_done",
@@ -9257,12 +9272,18 @@ Get-CimInstance Win32_Process |
                         continue
 
                     # Check vÃ  Ä‘Ã¡nh dáº¥u atomic Ä‘á»ƒ trÃ¡nh duplicate
+                    # ⚠ KHÔNG GHI LOG KHI ĐANG GIỮ `queue_lock` — xem `_bao_bo_qua`.
+                    _ban = None
                     with self.queue_lock:
                         if pd.name in self.queue_active_excel or pd.name in self.queue_active_ve3:
                             busy_projects += 1
-                            if total_projects <= 5:  # Log first 5 for debugging
-                                self._log(f"[DEBUG] {pd.name}: SKIP - busy (excel={pd.name in self.queue_active_excel}, ve3={pd.name in self.queue_active_ve3})", "INFO", "excel")
-                            continue
+                            _ban = (pd.name in self.queue_active_excel,
+                                    pd.name in self.queue_active_ve3)
+                    if _ban is not None:
+                        if total_projects <= 5:  # Log first 5 for debugging
+                            self._log(f"[DEBUG] {pd.name}: SKIP - busy (excel={_ban[0]}, ve3={_ban[1]})", "INFO", "excel")
+                        continue
+                    with self.queue_lock:
                         # ÄÃ¡nh dáº¥u ngay Ä‘á»ƒ thread khÃ¡c khÃ´ng pick
 
                         # Check da du so luong task chua - CHI BREAK KHI MA NAY CAN EXCEL
@@ -9560,12 +9581,33 @@ Get-CimInstance Win32_Process |
         with self.music_lock:
             self._run_music_for_project(project_dir, excel_path, update_ui=True)
 
+    #: Luồng VẼ chờ `queue_lock` tối đa chừng này giây rồi bỏ lượt.
+    #:
+    #: Bỏ một lượt cập nhật tiến độ, hay một lượt dọn dẹp, là chuyện không ai
+    #: thấy. Đứng chờ mãi thì cửa sổ treo — người dùng thấy ngay, và đó chính là
+    #: thứ họ báo. Đây là lớp bảo hiểm cho `_bao_bo_qua`: luật kia giữ cho vòng
+    #: kẹt đừng hình thành, con số này giữ cho nó đừng CHẾT NGƯỜI nếu vẫn hình
+    #: thành. Nửa giây đủ rộng cho mọi lần tranh khoá lành mạnh — mấy khối giữ
+    #: `queue_lock` giờ chỉ còn đọc/ghi vài cái tập.
+    CHO_KHOA_LUONG_VE = 0.5
+
+    def _khoa_hang_cho_luong_ve(self):
+        """Xin `queue_lock` CÓ HẠN, chỉ dùng từ luồng vẽ. `None` = không xin được."""
+        got = self.queue_lock.acquire(timeout=self.CHO_KHOA_LUONG_VE)
+        return got
+
     def _queue_claim_progress_owner(self, code, pair_text="-", force=False):
-        with self.queue_lock:
+        if not self._khoa_hang_cho_luong_ve():
+            # Không đòi được khoá thì bỏ lượt này. Nhãn "mã đang chạy" trễ một
+            # nhịp, còn hơn treo cả cửa sổ.
+            return False
+        try:
             if force or not self.queue_progress_owner_code:
                 self.queue_progress_owner_code = code
                 self.queue_progress_owner_pair = pair_text or "-"
             return self.queue_progress_owner_code == code
+        finally:
+            self.queue_lock.release()
 
     def _queue_update_progress_ui(self, code, pair_text, ph, cur, tot, det=""):
         if threading.current_thread() is not threading.main_thread():
@@ -9789,6 +9831,46 @@ Get-CimInstance Win32_Process |
             elif pd.exists() and self._is_project_endpoint_complete(pd):
                 self._log(f"[QUEUE] {code}: endpoint da duoc xu ly truoc do, bo qua", "INFO", "ve3")
 
+    def _bao_bo_qua(self):
+        """Vì sao TUYỆT ĐỐI không được ghi log khi đang giữ `queue_lock`.
+
+        ═══ KẸT CHÉO HAI KHOÁ, VÀ NÓ KHOÁ CHẾT GIAO DIỆN ═══
+
+        `self._log()` gọi `self.after()`. `after()` là lời gọi vào bộ thông dịch
+        Tcl, và bộ đó có khoá riêng của nó. Nên một luồng nền ghi log trong khi
+        giữ `queue_lock` sẽ đi tìm khoá Tcl trong lúc đang cầm `queue_lock`.
+
+        Cùng lúc đó luồng vẽ làm đúng chiều ngược lại: nó đang ở trong Tcl (vẽ
+        lại thanh cuộn, `see`, `update_idletasks`) rồi gọi
+        `_queue_claim_progress_owner` hay `_periodic_cleanup` — hai hàm mà việc
+        ĐẦU TIÊN là `with self.queue_lock`.
+
+            luồng nền : giữ queue_lock  ->  đợi khoá Tcl
+            luồng vẽ  : giữ khoá Tcl    ->  đợi queue_lock
+
+        Không ai nhả. `queue_lock` là `threading.Lock`, không có hạn chờ, nên
+        đây là chết hẳn chứ không phải chậm.
+
+        ═══ BẰNG CHỨNG ═══
+
+        `%TEMP%\\ve3_watchdog.log` ghi 1.006 lần luồng vẽ bị chẹn. Lọc riêng
+        những lần chẹn quá 300 giây — tức "not responding" thật sự, có lần tới
+        **44.766 giây (12 tiếng)** — thì khung TRONG CÙNG chỉ có đúng hai chỗ:
+
+            156 lan  _queue_claim_progress_owner   (dòng đầu: with queue_lock)
+             42 lan  _periodic_cleanup             (dòng đầu: with queue_lock)
+             17 lan  threading.py wait
+
+        Cả ba đều là "đang đợi một khoá". Không có khung nào cho thấy máy đang
+        bận tính toán — nó đứng im chờ.
+
+        ═══ LUẬT ═══
+
+        Trong `with self.queue_lock:` chỉ được đọc/ghi mấy cái tập và dict. Cần
+        báo gì thì lấy LÝ DO ra biến, thoát khỏi khoá, rồi mới ghi. Bài kiểm
+        `test_khong_ghi_log_trong_queue_lock` đóng đinh luật này.
+        """
+
     def _queue_ve3_skip_log(self, code, reason, detail="", interval=30):
         key = f"{code}:{reason}:{detail}"
         now = _time.time()
@@ -10003,20 +10085,23 @@ Get-CimInstance Win32_Process |
                         self._queue_ve3_skip_log(pd.name, "da_do_lai",
                                                  "chay nhieu luot khong ra san pham")
                         continue
+                    # ⚠ KHÔNG GHI LOG KHI ĐANG GIỮ `queue_lock` — XEM `_bao_bo_qua`.
+                    # Chỉ lấy LÝ DO ra khỏi khoá, ghi ở ngoài.
+                    _ly_do_bo = None
                     with self.queue_lock:
                         existing_task = self.queue_ve3_tasks.get(pd.name)
-                        if existing_task and existing_task.is_alive():
-                            self._queue_ve3_skip_log(pd.name, "active_task")
-                            continue
-                        # Also check subprocess alive
                         existing_proc = self.queue_ve3_procs.get(pd.name)
-                        if existing_proc and existing_proc.poll() is None:
-                            self._queue_ve3_skip_log(pd.name, "active_subprocess")
-                            continue
-                        if pd.name in self.queue_active_excel or pd.name in self.queue_active_ve3:
-                            active_reason = "excel_active" if pd.name in self.queue_active_excel else "ve3_active"
-                            self._queue_ve3_skip_log(pd.name, active_reason)
-                            continue
+                        if existing_task and existing_task.is_alive():
+                            _ly_do_bo = "active_task"
+                        elif existing_proc and existing_proc.poll() is None:
+                            _ly_do_bo = "active_subprocess"
+                        elif pd.name in self.queue_active_excel:
+                            _ly_do_bo = "excel_active"
+                        elif pd.name in self.queue_active_ve3:
+                            _ly_do_bo = "ve3_active"
+                    if _ly_do_bo:
+                        self._queue_ve3_skip_log(pd.name, _ly_do_bo)
+                        continue
                     # Check quota wait marker — skip project if FlowKit quota exhausted
                     quota_marker = pd / ".flowkit_quota_wait"
                     if quota_marker.exists():
