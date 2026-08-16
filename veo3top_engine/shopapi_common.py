@@ -606,7 +606,7 @@ NHIP_HOI = NhipHoiTham()
 #: Nhịp hỏi của luồng thu hoạch chung (giây).
 #:
 #: ═══════════════════════════════════════════════════════════════════════════
-#:  3,0 → 15,0 NGÀY 16/08/2026: KHỐI TRÊN KIA ĐANG TỐI ƯU NHẦM ĐƠN VỊ
+#:  3,0 → 30,0 NGÀY 16/08/2026: KHỐI TRÊN KIA ĐANG TỐI ƯU NHẦM ĐƠN VỊ
 #: ═══════════════════════════════════════════════════════════════════════════
 #:
 #: Cả khối chú thích ở trên tính bằng **số lời gọi**, vì tin rằng ngân sách cứng
@@ -633,23 +633,27 @@ NHIP_HOI = NhipHoiTham()
 #: Tức vòng thu hoạch này đang phá hỏng khâu **kết sổ tiền** của chính những job
 #: nó đang chờ. Tiết kiệm request để rồi mỗi job phải quyết toán ba lần.
 #:
-#: ═══ VÌ SAO 15 GIÂY VẪN LÀ THỪA NHANH ═══
+#: ═══ VÌ SAO ĐÚNG 30 GIÂY ═══
 #:
-#: Chủ dự án: *"1 ảnh nhanh nhất cũng 30 giây, video cũng phải 2 phút, nên việc
-#: hỏi có thể để lâu hơn"*. Hỏi mỗi 3 giây cho một việc mất 30 giây là hỏi mười
-#: lần để nhận một câu trả lời — chín lần trong đó chắc chắn là "chưa xong".
+#: Chủ dự án chốt mốc này: *"nhanh nhất 1 job cũng là 30 giây"*. Đó là ranh giới
+#: chứng minh được, không phải ước lượng — job nhanh nhất của cả ba nhà máy đều
+#: ≥30 giây, nên mọi lần hỏi cách nhau dưới 30 giây **chắc chắn** rơi vào lúc
+#: job chưa thể xong. Không phải "có thể lãng phí" mà là lãng phí biết trước.
 #:
-#: 15 giây: chậm nhất cũng chỉ trả kết quả muộn hơn 15 giây so với lúc job thật
-#: sự xong, trên một việc vốn mất 30–120 giây. Đổi lại, tải hỏi giảm 5 lần.
-NHIP_THU_HOACH = 15.0
+#: Hỏi mỗi 3 giây cho một việc mất 30 giây là hỏi mười lần để nhận một câu trả
+#: lời; chín lần trong đó chắc chắn là "chưa xong".
+#:
+#: 30 giây: chậm nhất cũng chỉ trả kết quả muộn hơn 30 giây so với lúc job thật
+#: sự xong. Đổi lại, tải hỏi giảm 10 lần.
+NHIP_THU_HOACH = 30.0
 
 #: Về tay không thì giãn dần ra tới ngần này (giây).
 #:
 #: Vòng thu hoạch vẫn chạy trong lúc mọi job còn đang dựng, và lúc đó mỗi lời
-#: hỏi chắc chắn về tay không. Job video mất 2 phút, nên hai phút đầu có tới tám
-#: lượt hỏi vô ích ở nhịp 15 giây. Giãn ra khi về tay không, siết lại NGAY khi
+#: hỏi chắc chắn về tay không. Job video mất 2 phút, nên hai phút đầu vẫn có bốn
+#: lượt hỏi vô ích ở nhịp 30 giây. Giãn ra khi về tay không, siết lại NGAY khi
 #: nhặt được: hàng đang ra đều thì vẫn nhanh, hàng đang dựng thì im.
-NHIP_THU_HOACH_TOI_DA = 60.0
+NHIP_THU_HOACH_TOI_DA = 120.0
 
 #: Mỗi lượt về tay không thì nhân nhịp lên ngần này lần.
 NHIP_THU_HOACH_GIAN = 1.5
