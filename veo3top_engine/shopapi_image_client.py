@@ -11,7 +11,11 @@ Khác biệt duy nhất về tham số: `image_inputs` của nhà máy cũ là c
 
 from __future__ import annotations
 
+import hashlib
 import os
+import re
+import threading
+import time
 
 try:                       # chạy trong tool: import cùng thư mục veo3top_engine
     import shopapi_common as _sc
@@ -46,6 +50,150 @@ def _ten_file_ref(i, item):
     return "ref{0}.png".format(i)
 
 
+# ═══ ẢNH THAM CHIẾU: MỖI TẤM TẢI ĐÚNG MỘT LẦN — SỰ CỐ 03/10/2026 ═══
+#
+# Khách gunc94 chết cứng ở "Vượt hạn mức lưu trữ tạm" (trần máy chủ 500 MB /
+# 2.000 tệp, tệp sống 2 giờ kể từ lần dùng). Soi máy chủ: 346 tệp tải lên trong
+# 2 giờ nhưng chỉ 5 cỡ byte khác nhau — tức 5 ảnh nhân vật, mỗi job ảnh tải lại
+# từ đầu. Bản hàm này ở engine máy chủ có bộ nhớ (`_NHO_REF`, sự cố 13/08) nhưng
+# bộ nhớ ấy không có trong bản chép sang đây.
+#
+# Nhớ theo NỘI DUNG (băm byte) chứ không theo đường dẫn: cùng một ảnh đọc vào
+# RAM ở hai chỗ vẫn là một khoá. Link hết hạn thì xin link mới cho CHÍNH tệp đã
+# tải (`GET /v1/uploads/{id}`, không tốn chỗ kho); máy chủ đã xoá tệp mới tải lại.
+_NHO_REF = {}            # khoá nội dung -> [url, lúc lấy link, lúc dùng gần nhất]
+_KHOA_NHO = threading.Lock()
+_KHOA_TUNG_ANH = {}
+
+#: Tin link đã nhớ trong ngần này giây. Link ký sẵn của kho sống tới `expires_at`
+#: (2 giờ kể từ lần dùng); 45 phút chừa biên rộng, quá thì hỏi lại máy chủ.
+_HAN_LINK = 45 * 60.0
+#: Tệp dùng trong ngần này giây là "đang dùng" — dọn kho không đụng tới.
+_DANG_DUNG = 15 * 60.0
+#: Kho đầy: xoá tối đa ngần này tệp cũ của chính tool này rồi thử lại một lần.
+_SO_DON_MOI_LAN = 40
+_DAU_HET_KHO = ("hạn mức lưu trữ", "storage quota", "quota exceeded",
+                "file tải lên (tối đa")
+
+_RE_MA = re.compile(r"/(upl_[A-Za-z0-9]+)")
+
+
+def _ma_upl(url):
+    m = _RE_MA.search(str(url or ""))
+    return m.group(1) if m else None
+
+
+def _khoa_ref(item):
+    """Khoá theo NỘI DUNG ảnh. `None` = không đọc được, cứ tải như cũ."""
+    try:
+        if isinstance(item, (bytes, bytearray)):
+            return hashlib.sha1(bytes(item)).hexdigest()
+        with open(os.fspath(item), "rb") as f:
+            return hashlib.sha1(f.read()).hexdigest()
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _khoa_cua(khoa):
+    with _KHOA_NHO:
+        k = _KHOA_TUNG_ANH.get(khoa)
+        if k is None:
+            k = _KHOA_TUNG_ANH[khoa] = threading.Lock()
+        return k
+
+
+def _link_moi(client, url_cu):
+    """Link MỚI cho tệp đã tải (không tải lại). Tệp không còn thì trả ""."""
+    ma = _ma_upl(url_cu)
+    lay = getattr(getattr(client, "uploads", None), "retrieve", None)
+    if not ma or lay is None:
+        return ""
+    try:
+        tra = lay(ma)
+    except Exception:  # noqa: BLE001 — 404 / mạng: tải bản mới
+        return ""
+    url = tra.get("url") if isinstance(tra, dict) else getattr(tra, "url", None)
+    return str(url) if url and str(url).lower().startswith("https://") else ""
+
+
+def _la_het_kho(exc):
+    chu = str(exc).lower()
+    return any(d in chu for d in _DAU_HET_KHO)
+
+
+def don_kho_tam(client, toi_da=_SO_DON_MOI_LAN, log=print):
+    """Kho tạm đầy → xoá tệp CỦA TOOL NÀY đã thôi dùng, cũ nhất trước.
+
+    Chừa tệp dùng trong `_DANG_DUNG` giây (ảnh nhân vật của job đang chạy).
+    Trả số tệp đã xoá được.
+    """
+    bay_gio = time.time()
+    with _KHOA_NHO:
+        ung = sorted(((v[2], k, v[0]) for k, v in _NHO_REF.items()
+                      if bay_gio - v[2] >= _DANG_DUNG), key=lambda x: x[0])
+    da = 0
+    for _luc, khoa, url in ung[:max(0, int(toi_da))]:
+        ma = _ma_upl(url)
+        if not ma:
+            continue
+        try:
+            client.uploads.delete(ma)
+            da += 1
+        except Exception:  # noqa: BLE001 — tệp có thể đã hết hạn; vẫn bỏ khỏi sổ
+            pass
+        with _KHOA_NHO:
+            _NHO_REF.pop(khoa, None)
+    if da:
+        log("    [shopapi-img] kho tam day -> da xoa {0} anh cu khong con dung".format(da),
+            "WARN")
+    return da
+
+
+def _tai_that(client, i, item, log):
+    try:
+        url = client.uploads.upload_file(item, filename=_ten_file_ref(i, item))
+    except Exception as exc:  # noqa: BLE001
+        if not _la_het_kho(exc) or don_kho_tam(client, log=log) == 0:
+            raise
+        url = client.uploads.upload_file(item, filename=_ten_file_ref(i, item))
+    # Để lại một bản ngay trên đĩa máy này: worker veo3 chạy cùng máy, nên
+    # nó khỏi phải tải tấm ảnh vừa đi Singapore quay ngược về. Xem
+    # `shopapi_common.luu_ban_cuc_bo` để biết số đo.
+    _sc.luu_ban_cuc_bo(item, url)
+    return url
+
+
+def _tai_mot(client, i, item, log):
+    """Một ảnh tham chiếu → URL: dùng lại link đã có, chỉ tải khi chưa có."""
+    khoa = _khoa_ref(item)
+    if khoa is None:
+        return _tai_that(client, i, item, log)
+    with _khoa_cua(khoa):
+        with _KHOA_NHO:
+            cu = _NHO_REF.get(khoa)
+        if cu is not None:
+            if time.time() - cu[1] < _HAN_LINK:
+                with _KHOA_NHO:
+                    cu[2] = time.time()
+                return cu[0]
+            moi = _link_moi(client, cu[0])
+            if moi:
+                with _KHOA_NHO:
+                    _NHO_REF[khoa] = [moi, time.time(), time.time()]
+                return moi
+        url = _tai_that(client, i, item, log)
+        with _KHOA_NHO:
+            _NHO_REF[khoa] = [url, time.time(), time.time()]
+        return url
+
+
+def xoa_nho():
+    """Quên mọi link đã nhớ — CHỈ cho bài kiểm."""
+    with _KHOA_NHO:
+        _NHO_REF.clear()
+        _KHOA_TUNG_ANH.clear()
+
+
 def chuan_bi_reference_urls(client, reference_images, log=print):
     """Đổi danh sách ảnh tham chiếu thành danh sách **URL công khai**.
 
@@ -77,12 +225,8 @@ def chuan_bi_reference_urls(client, reference_images, log=print):
             continue
         # Đường dẫn máy KHÔNG gửi thẳng lên được: máy chủ không nhìn thấy ổ D của
         # bạn. Phải upload để đổi lấy URL công khai trước.
-        url = client.uploads.upload_file(item, filename=_ten_file_ref(i, item))
-        # Để lại một bản ngay trên đĩa máy này: worker veo3 chạy cùng máy, nên
-        # nó khỏi phải tải tấm ảnh vừa đi Singapore quay ngược về. Xem
-        # `shopapi_common.luu_ban_cuc_bo` để biết số đo.
-        _sc.luu_ban_cuc_bo(item, url)
-        urls.append(url)
+        # Mỗi tấm MỘT lần cho cả mẻ, không phải mỗi job một lần (`_tai_mot`).
+        urls.append(_tai_mot(client, i, item, log))
     return urls
 
 

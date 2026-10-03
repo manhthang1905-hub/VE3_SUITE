@@ -47,6 +47,13 @@ def chan_khoa_that(monkeypatch):
     for name in ("SHOPAPI_KEY", "SHOPAPI_API_KEY", "SHOPAPI_KEY_FILE", "SHOPAPI_SDK_PATH"):
         monkeypatch.delenv(name, raising=False)
     # Kho khoá cũng phải trỏ vào thư mục rỗng, không phải %APPDATA% thật.
+    # Bộ nhớ link ảnh tham chiếu là toàn tiến trình — bài trước không được để
+    # lại link cho bài sau (bài sau sẽ thấy "không tải" mà tưởng là đúng).
+    try:
+        import shopapi_image_client as _sic
+        _sic.xoa_nho()
+    except Exception:  # noqa: BLE001
+        pass
     yield
 
 
